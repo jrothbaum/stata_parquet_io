@@ -1,0 +1,101 @@
+use polars::prelude::*;
+use polars::lazy::dsl;
+use polars_sql::SQLContext;
+
+use std::{fs::File, path::PathBuf};
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+
+
+use crate::mapping::schema_with_stata_types;
+use crate::stata_interface:: {
+    ST_retcode,
+    display,
+    set_macro,
+    set_scalar
+};
+
+use crate::read::scan_lazyframe;
+
+pub fn file_summary(
+    path:&str,
+    quietly:bool,
+    detailed:bool,
+    sql_if:Option<&str>
+) -> i32 {
+    let mut df = match scan_lazyframe(&path) {
+        Ok(df) => df,
+        Err(e) => {
+            display(&format!("Error scanning lazyframe: {:?}", e));
+            return 198
+        },
+    };
+
+    let schema = match df.collect_schema() {
+        Ok(schema) => schema,
+        Err(e) => {
+            display(&format!("Error collecting schema: {:?}", e));
+            return 198
+        },
+    };
+    
+    if let Some(sql) = sql_if.filter(|s| !s.trim().is_empty()) {
+        let mut ctx = SQLContext::new();
+        ctx.register("df", df);
+        
+
+
+        df = match ctx.execute(&format!("select * from df where {}",sql)) {
+            Ok(lazyframe) => lazyframe,
+            Err(e) => {
+                display(&format!("Error in SQL if statement: {}", e));
+                return 198 as ST_retcode;
+            }
+        };
+    }
+    schema_with_stata_types(
+        &df,
+        &schema,
+        quietly,
+        detailed
+    );
+
+
+    
+    let n_vars = schema.len();
+    let n_rows = get_row_count(&df).unwrap();
+    
+    //  Return scalars of the number of columns and rows 
+    let _ = set_macro("n_columns", &(format!("{}",n_vars)), false);
+    let _ = set_macro("n_rows", &(format!("{}",n_rows)),false);
+
+    if !quietly {
+        display(&"");
+        display(&format!("n columns = {}", n_vars));
+        display(&format!("n rows = {}", n_rows));
+    }
+
+    return 0 as ST_retcode;
+} 
+
+pub fn get_schema(path:&str) -> PolarsResult<Schema> {
+    let mut df = LazyFrame::scan_parquet(path, ScanArgsParquet::default())?;
+
+    let schema = df.collect_schema()?;
+    
+    Ok(schema.as_ref().clone())
+}
+
+pub fn get_row_count(lazy_df: &LazyFrame) -> Result<usize, PolarsError> {
+    // Create a new LazyFrame with just the count
+    
+    let count_df = lazy_df.clone()
+                                .select([len().alias("n_rows")])
+                                .collect()
+                                .unwrap();
+                            
+    let count = count_df.column("n_rows").unwrap().get(0).unwrap().try_extract::<usize>().unwrap();
+    Ok(count)
+}
+
