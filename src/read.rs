@@ -24,8 +24,8 @@ use crate::stata_interface:: {
 };
 
 
-const DAY_SHIFT_SAS_STATA: i32 = 3653;
-const SEC_SHIFT_SAS_STATA: i64 = 315619200;
+pub const DAY_SHIFT_SAS_STATA: i32 = 3653;
+pub const SEC_SHIFT_SAS_STATA: i64 = 315619200;
 
 pub const SEC_MILLISECOND: i64 = 1_000;
 pub const SEC_MICROSECOND: i64 = 1_000_000;

@@ -89,3 +89,17 @@ pub fn replace_string(
     }
     0 as i32
 }
+
+
+pub fn n_obs() -> i32 {
+    return 100;
+}
+
+pub fn read_numeric(column: usize, row: usize) -> Option<f64> {
+    Some(1.0)
+}
+
+#[inline]
+pub fn read_string(column: usize, row: usize,string_length:usize) -> String {
+    "Hi".to_string()
+}

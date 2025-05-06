@@ -46,3 +46,61 @@ pub fn replace_string(
 ) -> i32 {
     stata_sys::replace_string(value,row,column)
 }
+
+
+#[inline]
+pub fn n_obs() -> i32 {
+    unsafe {
+        stata_sys::SF_nobs()
+    }
+}
+
+#[inline]
+pub fn read_numeric(column: usize, row: usize) -> Option<f64> {
+    // Create a mutable variable to store the result
+    let mut result: f64 = 0.0;
+    
+    // Call the unsafe FFI function
+    unsafe {
+        stata_sys::SF_vdata(column as i32, row as i32, &mut result)
+    };
+
+    // Return None if result is less than SV_MISSVAL, otherwise return Some(result)
+    let missval = unsafe {
+        stata_sys::SV_MISSVAL()
+    };
+    if result < missval {
+        None
+    } else {
+        Some(result)
+    }
+}
+
+#[inline]
+pub fn read_string(
+    column: usize, 
+    row: usize,
+    string_length:usize
+) -> String {
+    //  No null value in stata strings (just "")
+
+    // Allocate a buffer with the known string length plus 1 for null terminator
+    let buffer_size = string_length + 1;
+    let mut buffer = vec![0u8; buffer_size];
+    
+    // Call the unsafe FFI function with our buffer
+    unsafe {
+        stata_sys::SF_sdata(
+            column as i32, 
+            row as i32, 
+            buffer.as_mut_ptr() as *mut std::os::raw::c_char
+        );
+        
+        // The C function might still fill a shorter string than the allocated length,
+        // so we need to find the actual null terminator
+        let null_pos = buffer.iter().position(|&c| c == 0).unwrap_or(buffer_size);
+        
+        // Create a string from the buffer up to the null terminator
+        String::from_utf8_lossy(&buffer[0..null_pos]).to_string()
+    }
+}

@@ -84,6 +84,27 @@ pub fn map_polars_to_stata(
 
 
 
+pub fn map_stata_to_polars(
+    stata_type: &StataType
+) -> DataType {
+    match stata_type {
+        //  Boolean
+        StataType::Byte => DataType::Int8,
+        StataType::Int => DataType::Int16,
+        StataType::Long => DataType::Int32,
+        StataType::Float => DataType::Float32,
+        StataType::Double => DataType::Float64,
+        
+        // Date/Time types
+        StataType::Date => DataType::Date,
+        StataType::Time => DataType::Time,
+        StataType::DateTime => DataType::Datetime(TimeUnit::Milliseconds, None),
+        StataType::String | StataType::Strl => DataType::String
+    }
+}
+
+
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ColumnInfo {
     pub name: String,
@@ -92,6 +113,101 @@ pub struct ColumnInfo {
 }
 
 
+
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct StataColumnInfo {
+    pub name: String,
+    pub dtype: String,
+    pub format: String,
+    pub str_length: usize,
+}
+
+pub fn StataColumnInfoToSchema(
+    column_info: &Vec<StataColumnInfo>
+) -> Schema {
+    let fields: Vec<Field> = column_info.iter().map(|col| {
+        // Parse the stata_type string to StataType enum
+        let stata_type = match (col.dtype.as_ref(),&col.format) {
+            ("string",_) => StataType::String,
+            ("strl",_) => StataType::Strl,
+            ("int",_) => {
+                let date_type = match_var_format_stata(&col.format);
+                match date_type {
+                    None => StataType::Int,
+                    _ => date_type.unwrap()
+                }
+            },
+            ("long",_) => {
+                let date_type = match_var_format_stata(&col.format);
+                match date_type {
+                    None => StataType::Long,
+                    _ => date_type.unwrap()
+                }
+            },
+            ("float",_) => {
+                let date_type = match_var_format_stata(&col.format);
+                match date_type {
+                    None => StataType::Float,
+                    _ => date_type.unwrap()
+                }
+            },
+            ("double",_) => {
+                let date_type = match_var_format_stata(&col.format);
+                match date_type {
+                    None => StataType::Double,
+                    _ => date_type.unwrap()
+                }
+            },
+            (_,_) => panic!("Unknown Stata type: {}", &col.dtype),
+        };
+        
+        // Map StataType to Polars DataType
+        let polars_dtype = map_stata_to_polars(&stata_type);
+        
+        // Create a Field with the column name and data type
+        Field::new(PlSmallStr::from(&col.name), polars_dtype)
+    }).collect();
+    
+    Schema::from_iter(fields)
+}
+
+
+pub fn find_str_length_by_name(columns: &Vec<StataColumnInfo>, target_name: &str) -> Option<usize> {
+    columns.iter()
+        .find(|col| col.name == target_name)
+        .map(|col| col.str_length)
+}
+
+fn match_var_format_stata(format_str: &str) -> Option<StataType> {
+    // Convert to lowercase for case-insensitive matching
+    let format_lower = format_str.to_lowercase();
+    
+    // 1. Check for TIME formats first (most specific)
+    if format_lower.contains("hh:mm:ss") || format_lower.contains("hh:mm") {
+        return Some(StataType::Time);
+    }
+    
+    // 2. Check for DATETIME formats
+    if format_lower.starts_with("%tc") || format_lower.starts_with("%c") ||
+       format_lower.starts_with("%tn") || format_lower.starts_with("%n") ||
+       format_lower.starts_with("%tu") || format_lower.starts_with("%u") {
+        return Some(StataType::DateTime);
+    }
+    
+    // 3. Check for DATE formats
+    if format_lower.starts_with("%td") || format_lower.starts_with("%d") ||
+       format_lower.starts_with("%tw") || format_lower.starts_with("%tm") || 
+       format_lower.starts_with("%tq") || format_lower.starts_with("%th") || 
+       format_lower.starts_with("%ty") || format_lower.starts_with("%tb") ||
+       format_lower == "%tdd_m_y" || format_lower == "%tdccyy-nn-dd" ||
+       format_lower == "%d"{
+        return Some(StataType::Date);
+    }
+    
+    // No match found
+    None
+}
 // Function to print schema with type mappings
 pub fn schema_with_stata_types(
     df:&LazyFrame,

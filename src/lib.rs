@@ -6,6 +6,7 @@ use polars::prelude::*;
 
 
 pub mod read;
+pub mod write;
 pub mod mapping;
 pub mod stata_interface;
 pub mod describe;
@@ -25,11 +26,10 @@ use read::{
 pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retcode {
     // Wrap the entire function body in catch_unwind
     std::panic::catch_unwind(|| {
-        unsafe {
-            if argc < 1 || argv.is_null() {
-                stata_interface::display("Error: No subfunction specified");
-                return 198; // Syntax error
-            }
+    
+        if argc < 1 || argv.is_null() {
+            stata_interface::display("Error: No subfunction specified");
+            return 198; // Syntax error
         }
 
 
