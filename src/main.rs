@@ -5,6 +5,7 @@ use std::{env, io::Write};
 
 
 pub mod read;
+pub mod write;
 pub mod describe;
 pub mod mapping;
 pub mod stata_interface;
@@ -77,6 +78,36 @@ fn main() {
         })
         .init();
 
+        
+    write_test();
+}
+
+
+
+#[cfg(debug_assertions)]
+fn write_test() {
+    let write_param1 = ReadParams::new(
+        r#"C:/Users/jonro/Downloads/test.parquet"#.to_owned(),
+        "mychar mynum mydate dtime mylabl myord mytime".to_owned(),
+        0,
+        0,
+        Some("".to_owned()),
+        r#"[{"name":"mychar","dtype":"String","format":"%9s","str_length":1},{"name":"mynum","dtype":"Double","format":"%10.0g","str_length":0},{"name":"mydate","dtype":"Long","format":"%td","str_length":0},{"name":"dtime","dtype":"Double","format":"%tc","str_length":0},{"name":"mylabl","dtype":"Double","format":"%10.0g","str_length":0},{"name":"myord","dtype":"Double","format":"%10.0g","str_length":0},{"name":"mytime","dtype":"Double","format":"%tchh:mm:ss","str_length":0}]"#.to_owned(),
+    );
+
+    let result = write::write_from_stata(
+        &write_param1.path,
+        &write_param1.variables_as_str, 
+        write_param1.n_rows,
+        write_param1.offset,
+        write_param1.sql_if.as_deref(), 
+        &write_param1.mapping
+    );
+}
+
+
+#[cfg(debug_assertions)]
+fn read_test() {
     let path = "C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample.parquet";
     let sql_if = sql_from_if::stata_to_sql("mynum > 0 | missing(mynum) | mytime > 1.1").unwrap();
     
@@ -120,6 +151,7 @@ fn main() {
     );
     //  test_stata_if_to_sql();
 }
+
 
 
 

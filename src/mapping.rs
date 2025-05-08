@@ -128,7 +128,8 @@ pub fn StataColumnInfoToSchema(
 ) -> Schema {
     let fields: Vec<Field> = column_info.iter().map(|col| {
         // Parse the stata_type string to StataType enum
-        let stata_type = match (col.dtype.as_ref(),&col.format) {
+        
+        let stata_type = match (col.dtype.to_lowercase().as_ref(),&col.format) {
             ("string",_) => StataType::String,
             ("strl",_) => StataType::Strl,
             ("int",_) => {

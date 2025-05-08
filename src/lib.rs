@@ -106,8 +106,25 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     ) as ST_retcode;
             },
             "save" => {
-                display(&format!("path = {}",subfunction_args[0]));
-                return stata_interface::display("Save file") as ST_retcode
+                let path = subfunction_args[0];
+                let varlist = subfunction_args[1];
+                let n_rows = subfunction_args[2];
+                let offset =  subfunction_args[3];
+                let sql_if =  subfunction_args[4];
+                let mapping = subfunction_args[5];
+
+                let output = match write::write_from_stata(
+                    path,
+                    varlist,
+                    n_rows.parse::<usize>().unwrap(),
+                    offset.parse::<usize>().unwrap(),
+                    Some(sql_if),
+                    mapping
+                ) {
+                    Ok(_) => 0 as i32,
+                    Err(e) => 198 as i32
+                };
+                return output as ST_retcode;
             },
             "if" => {
                 let sql_if = sql_from_if::stata_to_sql(subfunction_args[0] as &str);

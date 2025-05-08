@@ -1,10 +1,9 @@
-*! read_parquet: Import parquet files into Stata
+*! polars_parquet - read/write parquet files with stata
 *! Version 1.0.0
 capture program drop pq_use
 program define pq_use, rclass
     version 17.0
     
-    // Properly handle compound quotes
     local input_args = `"`0'"'
     di `"`input_args'"'
     // Check if "using" is present in arguments
@@ -29,10 +28,13 @@ program define pq_use, rclass
         local namelist ""
     }
     
-    di "namelist: `namelist'"
-    di "using:    `using'"
-    di `"if:       `if'"'
-    di "in:        `in'"
+	
+	`clear'
+	
+	if `=_N' > 0 {
+		display as error "There is already data loaded, pass clear if you want to load a parquet file"
+		exit 2000
+	}
 	
 	if ("`in'" != "") {
 		
@@ -83,7 +85,7 @@ program define pq_use, rclass
 	
 	
 	
-	clear
+	
 	quietly set obs `row_to_read'
 	foreach vari in `matched_vars' {
 		local type_info ``vari''
@@ -152,6 +154,8 @@ program define pq_describe, rclass
 end
 
 
+
+
 capture program drop pq_match_variables
 program define pq_match_variables, rclass
     syntax [anything(name=namelist)], against(string)
@@ -207,6 +211,101 @@ program define pq_match_variables, rclass
     return local matched_vars = `"`matched'"'
 end
 
+capture program drop pq_save
+program define pq_save
+	version 17.0
+	
+	
+    local input_args = `"`0'"'
+    di `"`input_args'"'
+    // Check if "using" is present in arguments
+    local using_pos = strpos(`" `input_args' "', " using ")
+    
+    if `using_pos' > 0{
+        // 	Extract everything before "using"
+        local varlist = substr(`"`input_args'"', 1, `using_pos'-1)
+
+		local rest = substr(`"`input_args'"', `using_pos'+6, .)
+
+		local 0 =  `"`varlist' using `rest'"'
+
+        syntax varlist using/ [, replace in(string) if(string)]
+
+    }
+    else {
+        // No "using" - parse everything as filename and options
+        local 0 = `"* using `input_args'"'
+		
+        syntax varlist using/ [, replace in(string) if(string)]
+        
+        // namelist is empty since no "using" separator
+        local varlist ""
+    }
+	
+	di "HI"
+	di "varlist: `varlist'"
+    di "using:    `using'"
+    di `"if:       `if'"'
+    di "in:        `in'"
+	
+	
+	
+	local StataColumnInfo
+	foreach vari in `varlist' {
+		local typei: type `vari'
+		local formati: format `vari'
+		di "`vari': `typei', `formati'"
+		local str_length 0
+		
+		if ((substr("`typei'",1,3) == "str") & ("`typei'" != "strl")) {
+			local str_length = substr("`typei'",4,.)
+			local typei String
+		}
+		else {
+			local typei = strproper("`typei'")
+		}
+		if ("`StataColumnInfo'" != "")	{
+			local StataColumnInfo = `"`StataColumnInfo',"'
+		}
+		
+		local StataColumnInfo = `"`StataColumnInfo'{"name":"`vari'","dtype":"`typei'","format":"`formati'","str_length":`str_length'}"'
+	}
+	
+	local StataColumnInfo = `"[`StataColumnInfo']"'
+	
+	di `"`StataColumnInfo'"'
+	
+	if ("`in'" != "") {
+		
+		local offset = substr("`in'", 1, strpos("`in'", "/") -1)
+		local offset = max(`offset',0)
+		local last_n = substr("`in'", strpos("`in'", "/") + 1, .)
+		local n_rows = `last_n' - `offset' + 1
+	}
+	else {
+		local offset = 0
+		local last_n = 0
+		local n_rows = 0
+	}
+	
+	
+	//	Process the if statement, if passed
+	if (`"`if'"' != "") {
+		plugin call polars_parquet_plugin, if `"`if'"'
+	}
+	else {
+		local sql_if
+	}
+	
+	di `"sql_if: 	`sql_if'"'
+	
+	local offset = max(0,`offset' - 1)
+	di `"plugin call polars_parquet_plugin, save "`using'" "`varlist'" `n_rows' `offset' "`sql_if'" "`StataColumnInfo'""'
+	
+	
+	
+	plugin call polars_parquet_plugin, save "`using'" "`varlist'" `n_rows' `offset' `"`sql_if'"' `"`StataColumnInfo'"'
+end
 
 
 capture log close
@@ -247,13 +346,13 @@ else {
 
 timer clear
 
-//	local path C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample
+local path C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample
 //	local path C:\Users\jonro\Downloads\flights-1m
 //	local path C:\Users\jonro\Downloads\fhv_tripdata_2025-01
-local path C:\Users\jonro\Downloads\fhvhv_tripdata_2024-12
+//	local path C:\Users\jonro\Downloads\fhvhv_tripdata_2024-12
 pq_describe using "`path'.parquet"
 timer on 1
-pq_use using "`path'.parquet"
+pq_use using "`path'.parquet", clear
 timer off 1
 sum
 save "`path'.dta", replace
@@ -263,6 +362,9 @@ use "`path'", clear
 timer off 2
 sum
 timer list
+
+
+pq_save * using "C:/Users/jonro/Downloads/test2.parquet", replace
 //	pq_describe using "C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample.parquet"
 //	return list
 //	pq_use using "C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample.parquet", // in(2/3) //	if(mynum > 0 | missing(mynum) | mytime > 1.1)
