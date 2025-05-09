@@ -1,0 +1,12 @@
+d 'POLARS_PARQUET': module to read/write Parquet files in Stata
+d
+d Author: Your Name
+d
+d Requires: Stata 17.0
+d
+d Distribution-Date: 2025-05-08
+d
+d This module provides commands to read, write, and describe Parquet files.
+d
+F polars_parquet.ado
+F polars_parquet.sthlp

@@ -87,7 +87,7 @@ fn main() {
 #[cfg(debug_assertions)]
 fn write_test() {
     let write_param1 = ReadParams::new(
-        r#"C:/Users/jonro/Downloads/test.parquet"#.to_owned(),
+        r#"C:/Users/jonro/Downloads/test_vs_code.parquet"#.to_owned(),
         "mychar mynum mydate dtime mylabl myord mytime".to_owned(),
         0,
         0,

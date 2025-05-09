@@ -19,7 +19,7 @@ include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 // Data access functions
 #[inline]
 pub unsafe fn SF_vdata(i: i32, j: i32, d: *mut f64) -> i32 {
-    if let Some(func) = (*_stata_).safevdata {
+    if let Some(func) = (*_stata_).vdata {
         (func)(i, j, d)
     } else {
         panic!("safevdata function is not available")

@@ -99,7 +99,12 @@ pub fn read_to_stata(
 
 
     //  display(&format!("n_batches: {}",n_batches));
-    let n_threads = get_thread_count();
+    let n_threads = if n_rows < 1_000 {
+        1 as usize
+    } else {
+        get_thread_count()
+    };
+    
     for batchi in 0..n_batches {
         let mut df_batch = df.clone();
 
@@ -475,7 +480,7 @@ fn process_row_range(
 
 
 
-fn get_thread_count() -> usize {
+pub fn get_thread_count() -> usize {
     // First try to get the thread count from POLARS_MAX_THREADS env var
     match env::var("POLARS_MAX_THREADS") {
         Ok(threads_str) => {

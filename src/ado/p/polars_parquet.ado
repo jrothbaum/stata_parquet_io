@@ -1,12 +1,12 @@
 *! polars_parquet - read/write parquet files with stata
 *! Version 1.0.0
-capture program drop pq_use
-program define pq_use, rclass
+capture program drop _pq_use
+program define _pq_use, rclass
     version 17.0
     
     local input_args = `"`0'"'
-    di `"`input_args'"'
-    // Check if "using" is present in arguments
+
+	// Check if "using" is present in arguments
     local using_pos = strpos(`" `input_args' "', " using ")
     
     if `using_pos' > 0{
@@ -14,9 +14,7 @@ program define pq_use, rclass
         local namelist = substr(`"`input_args'"', 1, `using_pos'-1)
         local rest = substr(`"`input_args'"', `using_pos'+6, .)
 		local 0 = `"using `rest'"'
-        di `"namelist: `namelist'"'
-        di `"rest: `rest'"'
-		
+        
         syntax using/ [, clear in(string) if(string)]
     }
     else {
@@ -28,7 +26,6 @@ program define pq_use, rclass
         local namelist ""
     }
     
-	
 	`clear'
 	
 	if `=_N' > 0 {
@@ -56,12 +53,9 @@ program define pq_use, rclass
 		local sql_if
 	}
 	
-	di `"sql_if: 	`sql_if'"'
-	
 	local b_quiet = 1
 	local b_detailed = 1
 	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"'
-
 	
 	local vars_in_file
 	forvalues i = 1/`n_columns' {
@@ -117,15 +111,13 @@ program define pq_use, rclass
 
 	local offset = max(0,`offset' - 1)
 	local n_rows = `offset' + `row_to_read'
-	di `"plugin call polars_parquet_plugin, function: read "`using'" "`matched_vars'" n_rows: `n_rows' offset: `offset' if: "`sql_if'" mapping: "`mapping'""'
-	
 	
 	plugin call polars_parquet_plugin, read "`using'" "`matched_vars'" `n_rows' `offset' `"`sql_if'"' `"`mapping'"'
 end
 
 
-capture program drop pq_describe
-program define pq_describe, rclass
+capture program drop _pq_describe
+program define _pq_describe, rclass
     version 17.0
     
     // Parse syntax
@@ -136,7 +128,7 @@ program define pq_describe, rclass
 			 
 	local b_quiet = ("`quietly'" != "")
 	local b_detailed = ("`detailed'" != "")
-	
+	pq_register_plugin
 	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' ""
 
 	
@@ -160,16 +152,14 @@ capture program drop pq_match_variables
 program define pq_match_variables, rclass
     syntax [anything(name=namelist)], against(string)
 
-	di "namelist: `namelist'"
-	di "against:  `against'"
-    // Create local macros
+	
+	// Create local macros
     local vars `"`against'"'
     local matched
     local unmatched
 
     foreach name in `namelist' {
-		di "name: `name'"
-        local found = 0
+		local found = 0
 
         // Wildcard pattern
         if strpos("`name'", "*") | strpos("`name'", "?") {
@@ -211,14 +201,14 @@ program define pq_match_variables, rclass
     return local matched_vars = `"`matched'"'
 end
 
-capture program drop pq_save
-program define pq_save
+capture program drop _pq_save
+program define _pq_save
 	version 17.0
 	
 	
     local input_args = `"`0'"'
-    di `"`input_args'"'
-    // Check if "using" is present in arguments
+    
+	// Check if "using" is present in arguments
     local using_pos = strpos(`" `input_args' "', " using ")
     
     if `using_pos' > 0{
@@ -242,19 +232,13 @@ program define pq_save
         local varlist ""
     }
 	
-	di "HI"
-	di "varlist: `varlist'"
-    di "using:    `using'"
-    di `"if:       `if'"'
-    di "in:        `in'"
-	
-	
+	pq_register_plugin
 	
 	local StataColumnInfo
 	foreach vari in `varlist' {
 		local typei: type `vari'
 		local formati: format `vari'
-		di "`vari': `typei', `formati'"
+		
 		local str_length 0
 		
 		if ((substr("`typei'",1,3) == "str") & ("`typei'" != "strl")) {
@@ -273,7 +257,7 @@ program define pq_save
 	
 	local StataColumnInfo = `"[`StataColumnInfo']"'
 	
-	di `"`StataColumnInfo'"'
+	
 	
 	if ("`in'" != "") {
 		
@@ -297,10 +281,9 @@ program define pq_save
 		local sql_if
 	}
 	
-	di `"sql_if: 	`sql_if'"'
+	
 	
 	local offset = max(0,`offset' - 1)
-	di `"plugin call polars_parquet_plugin, save "`using'" "`varlist'" `n_rows' `offset' "`sql_if'" "`StataColumnInfo'""'
 	
 	
 	
@@ -308,74 +291,31 @@ program define pq_save
 end
 
 
-capture log close
-log using "C:\Users\jonro\OneDrive\Documents\Coding\stata_parquet_io\src\ado\polars_parquet.log", replace
 
-/*
-// Initialize plugin
-if "`c(os)'" == "MacOSX" {
-  local plugin_extension = "dylib"
-} 
-else if "`c(os)'" == "Windows" {
-  local plugin_extension = "dll"
-} 
-else {
-  local plugin_extension = "so"
-}
-program polars_parquet_plugin, plugin using("C:\Users\jonro\OneDrive\Documents\Coding\stata_parquet_io\target\release\stata_parquet_io.`plugin_extension'")
-*/
-if (0${pq_plugin_loaded} == 0) {
 
-    // Plugin is not loaded, so initialize it
-    if "`c(os)'" == "MacOSX" {
-	  local plugin_extension = "dylib"
-	} 
-	else if "`c(os)'" == "Windows" {
-	  local plugin_extension = "dll"
-	} 
-	else {
-	  local plugin_extension = "so"
+capture program drop pq_register_plugin
+program define pq_register_plugin
+	if (0${pq_plugin_loaded} == 0) {
+		// Plugin is not loaded, so initialize it
+		if "`c(os)'" == "MacOSX" {
+		  local plugin_extension = "dylib"
+		} 
+		else if "`c(os)'" == "Windows" {
+		  local plugin_extension = "dll"
+		} 
+		else {
+		  local plugin_extension = "so"
+		}
+
+		
+		if ("${parquet_dll_override}" != "") {
+			local parquet_path = "${parquet_dll_override}"
+		}
+		else {
+			local parquet_path = "`c(sysdir_plus)'p"
+		}
+		program polars_parquet_plugin, plugin using("`parquet_path'\stata_parquet_io.`plugin_extension'")
+		global pq_plugin_loaded = 1
 	}
-	program polars_parquet_plugin, plugin using("C:\Users\jonro\OneDrive\Documents\Coding\stata_parquet_io\target\release\stata_parquet_io.`plugin_extension'")
-	
-	global pq_plugin_loaded = 1
-}
-else {
-    // Plugin is already loaded, no need to reload
-}
 
-timer clear
-
-local path C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample
-//	local path C:\Users\jonro\Downloads\flights-1m
-//	local path C:\Users\jonro\Downloads\fhv_tripdata_2025-01
-//	local path C:\Users\jonro\Downloads\fhvhv_tripdata_2024-12
-pq_describe using "`path'.parquet"
-timer on 1
-pq_use using "`path'.parquet", clear
-timer off 1
-sum
-save "`path'.dta", replace
-
-timer on 2
-use "`path'", clear
-timer off 2
-sum
-timer list
-
-
-pq_save * using "C:/Users/jonro/Downloads/test2.parquet", replace
-//	pq_describe using "C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample.parquet"
-//	return list
-//	pq_use using "C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample.parquet", // in(2/3) //	if(mynum > 0 | missing(mynum) | mytime > 1.1)
-;
-
-sum
-
-local row_to_show = ceil(runiform()*_N)
-di "row_to_show: `row_to_show'"
-list in `row_to_show'/`row_to_show'
-//	pq_use "C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample.parquet", n(100) offset(1) //	if(a > 2)
-
-capture log close
-//	cap program drop polars_parquet_plugin
+end

@@ -56,23 +56,27 @@ pub fn n_obs() -> i32 {
 }
 
 #[inline]
+pub fn is_missing(value:f64) -> bool {
+    unsafe {
+        stata_sys::SF_is_missing(value)
+    }
+}
+
+#[inline]
 pub fn read_numeric(column: usize, row: usize) -> Option<f64> {
     // Create a mutable variable to store the result
     let mut result: f64 = 0.0;
     
     // Call the unsafe FFI function
-    unsafe {
+    let status = unsafe {
         stata_sys::SF_vdata(column as i32, row as i32, &mut result)
     };
 
     // Return None if result is less than SV_MISSVAL, otherwise return Some(result)
-    let missval = unsafe {
-        stata_sys::SV_MISSVAL()
-    };
-    if result < missval {
-        None
-    } else {
+    if (status == 0) & !is_missing(result) {
         Some(result)
+    } else {
+        None
     }
 }
 

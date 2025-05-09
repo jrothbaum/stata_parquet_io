@@ -15,6 +15,8 @@ use crate::mapping::{self, StataColumnInfo};
 use crate::read::{
     SEC_SHIFT_SAS_STATA,
     DAY_SHIFT_SAS_STATA,
+    SEC_MICROSECOND,
+    get_thread_count
 };
 
 pub fn write_from_stata(
@@ -100,7 +102,7 @@ impl StataDataScan {
         StataDataScan {
             current_offset: Arc::new(Mutex::new(initial_offset)),
             n_rows: rows_to_read,
-            batch_size: batch_size.unwrap_or(100_000),
+            batch_size: batch_size.unwrap_or(10_000_000),
             schema: mapping::StataColumnInfoToSchema(&column_info),
             column_info: column_info,
             all_columns: all_columns,
@@ -209,7 +211,13 @@ fn read_single_batch(
     let mut columns: Vec<Series> = Vec::with_capacity(sds.schema.len());
     
     // Configure thread pool
-    let n_threads = 2;
+    let n_threads = if n_rows_to_read < 1_000 {
+        1 as usize
+    } else {
+        get_thread_count()
+    };
+    
+    display(&format!("threads = {}", n_threads));
     let thread_pool = rayon::ThreadPoolBuilder::new()
         .num_threads(n_threads)
         .build()
@@ -262,6 +270,7 @@ fn read_single_batch(
                         Series::new(col_name.clone(), bool_values)
                     },
                     DataType::Int8 => {
+                        //  display(&format!("Reading byte"));
                         // Process integers in parallel
                         let int_values: Vec<Option<i8>> = thread_pool.install(|| {
                             (0..n_rows_to_read)
@@ -279,6 +288,7 @@ fn read_single_batch(
                         Series::new(col_name.clone(), int_values)
                     },
                     DataType::Int16 => {
+                        //  display(&format!("Reading int"));
                         // Process integers in parallel
                         let int_values: Vec<Option<i16>> = thread_pool.install(|| {
                             (0..n_rows_to_read)
@@ -296,6 +306,7 @@ fn read_single_batch(
                         Series::new(col_name.clone(), int_values)
                     },
                     DataType::Int32 => {
+                        // display(&format!("Reading long"));
                         // Process integers in parallel
                         let int_values: Vec<Option<i32>> = thread_pool.install(|| {
                             (0..n_rows_to_read)
@@ -313,6 +324,7 @@ fn read_single_batch(
                         Series::new(col_name.clone(), int_values)
                     },
                     DataType::Float32 => {
+                        //  display(&format!("Reading float"));
                         // Process floating point values in parallel
                         let float_values: Vec<Option<f32>> = thread_pool.install(|| {
                             (0..n_rows_to_read)
@@ -330,13 +342,18 @@ fn read_single_batch(
                     },
                     DataType::Float64 => {
                         // Process floating point values in parallel
+                        // display(&format!("Reading double"));
                         let float_values: Vec<Option<f64>> = thread_pool.install(|| {
                             (0..n_rows_to_read)
                                 .into_par_iter()
                                 .map(|row_idx| {
                                     let row = offset + row_idx + 1;
+                                    // display(&format!("Row {}, column {}",row,col_idx+1));
                                     match stata_interface::read_numeric(col_idx+1, row) {
-                                        Some(value) => Some(value),
+                                        Some(value) => {
+                                            // display(&format!("  value = {:?}",stata_interface::read_numeric(col_idx+1, row)));
+                                            Some(value)
+                                        },
                                         None => None
                                     }
                                 })
@@ -368,7 +385,7 @@ fn read_single_batch(
                                 .map(|row_idx| {
                                     let row = offset + row_idx + 1;
                                     match stata_interface::read_numeric(col_idx+1, row) {
-                                        Some(value) => Some(value  as i64),
+                                        Some(value) => Some((value  as i64)*SEC_MICROSECOND),
                                         None => None
                                     }
                                 })
