@@ -10,3 +10,4 @@ foreach fi in `ado_files' {
 local fi stata_parquet_io.dll
 copy "`source_path_dll'/`fi'" "`destination_path_ado'/pq.dll", replace
 discard
+clear

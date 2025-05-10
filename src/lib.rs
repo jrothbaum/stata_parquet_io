@@ -17,10 +17,7 @@ pub mod describe;
 pub mod sql_from_if;
 
 use stata_interface::{display, ST_retcode};
-use describe::{
-    file_summary,
-    get_schema
-};
+use describe::file_summary;
 use read::{
     file_exists_and_is_file,
     read_to_stata
@@ -116,7 +113,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 let offset =  subfunction_args[3];
                 let sql_if =  subfunction_args[4];
                 let mapping = subfunction_args[5];
-
+                
                 let output = match write::write_from_stata(
                     path,
                     varlist,
@@ -124,7 +121,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     offset.parse::<usize>().unwrap(),
                     Some(sql_if),
                     mapping,
-                    None
+                    None,
                 ) {
                     Ok(_) => 0 as i32,
                     Err(e) => 198 as i32

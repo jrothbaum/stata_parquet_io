@@ -3,10 +3,14 @@ use std::path::PathBuf;
 use log::debug;
 use polars::prelude::{self, NamedFrom, TimeUnit};
 use polars::prelude::*;
+use polars_core::utils::arrow::array::new_empty_array;
 use polars_sql::SQLContext;
 use rayon::prelude::*;
 use std::error::Error;
-
+use std::collections::{
+    HashMap,
+    HashSet
+};
 
 use crate::stata_interface;
 use crate::stata_interface::{
@@ -37,13 +41,20 @@ pub fn write_from_stata(
         variables_as_str
     };
 
-
+    let rename_list = get_rename_list();
     let all_columns: Vec<PlSmallStr> = variables_as_str.split_whitespace()
-        .map(|s| PlSmallStr::from(s))
-        .collect();
+    .map(|s| {
+        let s_small = PlSmallStr::from(s);
+
+        match rename_list.get(&s_small) {
+            Some(renamed) => renamed.clone(),   // Clone the PlSmallStr we found
+            None => s_small                                  // Use the original PlSmallStr
+        }
+    })
+    .collect();
     
     let column_info: Vec<StataColumnInfo>= if (mapping == "" || mapping == "from_macros") {
-        display("Reading column info from macros");
+        //  display("Reading column info from macros");
 
         let n_vars_str = get_macro(&"var_count", false, None);
         let n_vars = match n_vars_str.parse::<usize>() {
@@ -55,7 +66,10 @@ pub fn write_from_stata(
         };
 
         //  display(&format!("from n = {}",n_vars));
-        column_info_from_macros(n_vars)
+        column_info_from_macros(
+            n_vars,
+            rename_list
+        )
     } else {
         serde_json::from_str(mapping).unwrap()
     };
@@ -101,6 +115,42 @@ pub fn write_from_stata(
         }
 }
 
+fn get_rename_list() -> HashMap<PlSmallStr,PlSmallStr> {
+    let mut rename_list = HashMap::<PlSmallStr,PlSmallStr>::new();
+    let n_rename_str = get_macro(
+        &"n_rename",
+        false, 
+        None,
+    );
+
+    let n_rename = match n_rename_str.parse::<usize>() {
+        Ok(num) => num,
+        Err(e) => {
+            eprintln!("Failed to parse n_vars '{}' as usize: {}", n_rename_str, e);
+            0
+        }
+    };
+
+    for i in 1..(n_rename+1) {
+        let rename_from  = get_macro(
+            &format!("rename_from_{}",i),
+            false,
+            None
+        );
+        let rename_to  = get_macro(
+            &format!("rename_to_{}",i),
+            false,
+            None
+        );
+
+        rename_list.insert(rename_from.into(), rename_to.into());
+    }
+    rename_list
+}
+
+
+
+
 #[derive(Copy,Clone)]
 pub enum ParallelizationStrategy {
     ByRow,
@@ -124,11 +174,21 @@ fn determine_parallelization_strategy(
     }
 }
 
-fn column_info_from_macros(n_vars: usize) -> Vec<StataColumnInfo> {
+fn column_info_from_macros(
+    n_vars: usize,
+    rename_list: HashMap<PlSmallStr,PlSmallStr>,
+) -> Vec<StataColumnInfo> {
     let mut column_infos = Vec::with_capacity(n_vars);
     
     for i in 0..n_vars {
         let name = get_macro(&format!("name_{}", i+1), false, None);
+
+        let name = match rename_list.get(&PlSmallStr::from(&name)) {
+            Some(renamed) => renamed.to_string(),       // Change the name to the renamed value
+            None => name.clone()                                     // Use the original value
+        };
+
+
         let dtype = get_macro(&format!("dtype_{}", i+1), false, None);
         let format = get_macro(&format!("format_{}", i+1), false, None);
         let str_length_str = get_macro(&format!("str_length_{}", i+1), false, None);

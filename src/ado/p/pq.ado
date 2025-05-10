@@ -84,11 +84,20 @@ program pq_use, rclass
 	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"'
 	
 	local vars_in_file
+	local n_renamed = 0
 	forvalues i = 1/`n_columns' {
-		local vars_in_file `vars_in_file' `name_`i' '
+		local vars_in_file `vars_in_file' `name_`i''
+
+		local renamei `rename_`i''
+		if ("`renamei'" != "") {
+			local n_renamed = `n_renamed' + 1 
+			local rename_from_`n_renamed' `name_`i''
+			local rename_to_`n_renamed' `renamei'
+		}
 	}
 	
 	
+
 	// If namelist is empty or blank, return the full varlist
     if "`namelist'" == "" | "`namelist'" == "*" {
         local matched_vars `vars_in_file'
@@ -109,29 +118,47 @@ program pq_use, rclass
 	quietly set obs `row_to_read'
 	foreach vari in `matched_vars' {
 		local type_info ``vari''
+		//	Set rename_to to nothing
+		local rename_to
 		
 		tokenize `type_info', parse("|")
 		local type `1'
 		local string_length `3'
+
+		//	Does it need to be renamed?
+		local name_to_create `vari'
+		forvalues i = 1/`n_renamed' {
+			local rename_from `rename_from_`i''
+
+			if ("`vari'" == "`rename_from'") {
+				local rename_to `rename_to_`i''
+				local name_to_create `rename_to'
+				continue, break
+			}
+		}
 		
-		
+
 		if ("`type'" == "string") {
-			quietly gen str`string_length' `vari' = ""
+			quietly gen str`string_length' `name_to_create' = ""
 		}
 		else if ("`type'" == "datetime") {
-			quietly gen double `vari' = .
-			format `vari' %tc
+			quietly gen double `name_to_create' = .
+			format `name_to_create' %tc
 		}
 		else if ("`type'" == "date") {
-			quietly gen long `vari' = .
-			format `vari' %td
+			quietly gen long `name_to_create' = .
+			format `name_to_create' %td
 		}
 		else if ("`type'" == "time") {
-			quietly gen double `vari' = .
-			format `vari' %tchh:mm:ss
+			quietly gen double `name_to_create' = .
+			format `name_to_create' %tchh:mm:ss
 		}
 		else {
-			quietly gen double `type' `vari' = .
+			quietly gen double `type' `name_to_create' = .
+		}
+
+		if ("`rename_to'" != "") {
+			label variable `name_to_create' "{parquet_name:`vari'}"
 		}
 	}
 
@@ -160,7 +187,7 @@ program pq_describe, rclass
 	
 	local macros_to_return n_row n_columns //	mapping
 	forvalues i = 1/`n_columns' {
-		local macros_to_return `macros_to_return' type_`i' name_`i' 
+		local macros_to_return `macros_to_return' type_`i' name_`i' rename_`i' 
 		
 		if (`b_detailed')	local macros_to_return `macros_to_return' string_length_`i'
 		
@@ -240,20 +267,19 @@ program pq_save
     if `using_pos' > 0{
         // 	Extract everything before "using"
         local varlist = substr(`"`input_args'"', 1, `using_pos'-1)
-		if ("`varlist" == "")	local varlist *
+		if (strtrim("`varlist'") == "")	local varlist *
 
 		local rest = substr(`"`input_args'"', `using_pos'+6, .)
 
-		local 0 =  `"`varlist' using `rest'"'
-
-        syntax varlist using/ [, replace in(string) if(string)]
+		local 0 = `"`varlist' using `rest'"'
+		syntax varlist using/ [, replace in(string) if(string) NOAUTORENAME]
 
     }
     else {
         // No "using" - parse everything as filename and options
         local 0 = `"* using `input_args'"'
 		
-        syntax varlist using/ [, replace in(string) if(string)]
+        syntax varlist using/ [, replace in(string) if(string) NOAUTORENAME]
         
         // namelist is empty since no "using" separator
     }
@@ -261,13 +287,15 @@ program pq_save
 	pq_register_plugin
 	
 	local StataColumnInfo from_macros
-
 	local var_count = 0
+	local n_rename = 0
+	
 	foreach vari in `varlist' {
 		local var_count = `var_count' + 1
 		local typei: type `vari'
 		local formati: format `vari'
 		local str_length 0
+		
 		
 		if ((substr("`typei'",1,3) == "str") & ("`typei'" != "strl")) {
 			local str_length = substr("`typei'",4,.)
@@ -281,6 +309,23 @@ program pq_save
 		local dtype_`var_count' `typei'
 		local format_`var_count' `formati'
 		local str_length_`var_count' `str_length'
+		
+		//	Rename?
+		if ("`noautorename'" == "") {
+			local labeli: variable label `vari'
+
+			if regexm(`"`labeli'"', "^\{parquet_name:([^}]*)\}") {
+				//	Extract the value between "parquet_name:" and "}"
+
+				local n_rename = `n_rename' + 1
+				local rename_from_`n_rename' `vari'
+				local rename_to_`n_rename' = regexs(1)
+
+				//	di "n_rename: `n_rename'"
+				//	di "	from: `rename_from_`n_rename''"
+				//	di "	to:   `rename_to_`n_rename''" 
+			}
+		}
 	}
 	
 	

@@ -13,7 +13,6 @@ use crate::stata_interface:: {
     ST_retcode,
     display,
     set_macro,
-    set_scalar
 };
 
 use crate::read::scan_lazyframe;

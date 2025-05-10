@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{
+    HashMap,
+    HashSet
+};
 use serde::{Serialize, Deserialize};
 use polars::prelude::*;
 
@@ -229,6 +232,7 @@ pub fn schema_with_stata_types(
             HashMap::<PlSmallStr, usize>::new()
         };
 
+    let rename_map = generate_rename_map(&schema);
     let mut all_columns:Vec<ColumnInfo> = Vec::with_capacity(schema.len());
     for (i,(name, dtype)) in schema.iter().enumerate() {
         let char_length = hash_strings.get(name).unwrap_or(&0);
@@ -250,7 +254,6 @@ pub fn schema_with_stata_types(
         }
 
         //  Variable information macros
-
         //      Name
         let _ = set_macro(
             &format!("name_{}",i+1),
@@ -277,6 +280,13 @@ pub fn schema_with_stata_types(
         let _ = set_macro(
             &format!("string_length_{}",i+1),
             &(format!("{}",char_length)),
+            false
+        );
+
+        //      Rename, if needed
+        let _ = set_macro(
+            &format!("rename_{}",i+1),
+            rename_map.get(&name.to_string()).unwrap_or(&"".to_string()),
             false
         );
         
@@ -317,6 +327,163 @@ pub fn schema_with_stata_types(
 }
 
 
+
+fn generate_rename_map(schema: &Schema) -> HashMap<String, String> {
+    let mut rename_map: HashMap<String, String> = HashMap::new();
+    let mut used_names: HashSet<String> = HashSet::new();
+
+    let reserved_words: HashSet<&str> = [
+        "aggregate",
+        "array",
+        "boolean",
+        "break",
+        "byte",
+        "case",
+        "catch",
+        "class",
+        "colvector",
+        "complex",
+        "const",
+        "continue",
+        "default",
+        "delegate",
+        "delete",
+        "do",
+        "double",
+        "else",
+        "eltypedef",
+        "end",
+        "enum",
+        "explicit",
+        "export",
+        "external",
+        "float",
+        "for",
+        "friend",
+        "function",
+        "global",
+        "goto",
+        "if",
+        "inline",
+        "int",
+        "local",
+        "long",
+        "NULL",
+        "pragma",
+        "protected",
+        "quad",
+        "rowvector",
+        "short",
+        "typedef",
+        "typename",
+        "virtual",
+        "_all",
+        "_N",
+        "_skip",
+        "_b",
+        "_pi",
+        "str#",
+        "in",
+        "_pred",
+        "strL",
+        "_coef",
+        "_rc",
+        "using",
+        "_cons",
+        "_se",
+        "with",
+        "_n",
+    ].iter().cloned().collect();
+
+    // First pass: Process each name to create sanitized and shortened versions
+    let mut processed_names: HashMap<String, String> = HashMap::new();
+    
+    for (pl_name, _) in schema.iter() {
+        let original_name = pl_name.to_string();
+        
+        // Replace invalid characters with underscores
+        let sanitized_name = original_name.chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        
+        // Ensure name starts with a letter or underscore
+        let mut new_name = if !sanitized_name.is_empty() && 
+                             !sanitized_name.chars().next().unwrap().is_alphabetic() && 
+                             sanitized_name.chars().next().unwrap() != '_' {
+            format!("_{}", sanitized_name)
+        } else {
+            sanitized_name
+        };
+        
+        // Check if name is reserved
+        if reserved_words.contains(new_name.as_str()) {
+            new_name = format!("_{}", new_name);
+        }
+        
+        // Truncate if needed
+        if new_name.len() > 32 {
+            new_name = new_name[0..32].to_string();
+        }
+        
+        processed_names.insert(original_name, new_name);
+    }
+    
+    // Second pass: Find collisions
+    let mut name_counts: HashMap<String, usize> = HashMap::new();
+    
+    for new_name in processed_names.values() {
+        *name_counts.entry(new_name.clone()).or_insert(0) += 1;
+    }
+    
+    // Third pass: Resolve collisions and build final rename map
+    let mut used_final_names: HashSet<String> = HashSet::new();
+    
+    for (original_name, processed_name) in processed_names {
+        let name_count = *name_counts.get(&processed_name).unwrap();
+        
+        // If the original name doesn't need modification, skip it
+        if original_name == processed_name {
+            continue;
+        }
+        
+        // If there's only one variable with this processed name, use it as-is
+        if name_count == 1 {
+            rename_map.insert(original_name, processed_name.clone());
+            used_final_names.insert(processed_name.clone());
+            continue;
+        }
+        
+        // For collisions, we need to add numeric suffixes
+        let base_name = if processed_name.len() > 28 {
+            processed_name[0..28].to_string()
+        } else {
+            processed_name
+        };
+        
+        // Find a unique suffix
+        let mut counter = 1;
+        let mut final_name;
+        
+        loop {
+            final_name = format!("{}_{:03}", base_name, counter);
+            if !used_final_names.contains(&final_name) {
+                break;
+            }
+            counter += 1;
+        }
+        
+        used_final_names.insert(final_name.clone());
+        rename_map.insert(original_name, final_name);
+    }
+    
+    rename_map
+}
 
 fn get_string_column_lengths(
     df:&LazyFrame,

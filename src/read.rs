@@ -63,7 +63,7 @@ pub fn read_to_stata(
         variables_as_str
     };
 
-    let all_columns:Vec<ColumnInfo> = if (mapping == "" || mapping == "from_macros") {
+    let all_columns:Vec<ColumnInfo> = if mapping == "" || mapping == "from_macros" {
         let n_vars_str = get_macro(&"n_vars", false, None);
         let n_vars = match n_vars_str.parse::<usize>() {
             Ok(num) => num,
@@ -87,6 +87,8 @@ pub fn read_to_stata(
             return Ok(198);
         },
     };
+
+    df = cast_catenum_to_string(&df).unwrap();
 
     
     if let Some(sql) = sql_if.filter(|s| !s.trim().is_empty()) {
@@ -161,6 +163,32 @@ pub fn read_to_stata(
     Ok(0)
 }
 
+
+// To cast all categorical columns to string:
+fn cast_catenum_to_string(lf: &LazyFrame) -> Result<LazyFrame, PolarsError> {
+    // Collect the schema from the LazyFrame
+    let mut lf_internal = lf.to_owned();
+    let schema = lf_internal.collect_schema()?;
+    
+    // Identify categorical columns from the schema
+    let cat_expressions: Vec<Expr> = schema.iter()
+        .filter_map(|(name, dtype)| {
+            if matches!(dtype, DataType::Categorical(_, _) | DataType::Enum(_, _)) {
+                Some(col(name.clone()).cast(DataType::String))
+            } else {
+                None
+            }
+        })
+        .collect();
+    
+    // If there are categorical columns, apply the transformations
+    if !cat_expressions.is_empty() {
+        Ok(lf_internal.with_columns(cat_expressions))
+    } else {
+        // If no categorical columns found, return the original LazyFrame
+        Ok(lf_internal)
+    }
+}
 
 fn column_info_from_macros(n_vars: usize) -> Vec<ColumnInfo> {
     let mut column_infos = Vec::with_capacity(n_vars);
