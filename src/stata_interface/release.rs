@@ -18,6 +18,14 @@ pub fn set_macro(
     stata_sys::set_macro(macro_name, value, global)
 }
 
+#[inline]
+pub fn get_macro(
+    macro_name:&str,
+    global:bool,
+    buffer_size: Option<usize>
+) -> String {
+    stata_sys::get_macro(macro_name, global, buffer_size).unwrap()
+}
 
 #[inline]
 pub fn set_scalar(

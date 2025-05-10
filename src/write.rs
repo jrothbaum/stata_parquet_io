@@ -9,7 +9,10 @@ use std::error::Error;
 
 
 use crate::stata_interface;
-use crate::stata_interface::display;
+use crate::stata_interface::{
+    display,
+    get_macro
+};
 use crate::mapping::{self, StataColumnInfo};
 
 use crate::read::{
@@ -26,18 +29,42 @@ pub fn write_from_stata(
     offset:usize,
     sql_if:Option<&str>,
     mapping:&str,
+    parallel_strategy:Option<ParallelizationStrategy>,
 ) -> Result<i32,Box<dyn Error>> {
+    let variables_as_str = if variables_as_str == "" || variables_as_str == "from_macro" {
+        &get_macro("varlist", false,  Some(1024 * 1024 * 10))
+    } else {
+        variables_as_str
+    };
+
+
     let all_columns: Vec<PlSmallStr> = variables_as_str.split_whitespace()
         .map(|s| PlSmallStr::from(s))
         .collect();
-    let column_info: Vec<StataColumnInfo> = serde_json::from_str(mapping).unwrap();
+    
+    let column_info: Vec<StataColumnInfo>= if (mapping == "" || mapping == "from_macros") {
+        display("Reading column info from macros");
 
-    // println!("columns = {:?}", all_columns);
-    // println!("columns = {:?}", column_info);
+        let n_vars_str = get_macro(&"var_count", false, None);
+        let n_vars = match n_vars_str.parse::<usize>() {
+            Ok(num) => num,
+            Err(e) => {
+                eprintln!("Failed to parse n_vars '{}' as usize: {}", n_vars_str, e);
+                0
+            }
+        };
+
+        //  display(&format!("from n = {}",n_vars));
+        column_info_from_macros(n_vars)
+    } else {
+        serde_json::from_str(mapping).unwrap()
+    };
+    println!("columns     = {:?}", all_columns);
+    println!("column info = {:?}", column_info);
 
     // Convert Option<&str> to Option<String>
     let sql_if_owned = sql_if.map(|s| s.to_string());
-
+    
     let a_scan = StataDataScan::new(
         column_info,
         all_columns,
@@ -45,6 +72,7 @@ pub fn write_from_stata(
         offset,
         n_rows,
         sql_if_owned,
+        parallel_strategy
     );
 
     
@@ -73,6 +101,56 @@ pub fn write_from_stata(
         }
 }
 
+#[derive(Copy,Clone)]
+pub enum ParallelizationStrategy {
+    ByRow,
+    ByColumn,
+}
+
+// Simple decision function
+fn determine_parallelization_strategy(
+    n_columns: usize,
+    n_rows: usize,
+    available_cores: usize
+) -> ParallelizationStrategy {
+    // Column parallelism when:
+    // 1. We have significantly more columns than CPU cores
+    // 2. We have relatively few rows compared to columns
+    if n_columns > available_cores * 2 && n_rows < 100_000 {
+        ParallelizationStrategy::ByColumn
+    } else {
+        // Default to row parallelism in most other cases
+        ParallelizationStrategy::ByRow
+    }
+}
+
+fn column_info_from_macros(n_vars: usize) -> Vec<StataColumnInfo> {
+    let mut column_infos = Vec::with_capacity(n_vars);
+    
+    for i in 0..n_vars {
+        let name = get_macro(&format!("name_{}", i+1), false, None);
+        let dtype = get_macro(&format!("dtype_{}", i+1), false, None);
+        let format = get_macro(&format!("format_{}", i+1), false, None);
+        let str_length_str = get_macro(&format!("str_length_{}", i+1), false, None);
+        let str_length = match str_length_str.parse::<usize>() {
+            Ok(num) => num,
+            Err(e) => {
+                eprintln!("Failed to parse n_vars '{}' as usize: {}", str_length_str, e);
+                0
+            }
+        };
+        
+        column_infos.push(StataColumnInfo {
+            name,
+            dtype,
+            format,
+            str_length
+        });
+    }
+    
+    column_infos
+}
+
 
 pub struct StataDataScan {
     current_offset: Arc<Mutex<usize>>,
@@ -82,6 +160,7 @@ pub struct StataDataScan {
     column_info:Vec<mapping::StataColumnInfo>,
     all_columns:Vec<PlSmallStr>,
     sql_if:Option<String>,
+    parallel_strategy:Option<ParallelizationStrategy>,
 }
 
 
@@ -92,21 +171,25 @@ impl StataDataScan {
         batch_size: Option<usize>,
         initial_offset: usize,
         n_rows: usize,
-        sql_if: Option<String>
+        sql_if: Option<String>,
+        parallel_strategy:Option<ParallelizationStrategy>,
     ) -> Self {
         let rows_to_read = if (n_rows > 0) {
             n_rows
         } else {
             stata_interface::n_obs() as usize
         };
+
+        
         StataDataScan {
             current_offset: Arc::new(Mutex::new(initial_offset)),
             n_rows: rows_to_read,
             batch_size: batch_size.unwrap_or(10_000_000),
-            schema: mapping::StataColumnInfoToSchema(&column_info),
+            schema: mapping::stata_column_info_to_schema(&column_info),
             column_info: column_info,
             all_columns: all_columns,
             sql_if: sql_if,
+            parallel_strategy:parallel_strategy,
         }
     }
     
@@ -146,7 +229,8 @@ impl AnonymousScan for StataDataScan {
             self, 
             scan_opts,
             0,
-            self.n_rows
+            self.n_rows,
+            self.parallel_strategy
         )?;
 
         // Now handle the Option<DataFrame>
@@ -178,7 +262,8 @@ impl AnonymousScan for StataDataScan {
             self, 
             scan_opts,
             initial_offset,
-            self.batch_size)
+            self.batch_size,
+            self.parallel_strategy)
     }
     
     fn allows_predicate_pushdown(&self) -> bool {
@@ -198,251 +283,383 @@ fn read_single_batch(
     sds: &StataDataScan,
     scan_opts: AnonymousScanArgs,
     offset: usize,
-    n_rows: usize
+    n_rows: usize,
+    parallel_strategy: Option<ParallelizationStrategy>,
 ) -> PolarsResult<Option<DataFrame>> {
-    // Get the current offset and calculate how many rows to read
-    
-    
     // Calculate how many rows to read in this batch
     let rows_remaining = sds.n_rows - offset;
     let n_rows_to_read = std::cmp::min(n_rows, rows_remaining);
     
-    // Prepare vectors to store column data
-    let mut columns: Vec<Series> = Vec::with_capacity(sds.schema.len());
-    
     // Configure thread pool
-    let n_threads = if n_rows_to_read < 1_000 {
+    let n_threads = if n_rows_to_read < 100_000 {
         1 as usize
     } else {
         get_thread_count()
     };
+
+    let strategy = parallel_strategy.unwrap_or_else(|| {
+        determine_parallelization_strategy(
+            sds.schema.len(),
+            n_rows_to_read,
+            n_threads
+        )
+    });
     
-    display(&format!("threads = {}", n_threads));
     let thread_pool = rayon::ThreadPoolBuilder::new()
         .num_threads(n_threads)
         .build()
-        .unwrap();
+        .map_err(|e| PolarsError::ComputeError(format!("Failed to build thread pool: {}", e).into()))?;
     
-    
-    
-    // Process each column in the schema
-    for (col_idx, col_name) in sds.all_columns.iter().enumerate() {
-        let dtype = sds.schema.get_field(col_name.as_str()).map(|field| field.dtype().clone());
+    // Define the process_column function before using it
+    let process_column = |col_idx: usize, col_name: &PlSmallStr, n_rows_to_read: usize, 
+                          offset: usize, parallelize_rows: bool| -> PolarsResult<Option<Series>> {
         
-        match dtype {
-            Some(dtype) => {
-                // Create appropriate Series based on data type
-                let series = match dtype {
-                    DataType::String => {
-                        // Process strings in parallel
-                        let str_length = mapping::find_str_length_by_name(
+        let dtype = match sds.schema.get_field(col_name.as_str()) {
+            Some(field) => field.dtype().clone(),
+            None => {
+                display(&format!("{} not getting saved", col_name));
+                return Ok(None);
+            }
+        };
+        
+        // Create appropriate Series based on data type
+        let series = match dtype {
+            DataType::String => {
+                let str_length = mapping::find_str_length_by_name(
                             &sds.column_info, 
                             &col_name
                         ).unwrap_or(0);
 
-
-                        let string_values: Vec<String> = thread_pool.install(|| {
-                            (0..n_rows_to_read)
-                                .into_par_iter()
-                                .map(|row_idx| {
-                                    let row = offset + row_idx + 1;
-                                    stata_interface::read_string(col_idx+1, row,str_length)
-                                })
-                                .collect()
-                        });
-
-                        Series::new(col_name.clone(), string_values)
-                    },
-                    DataType::Boolean => {
-                        // Process boolean values in parallel
-                        let bool_values: Vec<Option<bool>> = thread_pool.install(|| {
-                            (0..n_rows_to_read)
-                                .into_par_iter()
-                                .map(|row_idx| {
-                                    let row = offset + row_idx + 1;
-                                    match stata_interface::read_numeric(col_idx+1, row) {
-                                        Some(value) => Some(value > 0.0),
-                                        None => None
-                                    }
-                                })
-                                .collect()
-                        });
-                        Series::new(col_name.clone(), bool_values)
-                    },
-                    DataType::Int8 => {
-                        //  display(&format!("Reading byte"));
-                        // Process integers in parallel
-                        let int_values: Vec<Option<i8>> = thread_pool.install(|| {
-                            (0..n_rows_to_read)
-                                .into_par_iter()
-                                .map(|row_idx| {
-                                    let row = offset + row_idx + 1;
-                                    // Handle the Option and convert f64 to i8
-                                    match stata_interface::read_numeric(col_idx+1, row) {
-                                        Some(value) => Some(value as i8),
-                                        None => None
-                                    }
-                                })
-                                .collect()
-                        });
-                        Series::new(col_name.clone(), int_values)
-                    },
-                    DataType::Int16 => {
-                        //  display(&format!("Reading int"));
-                        // Process integers in parallel
-                        let int_values: Vec<Option<i16>> = thread_pool.install(|| {
-                            (0..n_rows_to_read)
-                                .into_par_iter()
-                                .map(|row_idx| {
-                                    let row = offset + row_idx + 1;
-                                    // Handle the Option and convert f64 to i16
-                                    match stata_interface::read_numeric(col_idx+1, row) {
-                                        Some(value) => Some(value as i16),
-                                        None => None
-                                    }
-                                })
-                                .collect()
-                        });
-                        Series::new(col_name.clone(), int_values)
-                    },
-                    DataType::Int32 => {
-                        // display(&format!("Reading long"));
-                        // Process integers in parallel
-                        let int_values: Vec<Option<i32>> = thread_pool.install(|| {
-                            (0..n_rows_to_read)
-                                .into_par_iter()
-                                .map(|row_idx| {
-                                    let row = offset + row_idx + 1;
-                                    // Handle the Option and convert f64 to i32
-                                    match stata_interface::read_numeric(col_idx+1, row) {
-                                        Some(value) => Some(value as i32),
-                                        None => None
-                                    }
-                                })
-                                .collect()
-                        });
-                        Series::new(col_name.clone(), int_values)
-                    },
-                    DataType::Float32 => {
-                        //  display(&format!("Reading float"));
-                        // Process floating point values in parallel
-                        let float_values: Vec<Option<f32>> = thread_pool.install(|| {
-                            (0..n_rows_to_read)
-                                .into_par_iter()
-                                .map(|row_idx| {
-                                    let row = offset + row_idx + 1;
-                                    match stata_interface::read_numeric(col_idx+1, row) {
-                                        Some(value) => Some(value as f32),
-                                        None => None
-                                    }
-                                })
-                                .collect()
-                        });
-                        Series::new(col_name.clone(), float_values)
-                    },
-                    DataType::Float64 => {
-                        // Process floating point values in parallel
-                        // display(&format!("Reading double"));
-                        let float_values: Vec<Option<f64>> = thread_pool.install(|| {
-                            (0..n_rows_to_read)
-                                .into_par_iter()
-                                .map(|row_idx| {
-                                    let row = offset + row_idx + 1;
-                                    // display(&format!("Row {}, column {}",row,col_idx+1));
-                                    match stata_interface::read_numeric(col_idx+1, row) {
-                                        Some(value) => {
-                                            // display(&format!("  value = {:?}",stata_interface::read_numeric(col_idx+1, row)));
-                                            Some(value)
-                                        },
-                                        None => None
-                                    }
-                                })
-                                .collect()
-                        });
-                        Series::new(col_name.clone(), float_values)
-                    },
-                    DataType::Datetime(TimeUnit::Milliseconds,_) => {
-                        // Process floating point values in parallel
-                        let float_values: Vec<Option<i64>> = thread_pool.install(|| {
-                            (0..n_rows_to_read)
-                                .into_par_iter()
-                                .map(|row_idx| {
-                                    let row = offset + row_idx + 1;
-                                    match stata_interface::read_numeric(col_idx+1, row) {
-                                        Some(value) => Some((value - (SEC_SHIFT_SAS_STATA as f64)*1000.0)  as i64),
-                                        None => None
-                                    }
-                                })
-                                .collect()
-                        });
-                        Series::new(col_name.clone(), float_values).cast(&DataType::Datetime(TimeUnit::Milliseconds,None)).unwrap()
-                    },
-                    DataType::Time => {
-                        // Process floating point values in parallel
-                        let float_values: Vec<Option<i64>> = thread_pool.install(|| {
-                            (0..n_rows_to_read)
-                                .into_par_iter()
-                                .map(|row_idx| {
-                                    let row = offset + row_idx + 1;
-                                    match stata_interface::read_numeric(col_idx+1, row) {
-                                        Some(value) => Some((value  as i64)*SEC_MICROSECOND),
-                                        None => None
-                                    }
-                                })
-                                .collect()
-                        });
-                        Series::new(col_name.clone(), float_values).cast(&DataType::Time).unwrap()
-                    },
-                    
-                    DataType::Date => {
-                        // Process floating point values in parallel
-                        let float_values: Vec<Option<i32>> = thread_pool.install(|| {
-                            (0..n_rows_to_read)
-                                .into_par_iter()
-                                .map(|row_idx| {
-                                    let row = offset + row_idx + 1;
-                                    match stata_interface::read_numeric(col_idx+1, row) {
-                                        Some(value) => Some((value as i32 - DAY_SHIFT_SAS_STATA)),
-                                        None => None
-                                    }
-                                })
-                                .collect()
-                        });
-                        Series::new(col_name.clone(), float_values).cast(&DataType::Date).unwrap()
-                    },
-                    // Add more data types as needed
-                    _ => return Err(PolarsError::ComputeError(
-                        format!("Unsupported data type: {:?}", dtype).into(),
-                    )),
+                let values: Vec<String> = if parallelize_rows {
+                    // Process rows in parallel
+                    (0..n_rows_to_read)
+                        .into_par_iter()
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            stata_interface::read_string(col_idx+1, row, str_length)
+                        })
+                        .collect()
+                } else {
+                    // Process rows sequentially
+                    (0..n_rows_to_read)
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            stata_interface::read_string(col_idx+1, row, str_length)
+                        })
+                        .collect()
                 };
                 
-                columns.push(series);
+                Series::new(col_name.clone(), values)
             },
-            None => {
-                display(&format!("{} not getting saved",col_name));
-            }
-        }
-    }
+            DataType::Boolean => {
+                // Process boolean values
+                let values: Vec<Option<bool>> = if parallelize_rows {
+                    // Process rows in parallel
+                    (0..n_rows_to_read)
+                        .into_par_iter()
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some(value > 0.0),
+                                None => None
+                            }
+                        })
+                        .collect()
+                } else {
+                    // Process rows sequentially
+                    (0..n_rows_to_read)
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some(value > 0.0),
+                                None => None
+                            }
+                        })
+                        .collect()
+                };
+                
+                Series::new(col_name.clone(), values)
+            },
+            DataType::Int8 => {
+                // Process values
+                let values: Vec<Option<i8>> = if parallelize_rows {
+                    // Process rows in parallel
+                    (0..n_rows_to_read)
+                        .into_par_iter()
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some(value as i8),
+                                None => None
+                            }
+                        })
+                        .collect()
+                } else {
+                    // Process rows sequentially
+                    (0..n_rows_to_read)
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some(value as i8),
+                                None => None
+                            }
+                        })
+                        .collect()
+                };
+                
+                Series::new(col_name.clone(), values)
+            },
+            DataType::Int16 => {
+                // Process values
+                let values: Vec<Option<i16>> = if parallelize_rows {
+                    // Process rows in parallel
+                    (0..n_rows_to_read)
+                        .into_par_iter()
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some(value as i16),
+                                None => None
+                            }
+                        })
+                        .collect()
+                } else {
+                    // Process rows sequentially
+                    (0..n_rows_to_read)
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some(value as i16),
+                                None => None
+                            }
+                        })
+                        .collect()
+                };
+                Series::new(col_name.clone(), values)
+            },
+            DataType::Int32 => {
+                // Process values
+                let values: Vec<Option<i32>> = if parallelize_rows {
+                    // Process rows in parallel
+                    (0..n_rows_to_read)
+                        .into_par_iter()
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some(value as i32),
+                                None => None
+                            }
+                        })
+                        .collect()
+                } else {
+                    // Process rows sequentially
+                    (0..n_rows_to_read)
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some(value as i32),
+                                None => None
+                            }
+                        })
+                        .collect()
+                };
+                Series::new(col_name.clone(), values)
+            },
+            DataType::Float32 => {
+                // Process values
+                let values: Vec<Option<f32>> = if parallelize_rows {
+                    // Process rows in parallel
+                    (0..n_rows_to_read)
+                        .into_par_iter()
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some(value as f32),
+                                None => None
+                            }
+                        })
+                        .collect()
+                } else {
+                    // Process rows sequentially
+                    (0..n_rows_to_read)
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some(value as f32),
+                                None => None
+                            }
+                        })
+                        .collect()
+                };
+                Series::new(col_name.clone(), values)
+            },
+            DataType::Float64 => {
+                // Process values
+                let values: Vec<Option<f64>> = if parallelize_rows {
+                    // Process rows in parallel
+                    (0..n_rows_to_read)
+                        .into_par_iter()
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some(value),
+                                None => None
+                            }
+                        })
+                        .collect()
+                } else {
+                    // Process rows sequentially
+                    (0..n_rows_to_read)
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some(value),
+                                None => None
+                            }
+                        })
+                        .collect()
+                };
+                Series::new(col_name.clone(), values)
+            },
+            DataType::Datetime(TimeUnit::Milliseconds, _) => {
+                let values: Vec<Option<i64>> = if parallelize_rows {
+                    // Process rows in parallel
+                    (0..n_rows_to_read)
+                        .into_par_iter()
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some((value - (SEC_SHIFT_SAS_STATA as f64) * 1000.0) as i64),
+                                None => None
+                            }
+                        })
+                        .collect()
+                } else {
+                    // Process rows sequentially
+                    (0..n_rows_to_read)
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some((value - (SEC_SHIFT_SAS_STATA as f64) * 1000.0) as i64),
+                                None => None
+                            }
+                        })
+                        .collect()
+                };
+                Series::new(col_name.clone(), values).cast(&DataType::Datetime(TimeUnit::Milliseconds, None))?
+            },
+            DataType::Time => {
+                let values: Vec<Option<i64>> = if parallelize_rows {
+                    // Process rows in parallel
+                    (0..n_rows_to_read)
+                        .into_par_iter()
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some((value as i64) * SEC_MICROSECOND),
+                                None => None
+                            }
+                        })
+                        .collect()
+                } else {
+                    // Process rows sequentially
+                    (0..n_rows_to_read)
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some((value as i64) * SEC_MICROSECOND),
+                                None => None
+                            }
+                        })
+                        .collect()
+                };
+                Series::new(col_name.clone(), values).cast(&DataType::Time)?
+            },
+            DataType::Date => {
+                let values: Vec<Option<i32>> = if parallelize_rows {
+                    // Process rows in parallel
+                    (0..n_rows_to_read)
+                        .into_par_iter()
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some((value as i32) - DAY_SHIFT_SAS_STATA),
+                                None => None
+                            }
+                        })
+                        .collect()
+                } else {
+                    // Process rows sequentially
+                    (0..n_rows_to_read)
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_numeric(col_idx+1, row) {
+                                Some(value) => Some((value as i32) - DAY_SHIFT_SAS_STATA),
+                                None => None
+                            }
+                        })
+                        .collect()
+                };
+                Series::new(col_name.clone(), values).cast(&DataType::Date)?
+            },
+            // Add more data types as needed
+            _ => return Err(PolarsError::ComputeError(
+                format!("Unsupported data type: {:?}", dtype).into(),
+            )),
+        };
+        
+        Ok(Some(series))
+    };
     
+    // Apply the strategy using the closure
+    let columns_result: PolarsResult<Vec<Series>> = match strategy {
+        ParallelizationStrategy::ByColumn => {
+            // Process columns in parallel
+            thread_pool.install(|| {
+                sds.all_columns.par_iter().enumerate()
+                    .map(|(col_idx, col_name)| {
+                        match process_column(col_idx, col_name, n_rows_to_read, offset, false)? {
+                            Some(series) => Ok(series),
+                            None => Err(PolarsError::ComputeError(
+                                format!("Failed to process column: {}", col_name).into(),
+                            ))
+                        }
+                    })
+                    .collect()
+            })
+        },
+        ParallelizationStrategy::ByRow => {
+            // Process columns sequentially, but rows in parallel
+            sds.all_columns.iter().enumerate()
+                .map(|(col_idx, col_name)| {
+                    match process_column(col_idx, col_name, n_rows_to_read, offset, true)? {
+                        Some(series) => Ok(series),
+                        None => Err(PolarsError::ComputeError(
+                            format!("Failed to process column: {}", col_name).into(),
+                        ))
+                    }
+                })
+                .collect()
+        }
+    };
+    
+    let columns = columns_result?;
     
     // Return the DataFrame built from columns
     let mut df = DataFrame::from_iter(columns).lazy();
     
-    if sds.sql_if.is_some() {
-        if !sds.sql_if.as_ref().unwrap().is_empty() {
+    if let Some(sql_if) = &sds.sql_if {
+        if !sql_if.is_empty() {
             let mut ctx = SQLContext::new();
             ctx.register("df", df);
 
-            df = match ctx.execute(&format!("select * from df where {}",sds.sql_if.as_ref().unwrap())) {
-                Ok(lazyframe) => lazyframe,
-                Err(e) => {
+            df = ctx.execute(&format!("select * from df where {}", sql_if))
+                .map_err(|e| {
                     display(&format!("Error in SQL if statement: {}", e));
-                    return Err(e);
-                }
-            };    
+                    e
+                })?;
         }
     }
     
     Ok(Some(df.collect()?))
-    
 }

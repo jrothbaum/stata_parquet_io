@@ -1,3 +1,7 @@
+// use tikv_jemallocator::Jemalloc;
+// #[global_allocator]
+// static GLOBAL: Jemalloc = Jemalloc;
+
 //  use log::{debug, info, warn, error};
 use log::debug;
 use env_logger::Builder;
@@ -101,7 +105,8 @@ fn write_test() {
         write_param1.n_rows,
         write_param1.offset,
         write_param1.sql_if.as_deref(), 
-        &write_param1.mapping
+        &write_param1.mapping,
+        None
     );
 }
 

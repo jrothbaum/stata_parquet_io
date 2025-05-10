@@ -134,6 +134,40 @@ pub fn set_macro(
     }
 }
 
+
+pub fn get_macro(macro_name: &str, global: bool, buffer_size: Option<usize>) -> Result<String, &'static str> {
+    // Format the macro name with underscore prefix if not global
+    let macro_name_c = if global {
+        std::ffi::CString::new(macro_name)
+    } else {
+        std::ffi::CString::new(format!("_{}", macro_name))
+    }.unwrap();
+    
+    // Use provided buffer size or default to a reasonable size
+    let buf_size = buffer_size.unwrap_or(1024);
+    let mut buffer = vec![0i8; buf_size];
+    
+    let result = unsafe {
+        SF_macro_use(
+            macro_name_c.as_ptr() as *mut std::os::raw::c_char,
+            buffer.as_mut_ptr(),
+            buf_size as i32
+        )
+    };
+    
+    if result > 0 {
+        // Error occurred
+        return Err("Macro not found or other error");
+    }
+    
+    // Convert the C string buffer to a Rust String
+    let c_str = unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) };
+    match c_str.to_str() {
+        Ok(s) => Ok(s.to_string()),
+        Err(_) => Err("Invalid UTF-8 in macro value")
+    }
+}
+
 #[inline]
 pub fn set_scalar(
     scalar_name:&str,

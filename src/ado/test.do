@@ -1,17 +1,14 @@
 
-global parquet_path_override = "C:\Users\jonro\OneDrive\Documents\Coding\stata_parquet_io\src\ado\p"
-global parquet_dll_override = "C:\Users\jonro\OneDrive\Documents\Coding\stata_parquet_io\target\release"
-sysdir set PLUS `"C:\Users\jonro\OneDrive\Documents\Coding\stata_parquet_io\src\ado"'
-
 timer clear
 
 //	local path C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample
 //	local path C:\Users\jonro\Downloads\flights-1m
 local path C:\Users\jonro\Downloads\fhv_tripdata_2025-01
 //	local path C:\Users\jonro\Downloads\fhvhv_tripdata_2024-12
-pq_describe using "`path'.parquet"
+pq describe using "`path'.parquet"
+
 timer on 1
-pq_use using "`path'.parquet", clear
+pq use using "`path'.parquet", clear
 timer off 1
 sum
 
@@ -25,11 +22,11 @@ sum
 
 
 timer on 3
-pq_save * using "C:/Users/jonro/Downloads/test2.parquet", replace
+pq save * using "C:/Users/jonro/Downloads/test2.parquet", replace
 timer off 3
-//	pq_describe using "C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample.parquet"
+//	pq describe using "C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample.parquet"
 //	return list
-//	pq_use using "C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample.parquet", // in(2/3) //	if(mynum > 0 | missing(mynum) | mytime > 1.1)
+//	pq use using "C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample.parquet", // in(2/3) //	if(mynum > 0 | missing(mynum) | mytime > 1.1)
 
 
 
@@ -59,7 +56,7 @@ quietly {
 }
 timer list
 ;
-pq_use * using "C:/Users/jonro/Downloads/test2.parquet", clear
+pq use * using "C:/Users/jonro/Downloads/test2.parquet", clear
 sum
 ;
 
@@ -68,7 +65,7 @@ sum
 local row_to_show = ceil(runiform()*_N)
 di "row_to_show: `row_to_show'"
 list in `row_to_show'/`row_to_show'
-//	pq_use "C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample.parquet", n(100) offset(1) //	if(a > 2)
+//	pq use "C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample.parquet", n(100) offset(1) //	if(a > 2)
 
 capture log close
 //	cap program drop polars_parquet_plugin

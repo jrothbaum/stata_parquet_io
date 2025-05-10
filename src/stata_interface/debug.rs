@@ -43,6 +43,16 @@ pub fn set_macro(
     0 as i32
 }
 
+
+#[inline]
+pub fn get_macro(
+    macro_name:&str,
+    global:bool,
+    buffer_size: Option<usize>
+) -> String {
+    "macro value".to_string()
+}
+
 pub fn set_scalar(
     scalar_name: &str,
     value: &f64,

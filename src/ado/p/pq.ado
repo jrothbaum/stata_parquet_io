@@ -1,8 +1,32 @@
-*! polars_parquet - read/write parquet files with stata
+*! pq - read/write parquet files with stata
 *! Version 1.0.0
-capture program drop _pq_use
-program define _pq_use, rclass
-    version 17.0
+
+capture program drop pq
+program define pq
+	gettoken todo 0: 0
+    local todo `todo'
+
+    if ("`todo'" == "use") {
+		di `"pq_use `0'"'
+		pq_use `0'
+    }
+    else if ("`todo'" == "save") {
+		di `"pq_save `0'"'
+        pq_save `0'
+    }
+    else if ("`todo'" == "describe") {
+		di `"pq_describe `0'"'
+        pq_describe `0'
+    }
+    else {
+        disp as err `"Unknown sub-comand `todo'"'
+        exit 198
+    }
+end
+
+capture program drop pq_use
+program pq_use, rclass
+    version 16.0
     
     local input_args = `"`0'"'
 
@@ -25,7 +49,7 @@ program define _pq_use, rclass
         // namelist is empty since no "using" separator
         local namelist ""
     }
-    
+    pq_register_plugin
 	`clear'
 	
 	if `=_N' > 0 {
@@ -53,6 +77,8 @@ program define _pq_use, rclass
 		local sql_if
 	}
 	
+	//	Initialize "mapping" to tell plugin to read from macro variables
+	local mapping from_macros
 	local b_quiet = 1
 	local b_detailed = 1
 	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"'
@@ -112,20 +138,20 @@ program define _pq_use, rclass
 	local offset = max(0,`offset' - 1)
 	local n_rows = `offset' + `row_to_read'
 	
-	plugin call polars_parquet_plugin, read "`using'" "`matched_vars'" `n_rows' `offset' `"`sql_if'"' `"`mapping'"'
+	plugin call polars_parquet_plugin, read "`using'" "from_macro" `n_rows' `offset' `"`sql_if'"' `"`mapping'"'
 end
 
 
-capture program drop _pq_describe
-program define _pq_describe, rclass
-    version 17.0
+capture program drop pq_describe
+program pq_describe, rclass
+    version 16.0
     
     // Parse syntax
     syntax  using/, 					///
 			[quietly					///
 			 detailed]
 
-			 
+	pq_register_plugin
 	local b_quiet = ("`quietly'" != "")
 	local b_detailed = ("`detailed'" != "")
 	pq_register_plugin
@@ -149,7 +175,7 @@ end
 
 
 capture program drop pq_match_variables
-program define pq_match_variables, rclass
+program pq_match_variables, rclass
     syntax [anything(name=namelist)], against(string)
 
 	
@@ -201,19 +227,20 @@ program define pq_match_variables, rclass
     return local matched_vars = `"`matched'"'
 end
 
-capture program drop _pq_save
-program define _pq_save
-	version 17.0
+capture program drop pq_save
+program pq_save
+	version 16.0
 	
 	
     local input_args = `"`0'"'
-    
+    di `"`input_args"'
 	// Check if "using" is present in arguments
     local using_pos = strpos(`" `input_args' "', " using ")
     
     if `using_pos' > 0{
         // 	Extract everything before "using"
         local varlist = substr(`"`input_args'"', 1, `using_pos'-1)
+		if ("`varlist" == "")	local varlist *
 
 		local rest = substr(`"`input_args'"', `using_pos'+6, .)
 
@@ -229,16 +256,17 @@ program define _pq_save
         syntax varlist using/ [, replace in(string) if(string)]
         
         // namelist is empty since no "using" separator
-        local varlist ""
     }
 	
 	pq_register_plugin
 	
-	local StataColumnInfo
+	local StataColumnInfo from_macros
+
+	local var_count = 0
 	foreach vari in `varlist' {
+		local var_count = `var_count' + 1
 		local typei: type `vari'
 		local formati: format `vari'
-		
 		local str_length 0
 		
 		if ((substr("`typei'",1,3) == "str") & ("`typei'" != "strl")) {
@@ -248,19 +276,16 @@ program define _pq_save
 		else {
 			local typei = strproper("`typei'")
 		}
-		if ("`StataColumnInfo'" != "")	{
-			local StataColumnInfo = `"`StataColumnInfo',"'
-		}
 		
-		local StataColumnInfo = `"`StataColumnInfo'{"name":"`vari'","dtype":"`typei'","format":"`formati'","str_length":`str_length'}"'
+		local name_`var_count' `vari'
+		local dtype_`var_count' `typei'
+		local format_`var_count' `formati'
+		local str_length_`var_count' `str_length'
 	}
-	
-	local StataColumnInfo = `"[`StataColumnInfo']"'
 	
 	
 	
 	if ("`in'" != "") {
-		
 		local offset = substr("`in'", 1, strpos("`in'", "/") -1)
 		local offset = max(`offset',0)
 		local last_n = substr("`in'", strpos("`in'", "/") + 1, .)
@@ -286,15 +311,15 @@ program define _pq_save
 	local offset = max(0,`offset' - 1)
 	
 	
-	
-	plugin call polars_parquet_plugin, save "`using'" "`varlist'" `n_rows' `offset' `"`sql_if'"' `"`StataColumnInfo'"'
+	//	di `"plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' "`sql_if'" "`StataColumnInfo'""'
+	plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' `"`sql_if'"' `"`StataColumnInfo'"'
 end
 
 
 
 
 capture program drop pq_register_plugin
-program define pq_register_plugin
+program pq_register_plugin
 	if (0${pq_plugin_loaded} == 0) {
 		// Plugin is not loaded, so initialize it
 		if "`c(os)'" == "MacOSX" {
@@ -314,7 +339,7 @@ program define pq_register_plugin
 		else {
 			local parquet_path = "`c(sysdir_plus)'p"
 		}
-		program polars_parquet_plugin, plugin using("`parquet_path'\stata_parquet_io.`plugin_extension'")
+		program polars_parquet_plugin, plugin using("`parquet_path'\pq.`plugin_extension'")
 		global pq_plugin_loaded = 1
 	}
 

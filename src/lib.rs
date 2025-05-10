@@ -1,3 +1,7 @@
+// use tikv_jemallocator::Jemalloc;
+// #[global_allocator]
+// static GLOBAL: Jemalloc = Jemalloc;
+
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::slice;
@@ -119,7 +123,8 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     n_rows.parse::<usize>().unwrap(),
                     offset.parse::<usize>().unwrap(),
                     Some(sql_if),
-                    mapping
+                    mapping,
+                    None
                 ) {
                     Ok(_) => 0 as i32,
                     Err(e) => 198 as i32

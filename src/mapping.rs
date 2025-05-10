@@ -123,7 +123,7 @@ pub struct StataColumnInfo {
     pub str_length: usize,
 }
 
-pub fn StataColumnInfoToSchema(
+pub fn stata_column_info_to_schema(
     column_info: &Vec<StataColumnInfo>
 ) -> Schema {
     let fields: Vec<Field> = column_info.iter().map(|col| {
@@ -292,16 +292,26 @@ pub fn schema_with_stata_types(
         );
     }
 
-    let json_string = serde_json::to_string(&all_columns).unwrap();
+    //      Variable name->type lookup
+    let _ = set_macro(
+        &"n_vars",
+        &(format!(
+            "{}",
+            schema.len())),
+        false
+    );
+    
+
+    //  let json_string = serde_json::to_string(&all_columns).unwrap();
     
     //  Set macros for stata to create the empty data set
 
     //      The serialized mapping information
-    let _ = set_macro(
-        "mapping",
-        &json_string,
-        false
-    );
+    // let _ = set_macro(
+    //     "mapping",
+    //     &json_string,
+    //     false
+    // );
 
 
 }

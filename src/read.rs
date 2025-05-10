@@ -20,7 +20,8 @@ use crate::stata_interface:: {
     set_macro,
     set_scalar,
     replace_number,
-    replace_string
+    replace_string,
+    get_macro
 };
 
 
@@ -56,7 +57,26 @@ pub fn read_to_stata(
     mapping:&str,
 ) -> Result<i32,Box<dyn Error>> {
 
-    let all_columns: Vec<ColumnInfo> = serde_json::from_str(mapping).unwrap();
+    let variables_as_str = if variables_as_str == "" || variables_as_str == "from_macro" {
+        &get_macro("matched_vars", false,  Some(1024 * 1024 * 10))
+    } else {
+        variables_as_str
+    };
+
+    let all_columns:Vec<ColumnInfo> = if (mapping == "" || mapping == "from_macros") {
+        let n_vars_str = get_macro(&"n_vars", false, None);
+        let n_vars = match n_vars_str.parse::<usize>() {
+            Ok(num) => num,
+            Err(e) => {
+                eprintln!("Failed to parse n_vars '{}' as usize: {}", n_vars_str, e);
+                0
+            }
+        };
+        column_info_from_macros(n_vars)
+    } else {
+        serde_json::from_str(mapping).unwrap()
+    };
+
 
     //  display(&format!("Column information: {:?}",all_columns));
 
@@ -88,11 +108,6 @@ pub fn read_to_stata(
         .map(|s| col(s))
         .collect();
 
-    
-
-    
-
-    
 
     let batch_size:usize = 1_000_000;
     let n_batches = (n_rows as f64 / batch_size as f64).ceil() as usize;
@@ -144,6 +159,25 @@ pub fn read_to_stata(
     }
 
     Ok(0)
+}
+
+
+fn column_info_from_macros(n_vars: usize) -> Vec<ColumnInfo> {
+    let mut column_infos = Vec::with_capacity(n_vars);
+    
+    for i in 0..n_vars {
+        let name = get_macro(&format!("name_{}", i+1), false, None);
+        let dtype = get_macro(&format!("polars_type_{}", i+1), false, None);
+        let stata_type = get_macro(&format!("type_{}", i+1), false, None);
+        
+        column_infos.push(ColumnInfo {
+            name,
+            dtype,
+            stata_type,
+        });
+    }
+    
+    column_infos
 }
 
 fn process_batch(
@@ -367,118 +401,6 @@ fn process_row_range(
     
     Ok(())
 }
-
-// fn process_batch_deprecated(
-//     batch: &DataFrame,
-//     start_index: usize,
-//     all_columns: &Vec<ColumnInfo>,
-//     n_threads:usize
-// ) -> PolarsResult<()> {
-//     // Iterate through each column in the batch
-//     for (col_idx, col_info) in all_columns.iter().enumerate() {
-//         // Get the column by name
-//         let col = batch.column(&col_info.name)?;
-//         //  display(&format!("{}:{},{}",col_idx,&col_info.name,col_info.stata_type.as_str()));
-//         // Process each value in the column based on its Stata type
-//         match col_info.stata_type.as_str() {
-//             "strl" => {
-//                 return Err(PolarsError::SchemaMismatch(ErrString::from("Strl assignment not implemented yet")));                
-//             },
-//             "string" => {
-//                 // Handle string types
-//                 if let Ok(str_col) = col.str() {
-//                     for (row_idx, opt_val) in str_col.iter().enumerate() {
-//                         replace_string(
-//                             opt_val.map(|s| s.to_string()), 
-//                             row_idx + start_index + 1,
-//                              col_idx + 1
-//                         );
-//                     }
-//                 }
-//             },
-//             "datetime" => {
-//                 // Get the time_unit from the schema if it's a datetime column
-//                 let time_unit = if col.dtype().is_temporal() {
-//                     match col.dtype() {
-//                         DataType::Datetime(time_unit, _) => Some(*time_unit),
-//                         _ => None
-//                     }
-//                 } else {
-//                     None
-//                 };
-
-//                 if time_unit.is_none() {
-//                     return Err(PolarsError::SchemaMismatch(ErrString::from(format!("No time unit specified for {}",&col_info.name))));
-//                 }
-//                 let time_unit_unwrapped = time_unit.unwrap();
-                
-//                 // Process each row based on the schema's time unit
-//                 for row_idx in 0..col.len() {
-//                     let value: Option<f64> = match col.get(row_idx) {
-//                         Ok(AnyValue::Datetime(v, _, _)) => { 
-//                             // Use the time_unit from the schema
-//                             match time_unit_unwrapped {
-//                                 TimeUnit::Nanoseconds => Some(v as f64 / 1_000_000.0 + (SEC_SHIFT_SAS_STATA as f64)*1000.0),
-//                                 TimeUnit::Microseconds => Some(v as f64 / 1_000.0 + (SEC_SHIFT_SAS_STATA as f64)*1000.0),
-//                                 TimeUnit::Milliseconds => Some(v as f64 + (SEC_SHIFT_SAS_STATA as f64)*1000.0),
-//                             }
-//                         },
-//                         _ => None
-//                     };
-
-//                     replace_number(
-//                         value, 
-//                         (row_idx + start_index + 1) as usize, 
-//                         (col_idx + 1) as usize
-//                     );
-//                 }
-//             },
-//             _ => {
-//                 // Handle numeric types (including date/time which get converted to numeric)
-//                 // Get the column's data type from the stored string representation
-//                 let dtype_str = col_info.dtype.as_str();
-//                 //  display(dtype_str);
-                 
-                
-//                 for row_idx in 0..col.len() {
-//                     let value: Option<f64> = match col.get(row_idx) {
-//                         Ok(any_value) => match (dtype_str, any_value) {
-//                             ("Boolean", AnyValue::Boolean(b)) => Some(if b { 1.0 } else { 0.0 }),
-//                             ("Int8", AnyValue::Int8(v)) => Some(v as f64),
-//                             ("Int16", AnyValue::Int16(v)) => Some(v as f64),
-//                             ("Int32", AnyValue::Int32(v)) => Some(v as f64),
-//                             ("Int64", AnyValue::Int64(v)) => Some(v as f64),
-//                             ("UInt8", AnyValue::UInt8(v)) => Some(v as f64),
-//                             ("UInt16", AnyValue::UInt16(v)) => Some(v as f64),
-//                             ("UInt32", AnyValue::UInt32(v)) => Some(v as f64),
-//                             ("UInt64", AnyValue::UInt64(v)) => Some(v as f64),
-//                             ("Float32", AnyValue::Float32(v)) => Some(v as f64),
-//                             ("Float64", AnyValue::Float64(v)) => Some(v),
-//                             ("Date", AnyValue::Date(v)) => Some((v + DAY_SHIFT_SAS_STATA) as f64),
-//                             ("Time", AnyValue::Time(v)) => {
-//                                 //  display(&format!("TIME = {}",v));
-//                                 Some((v/SEC_MICROSECOND) as f64)
-//                             },
-//                             _ => None
-//                         },
-//                         Err(_) => None
-//                     };
-//                     //  display(&format!("Assigning numeric {},{} = {:?}",row_idx+1,col_idx+1,value));
-//                     replace_number(
-//                         value, 
-//                         (row_idx + start_index + 1) as usize, 
-//                         (col_idx + 1) as usize
-//                     );
-//                 }
-//             }
-//         }
-//     }
-    
-//     Ok(())
-// }
-
-
-
 
 pub fn get_thread_count() -> usize {
     // First try to get the thread count from POLARS_MAX_THREADS env var
