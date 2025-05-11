@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use log::debug;
 use polars::prelude::{self, NamedFrom, TimeUnit};
 use polars::prelude::*;
-use polars_core::utils::arrow::array::new_empty_array;
 use polars_sql::SQLContext;
 use rayon::prelude::*;
 use std::error::Error;
