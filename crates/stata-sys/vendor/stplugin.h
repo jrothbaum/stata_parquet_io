@@ -47,6 +47,12 @@ typedef double *	ST_dmkey ;
 #else
 #define STDLL	extern __declspec(dllexport) ST_retcode
 #endif
+#else
+#if __cplusplus
+#define STDLL	extern "C" ST_retcode
+#else
+#define STDLL	extern ST_retcode
+#endif
 #endif
 
 #if SYSTEM!=STWIN32
