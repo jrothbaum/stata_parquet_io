@@ -1,0 +1,206 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Push events to matching v*, i.e. v1.0, v20.15.10
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  build:
+    name: Build ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - {
+              name: "Windows",
+              os: windows-latest,
+              target: "x86_64-pc-windows-msvc",
+              extension: "dll",
+              platform_name: "windows"
+            }
+          - {
+              name: "macOS",
+              os: macos-latest,
+              target: "x86_64-apple-darwin",
+              extension: "dylib",
+              platform_name: "macos"
+            }
+          - {
+              name: "Linux",
+              os: ubuntu-latest,
+              target: "x86_64-unknown-linux-gnu",
+              extension: "so",  
+              platform_name: "linux"
+            }
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Set up C++ environment for each platform
+      - name: Set up Windows C++ environment
+        if: matrix.config.platform_name == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up macOS C++ environment
+        if: matrix.config.platform_name == 'macos'
+        run: |
+          brew update
+          brew install llvm
+          # Ensure LLVM tools (clang, llvm-config) are discoverable by the build system
+          echo "LLVM_CONFIG=$(brew --prefix llvm)/bin/llvm-config" >> $GITHUB_ENV
+          echo "CC=$(brew --prefix llvm)/bin/clang" >> $GITHUB_ENV
+          echo "CXX=$(brew --prefix llvm)/bin/clang++" >> $GITHUB_ENV
+
+      - name: Set up Linux C++ environment
+        if: matrix.config.platform_name == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libclang-dev
+
+      # Install Rust with the appropriate components
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.config.target }}
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.config.target }}
+
+      # Install bindgen-cli if needed. If bindgen is only a build-dependency in Cargo.toml,
+      # cargo build will handle installing it. This step might be redundant.
+      - name: Install additional Rust dependencies
+        run: |
+          cargo install bindgen-cli --version 0.69.1 || true
+
+      # Set up any platform-specific environment variables
+      - name: Set platform-specific environment
+        shell: bash
+        run: |
+          if [ "${{ matrix.config.platform_name }}" = "windows" ]; then
+            # Static linking for Windows C runtime (important for smaller DLLs)
+            echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
+          elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
+            # Target specific macOS version for broader compatibility
+            echo "MACOSX_DEPLOYMENT_TARGET=10.13" >> $GITHUB_ENV
+          fi
+
+      # Display build configuration for debugging purposes
+      - name: Display build configuration
+        run: |
+          ls -la
+          if [ -f "build.rs" ]; then
+            echo "Custom build script found"
+            cat build.rs
+          fi
+        shell: bash
+
+      # Check Cargo.toml for dependencies and add feature flags for static linking
+      - name: Examine project dependencies for static linking
+        shell: bash
+        run: |
+          echo "Checking dependencies in Cargo.toml..."
+          cat Cargo.toml
+          
+          # Check for polars (mentioned in repo description) and apply static linking features
+          if grep -q "polars" Cargo.toml; then
+            echo "Polars dependency found, ensuring static linking"
+            # 'static-mimalloc' is a common feature for static linking mimalloc with Polars
+            echo "CARGO_FEATURE_FLAGS=--features static-mimalloc" >> $GITHUB_ENV
+          fi
+          
+      - name: Build release with static linking
+        run: cargo build --release --target ${{ matrix.config.target }} ${{ env.CARGO_FEATURE_FLAGS }}
+        env:
+          RUST_BACKTRACE: 1 # Useful for debugging failures, can be removed for final production
+          # Force static linking of C/C++ dependencies commonly used by Rust crates for smaller, self-contained binaries
+          POLARS_STATICALLY_LINK: 1 # Explicitly tell Polars to attempt static linking
+          OPENSSL_STATIC: 1         # Use vendored OpenSSL if OpenSSL is a dependency
+          CARGO_FEATURE_VENDORED: 1 # Use vendored versions of other dependencies where possible
+        
+      - name: Strip release binary (Linux and macOS)
+        # Strip debug symbols to reduce binary size for Linux and macOS.
+        # For Windows, 'cargo build --release' typically generates optimized DLLs,
+        # and explicit stripping with a 'strip' command isn't as common or necessary.
+        if: matrix.config.platform_name == 'linux' || matrix.config.platform_name == 'macos'
+        run: |
+          # The 'strip' command is available on Linux and macOS
+          if [ "${{ matrix.config.platform_name }}" = "macos" ]; then
+            strip -x target/${{ matrix.config.target }}/release/libstata_parquet_io.${{ matrix.config.extension }}
+          elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
+            strip target/${{ matrix.config.target }}/release/libstata_parquet_io.${{ matrix.config.extension }}
+          fi
+
+      - name: Create release zip
+        shell: bash
+        run: |
+          mkdir -p release_package
+          
+          # Copy the compiled library with the correct extension
+          # Rust's `cdylib` output naming:
+          # Windows: <crate_name>.dll (e.g., stata_parquet_io.dll)
+          # macOS/Linux: lib<crate_name>.<extension> (e.g., libstata_parquet_io.dylib, libstata_parquet_io.so)
+          if [ "${{ matrix.config.platform_name }}" = "windows" ]; then
+            cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/
+          elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
+            cp target/${{ matrix.config.target }}/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/
+          elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
+            cp target/${{ matrix.config.target }}/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/
+          fi
+          
+          # Copy ADO files (Stata Ado-file Package)
+          cp src/ado/p/pq.ado release_package/
+          cp src/ado/p/pq.pkg release_package/
+          cp src/ado/p/pq.sthlp release_package/
+          
+          # Create ZIP file named based on platform, e.g., pq-windows.zip
+          cd release_package
+          zip -r ../pq-${{ matrix.config.platform_name }}.zip *
+          cd ..
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          # Artifact names will be e.g., pq-windows, pq-macos, pq-linux
+          name: pq-${{ matrix.config.platform_name }}
+          path: pq-${{ matrix.config.platform_name }}.zip
+          retention-days: 7
+
+  release:
+    name: Create GitHub Release
+    needs: build # This job depends on the 'build' job completing successfully
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        
+      - name: Download all artifacts
+        # This action downloads artifacts into subdirectories named after the artifact.
+        # E.g., 'pq-windows.zip' will be downloaded to 'pq-windows/pq-windows.zip'.
+        uses: actions/download-artifact@v3
+        
+      - name: List downloaded artifacts for verification
+        run: ls -R
+        
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          # Paths for release assets must be relative to the current working directory.
+          # These paths match the structure created by 'actions/download-artifact@v3'.
+          files: |
+            pq-windows/pq-windows.zip
+            pq-macos/pq-macos.zip
+            pq-linux/pq-linux.zip
+          draft: false          # Create a public release
+          prerelease: false     # Not a prerelease
+          generate_release_notes: true # Auto-generate release notes from tag/commit history
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Token for authenticating with GitHub API
