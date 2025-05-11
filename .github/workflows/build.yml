@@ -118,7 +118,7 @@ jobs:
           # Use vendored versions of dependencies where possible
           CARGO_FEATURE_VENDORED: 1
         
-      - name: Create release zip
+      - name: Prepare release files
         shell: bash
         run: |
           mkdir -p release_package
@@ -136,17 +136,12 @@ jobs:
           cp src/ado/p/pq.ado release_package/
           cp src/ado/p/pq.pkg release_package/
           cp src/ado/p/pq.sthlp release_package/
-          
-          # Create ZIP file
-          cd release_package
-          zip -r ../pq-${{ matrix.config.platform_name }}.zip *
-          cd ..
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: pq-${{ matrix.config.platform_name }}
-          path: pq-${{ matrix.config.platform_name }}.zip
+          path: release_package/
           retention-days: 7
 
   release:
@@ -165,15 +160,21 @@ jobs:
         
       - name: List artifacts
         run: ls -R
+      
+      - name: Create platform zip files
+        run: |
+          cd pq-windows && zip -r ../pq-windows.zip * && cd ..
+          cd pq-macos && zip -r ../pq-macos.zip * && cd ..
+          cd pq-linux && zip -r ../pq-linux.zip * && cd ..
         
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            pq-windows/pq-windows.zip
-            pq-macos/pq-macos.zip
-            pq-linux/pq-linux.zip
+            pq-windows.zip
+            pq-macos.zip
+            pq-linux.zip
           draft: false
           prerelease: false
           generate_release_notes: true
