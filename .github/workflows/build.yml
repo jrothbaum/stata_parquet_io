@@ -104,11 +104,8 @@ jobs:
           echo "Checking dependencies in Cargo.toml..."
           cat Cargo.toml
           
-          # Check for polars (mentioned in repo description)
-          if grep -q "polars" Cargo.toml; then
-            echo "Polars dependency found, ensuring static linking"
-            echo "CARGO_FEATURE_FLAGS=--features static-mimalloc" >> $GITHUB_ENV
-          fi
+          # Initialize empty feature flags variable
+          echo "CARGO_FEATURE_FLAGS=" >> $GITHUB_ENV
           
       - name: Build release with static linking
         run: cargo build --release --target ${{ matrix.config.target }} ${{ env.CARGO_FEATURE_FLAGS }}
