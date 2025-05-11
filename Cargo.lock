@@ -2841,7 +2841,6 @@ dependencies = [
  "env_logger",
  "log",
  "polars",
- "polars-core",
  "polars-sql",
  "rayon",
  "serde",
