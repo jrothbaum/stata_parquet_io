@@ -15,6 +15,7 @@ pub mod mapping;
 pub mod stata_interface;
 pub mod describe;
 pub mod sql_from_if;
+pub mod utilities;
 
 use stata_interface::{display, ST_retcode};
 use describe::file_summary;
@@ -80,7 +81,8 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     subfunction_args[2].parse::<usize>().unwrap(),
                     subfunction_args[3].parse::<usize>().unwrap(),
                     Some(subfunction_args[4]),
-                    subfunction_args[5]
+                    subfunction_args[5],
+                    None,
                 );
         
                 // Use match to handle the Result

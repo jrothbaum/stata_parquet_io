@@ -1,5 +1,5 @@
 local path C:\Users\jonro\Downloads
-local file sample_reserved
+local file sample_variable_rename_test
 
 
 pq describe using "`path'/`file'.parquet"

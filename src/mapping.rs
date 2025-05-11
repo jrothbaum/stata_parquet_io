@@ -8,9 +8,7 @@ use polars::prelude::*;
 use crate::stata_interface::{
     display,
     set_macro,
-    set_scalar
 };
-use serde_json;
 
 
 // Enum representing Stata data types
@@ -26,6 +24,7 @@ pub enum StataType {
     DateTime, // Stata datetime format
     String,     //  Regular string
     Strl,       //  Long strings
+    Binary,     //  Binary data (actually strl in stata, also)
 }
 
 
@@ -42,6 +41,7 @@ impl StataType {
             StataType::DateTime => "datetime",
             StataType::String => "string",
             StataType::Strl => "strl",
+            StataType::Binary => "binary",
         }
     }
 }
@@ -79,6 +79,7 @@ pub fn map_polars_to_stata(
                 StataType::String
             }
         },
+        DataType::Binary => StataType::Binary,
         
         // Other types default to Double (most flexible numeric type)
         _ => StataType::Double,
@@ -102,7 +103,8 @@ pub fn map_stata_to_polars(
         StataType::Date => DataType::Date,
         StataType::Time => DataType::Time,
         StataType::DateTime => DataType::Datetime(TimeUnit::Milliseconds, None),
-        StataType::String | StataType::Strl => DataType::String
+        StataType::String | StataType::Strl => DataType::String,
+        StataType::Binary => DataType::Binary,
     }
 }
 
@@ -135,6 +137,7 @@ pub fn stata_column_info_to_schema(
         let stata_type = match (col.dtype.to_lowercase().as_ref(),&col.format) {
             ("string",_) => StataType::String,
             ("strl",_) => StataType::Strl,
+            ("binary",_) => StataType::Binary,
             ("int",_) => {
                 let date_type = match_var_format_stata(&col.format);
                 match date_type {
@@ -310,20 +313,6 @@ pub fn schema_with_stata_types(
             schema.len())),
         false
     );
-    
-
-    //  let json_string = serde_json::to_string(&all_columns).unwrap();
-    
-    //  Set macros for stata to create the empty data set
-
-    //      The serialized mapping information
-    // let _ = set_macro(
-    //     "mapping",
-    //     &json_string,
-    //     false
-    // );
-
-
 }
 
 

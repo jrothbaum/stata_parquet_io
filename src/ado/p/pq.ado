@@ -116,6 +116,8 @@ program pq_use, rclass
 	
 	
 	quietly set obs `row_to_read'
+
+	local match_vars_non_binarystrl
 	foreach vari in `matched_vars' {
 		local type_info ``vari''
 		//	Set rename_to to nothing
@@ -138,6 +140,12 @@ program pq_use, rclass
 		}
 		
 
+		//	di "name: 			`name_to_create'"
+		//	di "type: 			`type'"
+		//	di "string_length: 	`string_length'"
+	
+		local keep = 1
+		local strl_limit = 2045
 		if ("`type'" == "string") {
 			quietly gen str`string_length' `name_to_create' = ""
 		}
@@ -153,6 +161,11 @@ program pq_use, rclass
 			quietly gen double `name_to_create' = .
 			format `name_to_create' %tchh:mm:ss
 		}
+		else if ("`type'" == "binary" | "`type'" == "strl") {
+			//	quietly gen strL `name_to_create' = ""
+			di "Dropping `name_to_create' as cannot process strL or binary columns"
+			local keep = 0
+		}
 		else {
 			quietly gen double `type' `name_to_create' = .
 		}
@@ -160,11 +173,18 @@ program pq_use, rclass
 		if ("`rename_to'" != "") {
 			label variable `name_to_create' "{parquet_name:`vari'}"
 		}
+
+		if (`keep') {
+			//	di "keeping `vari'"
+			local match_vars_non_binarystrl `match_vars_non_binarystrl' `vari'
+		}
 	}
+
+	local matched_vars `match_vars_non_binarystrl'
 
 	local offset = max(0,`offset' - 1)
 	local n_rows = `offset' + `row_to_read'
-	
+
 	plugin call polars_parquet_plugin, read "`using'" "from_macro" `n_rows' `offset' `"`sql_if'"' `"`mapping'"'
 end
 

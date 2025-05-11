@@ -13,6 +13,7 @@ pub mod write;
 pub mod describe;
 pub mod mapping;
 pub mod stata_interface;
+pub mod utilities;
 
 
 #[cfg(debug_assertions)]
@@ -153,6 +154,7 @@ fn read_test() {
         read_param1.offset,
         read_param1.sql_if.as_deref(),
         &read_param1.mapping,
+        None,
     );
     //  test_stata_if_to_sql();
 }

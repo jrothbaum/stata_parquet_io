@@ -96,7 +96,7 @@ display r(type_1)       // Data type of first column
 
 ## Technical Details
 
-This package uses a plugin based on the [Polars](https://github.com/pola-rs/polars) library to handle Parquet files efficiently developed by [Ritchie Vink](https://www.ritchievink.com/) and many others.
+This package uses a plugin based on the *blazingly-fast* (as required for all Rust packages, but also true in at least this case) [Polars](https://github.com/pola-rs/polars) library to handle Parquet files efficiently.  Polars developed by [Ritchie Vink](https://www.ritchievink.com/) and many others.
 
 
 ## Benchmarks
