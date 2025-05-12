@@ -85,12 +85,12 @@ jobs:
         run: |
           docker run --rm -v $PWD:/workspace -w /workspace quay.io/pypa/manylinux2014_x86_64 bash -c "
             yum install -y gcc gcc-c++ cmake make curl wget \
-            && curl -sSL https://apt.llvm.org/llvm.sh -o llvm.sh \
-            && chmod +x llvm.sh \
-            && ./llvm.sh 16 \
-            && export PATH=/usr/bin:\$PATH \
-            && export LIBCLANG_PATH=/usr/lib/llvm-16/lib \
-            && export LD_LIBRARY_PATH=/usr/lib/llvm-16/lib:\$LD_LIBRARY_PATH \
+            && wget 'https://github.com/llvm/llvm-project/releases/download/llvmorg-16.0.6/clang+llvm-16.0.6-x86_64-linux-centos8.tar.xz' \
+            && mkdir -p /opt/clang_16 \
+            && tar -xf clang+llvm-16.0.6-x86_64-linux-centos8.tar.xz -C /opt/clang_16 --strip-components=1 \
+            && export PATH=/opt/clang_16/bin:\$PATH \
+            && export LIBCLANG_PATH=/opt/clang_16/lib \
+            && export LD_LIBRARY_PATH=/opt/clang_16/lib:\$LD_LIBRARY_PATH \
             && curl https://sh.rustup.rs -sSf | sh -s -- -y \
             && source \$HOME/.cargo/env \
             && rustup target add x86_64-unknown-linux-gnu \
