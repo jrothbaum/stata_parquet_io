@@ -36,8 +36,13 @@ fn main() {
          .define("SYSTEM", system_define);
          
     // Platform-specific settings
-    if target_os == "linux" || target_os == "macos" {
-        build.flag("-fPIC"); // Position Independent Code flag for shared libraries
+    if target_os == "linux"{
+         build.flag("-shared")
+              .flag("-fPIC")
+              .flag("-DSYSTEM=OPUNIX");
+    } else if target_os == "macos" {
+        build.flag("-bundle")
+             .flag("-DSYSTEM=APPLEMAC");
     }
     
     // Compile
