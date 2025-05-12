@@ -24,26 +24,7 @@ use read::{
     read_to_stata
 };
 
-#[no_mangle]
-pub extern "C" fn pginit(p: *mut stata_sys::ST_plugin) -> stata_sys::ST_retcode {
-    #[cfg(feature = "release")]
-    {
-        unsafe {
-            STATA = p;
-            // If your stata_sys bindings define _stata_, initialize it too
-            stata_sys::_stata_ = p;
-        }
-        // Return plugin version (3.0)
-        (3 << 16) | 0  // SD_PLUGINVER = 0x00030000
-    }
 
-    #[cfg(not(feature = "release"))]
-    {
-        // Debug version - just return success without actually initializing
-        println!("Debug mode: pginit called with simulated success");
-        (3 << 16) | 0  // Return the same value
-    }
-}
 #[no_mangle]
 pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retcode {
     // Wrap the entire function body in catch_unwind
