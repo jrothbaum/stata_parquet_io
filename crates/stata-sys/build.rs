@@ -63,38 +63,48 @@ fn main() {
     // 5. Where is the crate root?
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let vendor_dir = manifest_dir.join("vendor");
-    
+
     // 6. Generate the bindings
-    let mut bindgen_builder = bindgen::Builder::default()
-        .header("wrapper_generated.h") // crate-relative, not absolute
-        .clang_arg(format!("-I{}", vendor_dir.display())) // tell Clang where "vendor/" is
-        .clang_arg(format!("-DSYSTEM={}", system_define)); // Define SYSTEM for clang too
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    println!("OUT_DIR = {:?}", env::var("OUT_DIR"));
     
-    // Add platform-specific clang args
-    if target_os == "linux" {
-        // Add C++11 standard flag for clang/bindgen
-        bindgen_builder = bindgen_builder
+    // Initialize the bindings builder differently based on platform
+    let bindings_result = if target_os == "linux" {
+        // Linux-specific approach with fixes for clang issues
+        println!("cargo:warning=Using Linux-specific bindgen configuration");
+        
+        // Create a more robust wrapper header with full paths for Linux
+        let full_path_wrapper = format!(
+            "#define SYSTEM OPUNIX\n#include \"{}/vendor/stplugin.h\"\n",
+            manifest_dir.display()
+        );
+        let wrapper_path = out_dir.join("wrapper_linux.h");
+        fs::write(&wrapper_path, full_path_wrapper)
+            .expect("Failed to write Linux wrapper header");
+        
+        // Print debug info
+        println!("cargo:warning=Using wrapper path: {}", wrapper_path.display());
+        println!("cargo:warning=Include path: {}", manifest_dir.display());
+        
+        // Linux-specific bindgen configuration
+        bindgen::Builder::default()
+            .header(wrapper_path.to_str().unwrap())
+            .clang_arg("-x")
+            .clang_arg("c++")
             .clang_arg("-std=c++11")
-            .clang_arg("-DSPI=3.0");  // Add SPI version if needed
-            
-        // If you have system includes that might be needed
-        if let Ok(gcc_include) = std::process::Command::new("g++")
-            .args(&["-E", "-xc++", "-v", "/dev/null"])
-            .output() 
-        {
-            // This will capture standard include directories from g++
-            println!("cargo:warning=Checking g++ include paths");
-        }
-    }
-    
-    let bindings = bindgen_builder
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks))
-        .generate()
-        .expect("Unable to generate bindings");
-    
-    // 7. Write the bindings to OUT_DIR
-    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
-    bindings
-        .write_to_file(out_path.join("bindings.rs"))
-        .expect("Couldn't write bindings!");
+            .clang_arg(format!("-I{}", manifest_dir.display()))
+            .clang_arg("-DSPI=3.0")
+            .detect_include_paths(true)
+            .layout_tests(false)
+            .parse_callbacks(Box::new(bindgen::CargoCallbacks))
+            .generate()
+    } else {
+        // Original approach for non-Linux platforms
+        bindgen::Builder::default()
+            .header("wrapper_generated.h")
+            .clang_arg(format!("-I{}", vendor_dir.display()))
+            .clang_arg(format!("-DSYSTEM={}", system_define))
+            .parse_callbacks(Box::new(bindgen::CargoCallbacks))
+            .generate()
+    };
 }
