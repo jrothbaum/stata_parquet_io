@@ -1,4 +1,4 @@
-pub use stata_sys::ST_retcode;
+pub use stata_sys::{ST_retcode, ST_plugin};
 use stata_sys;
 
 use std::ffi::CString;
