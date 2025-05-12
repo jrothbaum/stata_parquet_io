@@ -36,13 +36,22 @@ fn main() {
          .define("SYSTEM", system_define);
          
     // Platform-specific settings
-    if target_os == "linux"{
-         build.flag("-shared")
-              .flag("-fPIC")
-              .flag("-DSYSTEM=OPUNIX");
+    if target_os == "linux" {
+        // C++ compilation flags
+        build.flag("-shared")
+             .flag("-fPIC")
+             .flag("-DSYSTEM=OPUNIX");
+        
+        // Rust linker flags
+        println!("cargo:rustc-link-arg=-shared");
+        println!("cargo:rustc-link-arg=-fPIC");
     } else if target_os == "macos" {
+        // C++ compilation flags
         build.flag("-bundle")
              .flag("-DSYSTEM=APPLEMAC");
+        
+        // Rust linker flags
+        println!("cargo:rustc-link-arg=-bundle");
     }
     
     // Compile
