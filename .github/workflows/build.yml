@@ -121,7 +121,7 @@ jobs:
           if [ "${{ matrix.config.platform_name }}" = "windows" ]; then
             cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
           elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
-            cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
+            cp target/${{ matrix.config.target }}/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
           elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
             if [ -f "target/${{ matrix.config.target }}/release/libstata_parquet_io.${{ matrix.config.extension }}" ]; then
               cp target/${{ matrix.config.target }}/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
