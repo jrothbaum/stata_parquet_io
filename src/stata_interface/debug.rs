@@ -1,4 +1,5 @@
 pub type ST_retcode = i32;
+pub type ST_plugin = i32;
 use std::ffi::CString;
 use std::os::raw::c_char;
 
