@@ -433,7 +433,7 @@ program pq_register_plugin
 		else {
 			local parquet_path = "`c(sysdir_plus)'p"
 		}
-		program polars_parquet_plugin, plugin using("`parquet_path'\pq.`plugin_extension'")
+		program polars_parquet_plugin, plugin using("`parquet_path'/pq.`plugin_extension'")
 		global pq_plugin_loaded = 1
 	}
 
