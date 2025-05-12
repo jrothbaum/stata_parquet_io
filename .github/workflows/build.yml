@@ -1,213 +1,43 @@
-name: Build and Release
+// This is a sample build.rs file that you might want to use
+// to ensure proper compilation flags for Stata plugins
 
-on:
-  push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
+fn main() {
+    // Set up platform-specific configuration
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
+    
+    // Common settings for all platforms
+    println!("cargo:rustc-link-lib=stdc++");
 
-jobs:
-  build:
-    name: Build ${{ matrix.config.name }}
-    runs-on: ${{ matrix.config.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        config:
-          - {
-              name: "Windows",
-              os: windows-latest,
-              target: "x86_64-pc-windows-msvc",
-              extension: "dll",
-              platform_name: "windows"
-            }
-          - {
-              name: "macOS",
-              os: macos-latest,
-              target: "x86_64-apple-darwin",
-              extension: "dylib",
-              platform_name: "macos"
-            }
-          - {
-              name: "Linux",
-              os: ubuntu-latest,
-              target: "x86_64-unknown-linux-gnu",
-              extension: "so",
-              platform_name: "linux"
-            }
+    match target_os.as_str() {
+        "windows" => {
+            // Windows-specific settings
+            println!("cargo:rustc-env=SYSTEM=WINDOWS");
+            // Tell Cargo this build script was re-run if any sources change
+            println!("cargo:rerun-if-changed=src");
+        },
+        "macos" => {
+            // macOS-specific settings
+            println!("cargo:rustc-env=SYSTEM=APPLEMAC");
+            // Ensure we use the bundle format but don't add -dynamiclib
+            println!("cargo:rustc-link-arg=-bundle");
+            // Tell rustc not to use -dynamiclib when creating .dylib files
+            println!("cargo:rustc-cdylib-link-arg=-bundle");
+            println!("cargo:rustc-cdylib-link-arg=-undefined");
+            println!("cargo:rustc-cdylib-link-arg=dynamic_lookup");
+            println!("cargo:rerun-if-changed=src");
+        },
+        "linux" => {
+            // Linux-specific settings
+            println!("cargo:rustc-env=SYSTEM=OPUNIX");
+            // Ensure position-independent code
+            println!("cargo:rustc-link-arg=-fPIC");
+            println!("cargo:rustc-link-arg=-shared");
+            println!("cargo:rerun-if-changed=src");
+        },
+        _ => panic!("Unsupported OS"),
+    }
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Windows C++ environment
-        if: matrix.config.platform_name == 'windows'
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Set up macOS C++ environment
-        if: matrix.config.platform_name == 'macos'
-        run: |
-          xcode-select --install || true
-          echo "MACOSX_DEPLOYMENT_TARGET=10.13" >> $GITHUB_ENV
-
-      - name: Install Rust toolchain (non-Linux)
-        if: matrix.config.platform_name != 'linux'
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.config.target }}
-          components: rustfmt, clippy
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.config.target }}
-
-      - name: Set platform-specific environment
-        shell: bash
-        run: |
-          if [ "${{ matrix.config.platform_name }}" = "windows" ]; then
-            # Windows-specific flags for Stata plugin
-            echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
-            # Additional C/C++ flags for Windows could be added here
-          elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
-            # Mac-specific flags for Stata plugin
-            echo "RUSTFLAGS=-C link-args=-bundle" >> $GITHUB_ENV
-            echo "SYSTEM=APPLEMAC" >> $GITHUB_ENV
-          elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
-            # Linux-specific flags for Stata plugin
-            echo "SYSTEM=OPUNIX" >> $GITHUB_ENV
-          fi
-
-      - name: Display build configuration
-        run: |
-          ls -la
-          if [ -f "build.rs" ]; then
-            echo "Custom build script found"
-            cat build.rs
-          fi
-        shell: bash
-
-      - name: Build release (Linux)
-        if: matrix.config.platform_name == 'linux'
-        run: |
-          docker run --rm -v $PWD:/workspace -w /workspace almalinux:8 bash -c "
-            set -ex
-            # Install basic build tools and repos
-            dnf install -y gcc gcc-c++ make cmake curl wget git epel-release
-            
-            # Install LLVM and Clang
-            dnf install -y clang-devel llvm-devel
-            
-            # Find libclang path and set environment variables
-            export LIBCLANG_PATH=\$(find /usr/lib64 /usr/lib -name \"libclang.so*\" | head -n 1 | xargs dirname)
-            export LD_LIBRARY_PATH=\${LIBCLANG_PATH}:\${LD_LIBRARY_PATH}
-            export SYSTEM=OPUNIX
-            
-            # Install Rust
-            curl https://sh.rustup.rs -sSf | sh -s -- -y
-            source \$HOME/.cargo/env
-            
-            # Build your project with Stata plugin flags
-            rustup target add x86_64-unknown-linux-gnu
-            RUSTFLAGS='-C link-arg=-shared -C link-arg=-fPIC' cargo build --release --target x86_64-unknown-linux-gnu
-          "
-
-      - name: Build release (Windows)
-        if: matrix.config.platform_name == 'windows'
-        run: |
-          # Set Visual Studio to compile C files as C++
-          cargo build --release --target ${{ matrix.config.target }}
-        env:
-          RUST_BACKTRACE: 1
-          POLARS_STATICALLY_LINK: 1
-          OPENSSL_STATIC: 1
-          CARGO_FEATURE_VENDORED: 1
-          # Windows-specific Stata plugin environment variables
-          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/NODEFAULTLIB:libcmt"
-
-      - name: Build release (macOS)
-        if: matrix.config.platform_name == 'macos'
-        run: |
-          cargo build --release --target ${{ matrix.config.target }}
-        env:
-          RUST_BACKTRACE: 1
-          POLARS_STATICALLY_LINK: 1
-          OPENSSL_STATIC: 1
-          CARGO_FEATURE_VENDORED: 1
-          SYSTEM: APPLEMAC
-          # Mac-specific Stata plugin flags
-          RUSTFLAGS: "-C link-args=-bundle"
-
-      - name: Prepare release files
-        shell: bash
-        run: |
-          mkdir -p release_package
-
-          if [ "${{ matrix.config.platform_name }}" = "windows" ]; then
-            cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
-          elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
-            cp target/${{ matrix.config.target }}/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
-          elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
-            if [ -f "target/${{ matrix.config.target }}/release/libstata_parquet_io.${{ matrix.config.extension }}" ]; then
-              cp target/${{ matrix.config.target }}/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
-            elif [ -f "target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }}" ]; then
-              cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
-            else
-              echo "Error: Could not find the expected library file."
-              ls -la target/${{ matrix.config.target }}/release/
-              exit 1
-            fi
-
-            echo "Checking library dependencies:"
-            ldd release_package/pq.${{ matrix.config.extension }} || echo "ldd unavailable"
-          fi
-
-          cp src/ado/p/pq.ado release_package/
-          cp src/ado/p/pq.pkg release_package/
-          cp src/ado/p/pq.sthlp release_package/
-
-          echo "Files in release package:"
-          ls -la release_package/
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: pq-${{ matrix.config.platform_name }}
-          path: release_package/
-          retention-days: 7
-
-  release:
-    name: Create GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-
-      - name: List artifacts
-        run: ls -R
-
-      - name: Create platform zip files
-        run: |
-          cd pq-windows && zip -r ../pq-windows.zip * && cd ..
-          cd pq-macos && zip -r ../pq-macos.zip * && cd ..
-          cd pq-linux && zip -r ../pq-linux.zip * && cd ..
-
-      - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            pq-windows.zip
-            pq-macos.zip
-            pq-linux.zip
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    // If you have additional system dependencies, you can add them here
+    // For example:
+    // println!("cargo:rustc-link-lib=dylib=somelib");
+}
