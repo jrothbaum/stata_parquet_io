@@ -10,7 +10,6 @@ jobs:
   build:
     name: Build ${{ matrix.config.name }}
     runs-on: ${{ matrix.config.os }}
-    container: ${{ matrix.config.container }}
     strategy:
       fail-fast: false
       matrix:
@@ -20,24 +19,21 @@ jobs:
               os: windows-latest,
               target: "x86_64-pc-windows-msvc",
               extension: "dll",
-              platform_name: "windows",
-              container: null
+              platform_name: "windows"
             }
           - {
               name: "macOS",
               os: macos-latest,
               target: "x86_64-apple-darwin",
               extension: "dylib",
-              platform_name: "macos",
-              container: null
+              platform_name: "macos"
             }
           - {
               name: "Linux",
-              os: ubuntu-latest,
+              os: ubuntu-20.04,  # Use Ubuntu 20.04 which has GLIBC 2.31
               target: "x86_64-unknown-linux-gnu",
               extension: "so", 
-              platform_name: "linux",
-              container: "quay.io/pypa/manylinux2014_x86_64"  # CentOS 7 based with GLIBC 2.17
+              platform_name: "linux"
             }
 
     steps:
@@ -61,47 +57,31 @@ jobs:
       - name: Set up Linux C++ environment
         if: matrix.config.platform_name == 'linux'
         run: |
-          # The manylinux container already has most of what we need
-          # Just make sure we have cmake and development tools
-          yum install -y cmake libffi-devel
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libclang-dev gcc-8 g++-8
+          
+          # Set GCC 8 as the compiler to ensure compatibility with older systems
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-8 800 --slave /usr/bin/g++ g++ /usr/bin/g++-8
+          
+          # Verify GLIBC version
+          ldd --version
 
       # Install Rust with the appropriate components
       - name: Install Rust toolchain
-        if: matrix.config.platform_name != 'linux'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.config.target }}
           components: rustfmt, clippy
-          
-      # For Linux in container, install Rust differently
-      - name: Install Rust in Linux container
-        if: matrix.config.platform_name == 'linux'
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source $HOME/.cargo/env
-          rustup default stable
-          rustup component add rustfmt clippy
 
       - name: Rust cache
-        if: matrix.config.platform_name != 'linux'
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.config.target }}
 
-      # Install bindgen for non-Linux platforms
-      - name: Install additional Rust dependencies (non-Linux)
-        if: matrix.config.platform_name != 'linux'
+      # Check if bindgen is needed and install it
+      - name: Install additional Rust dependencies
         run: |
           cargo install bindgen-cli --version 0.69.1 || true
-        shell: bash
-        
-      # Install bindgen for Linux
-      - name: Install bindgen in Linux container
-        if: matrix.config.platform_name == 'linux'
-        run: |
-          source $HOME/.cargo/env
-          cargo install bindgen-cli --version 0.69.1 || true
-        shell: bash
 
       # Set up any platform-specific environment variables
       - name: Set platform-specific environment
@@ -112,8 +92,14 @@ jobs:
           elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
             echo "MACOSX_DEPLOYMENT_TARGET=10.13" >> $GITHUB_ENV
           elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
-            # For Linux, use static linking to avoid GLIBC issues
+            # Force static linking of standard libraries for Linux builds
+            # This helps avoid GLIBC version dependencies
             echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
+            
+            # If using C++ standard library, prefer static linking
+            echo "CXXSTDLIB_STATIC=1" >> $GITHUB_ENV
+            
+            # For libraries that support it, prefer static linking
             echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
             echo "POLARS_STATICALLY_LINK=1" >> $GITHUB_ENV
           fi
@@ -126,58 +112,319 @@ jobs:
             echo "Custom build script found"
             cat build.rs
           fi
+          # Check Cargo.toml for dependencies
+          echo "Cargo.toml contents:"
+          cat Cargo.toml
         shell: bash
 
-      # Check Cargo.toml for dependencies and add feature flags for static linking
-      - name: Examine project dependencies for static linking
-        shell: bash
-        run: |
-          echo "Checking dependencies in Cargo.toml..."
-          cat Cargo.toml
-          
-          # Initialize empty feature flags variable
-          echo "CARGO_FEATURE_FLAGS=" >> $GITHUB_ENV
-      
-      # Build for Windows and macOS
-      - name: Build release with static linking (non-Linux)
-        if: matrix.config.platform_name != 'linux'
-        run: cargo build --release --target ${{ matrix.config.target }} ${{ env.CARGO_FEATURE_FLAGS }}
-        env:
-          RUST_BACKTRACE: 1
-          POLARS_STATICALLY_LINK: 1
-          OPENSSL_STATIC: 1
-          CARGO_FEATURE_VENDORED: 1
-          
-      # Build for Linux in container
-      - name: Build release with static linking (Linux)
+      # Force older GLIBC symbols for Linux
+      - name: Configure Linux GLIBC compatibility
         if: matrix.config.platform_name == 'linux'
         run: |
-          source $HOME/.cargo/env
-          RUSTFLAGS="-C target-feature=+crt-static" \
-          OPENSSL_STATIC=1 \
-          POLARS_STATICALLY_LINK=1 \
-          CARGO_FEATURE_VENDORED=1 \
-          cargo build --release
+          # Create a wrapper script to set GLIBC compatibility flags
+          cat > glibc-compat-wrapper.sh << 'EOF'
+          #!/bin/bash
+          # Pass all environment variables
+          env > /tmp/env-vars.txt
+          
+          # Export needed env vars
+          export CC=gcc-8
+          export CXX=g++-8
+          
+          # Run the command with appropriate flags
+          exec "$@"
+          EOF
+          
+          chmod +x glibc-compat-wrapper.sh
+          
+          echo "Using GCC 8 for maximum compatibility"
+          gcc --version
         shell: bash
+
+      - name: Build release with static linking
+        run: |
+          if [ "${{ matrix.config.platform_name }}" = "linux" ]; then
+            # For Linux, use the wrapper script
+            ./glibc-compat-wrapper.sh cargo build --release
+          else
+            # For other platforms, build normally
+            cargo build --release --target ${{ matrix.config.target }}
+          fi
+        shell: bash
+        env:
+          RUST_BACKTRACE: 1
+          # Force static linking of C/C++ dependencies
+          POLARS_STATICALLY_LINK: 1
+          # Use vendored SSL if OpenSSL is used
+          OPENSSL_STATIC: 1
+          # Use vendored versions of dependencies where possible
+          CARGO_FEATURE_VENDORED: 1
         
       - name: Prepare release files
         shell: bash
         run: |
           mkdir -p release_package
           
-          # Copy the compiled library with the correct extension
+          # Copy and rename the compiled library with the correct extension
           if [ "${{ matrix.config.platform_name }}" = "windows" ]; then
-            cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/
+            cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
           elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
-            cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/
+            cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
           elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
-            # Try all possible naming patterns for the Linux build
-            cp target/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/stata_parquet_io.${{ matrix.config.extension }} || \
-            cp target/release/stata_parquet_io.${{ matrix.config.extension }} release_package/ || \
-            echo "Warning: Could not find the compiled library. Checking what files were generated:"
+            # For Linux builds, check both potential naming patterns
+            if [ -f "target/release/libstata_parquet_io.${{ matrix.config.extension }}" ]; then
+              cp target/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
+            elif [ -f "target/release/stata_parquet_io.${{ matrix.config.extension }}" ]; then
+              cp target/release/stata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
+            else
+              echo "Warning: Could not find the expected library files. Contents of target/release:"
+              ls -la target/release/
+              exit 1
+            fi
             
-            # Debug: list all files in target directory
-            ls -la target/release/
+            # Verify GLIBC requirements
+            echo "Checking GLIBC requirements of the built library:"
+            objdump -p release_package/pq.${{ matrix.config.extension }} | grep GLIBC || echo "No GLIBC dependencies found (fully static)"
+          fi
+          
+          # Copy ADO files
+          cp src/ado/p/pq.ado release_package/ || echo "No pq.ado found"
+          cp src/ado/p/pq.pkg release_package/ || echo "No pq.pkg found"
+          cp src/ado/p/pq.sthlp release_package/ || echo "No pq.sthlp found"
+          
+          # List what we have in the release package
+          echo "Files in release package:"
+          ls -la release_package/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pq-${{ matrix.config.platform_name }}
+          path: release_package/
+          retention-days: 7
+
+  release:
+    name: Create GitHub Release
+    # Only run this job if triggered by a tag push, not by workflow_dispatch
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        
+      - name: List artifacts
+        run: ls -R
+      
+      - name: Create platform zip files
+        run: |
+          cd pq-windows && zip -r ../pq-windows.zip * && cd ..
+          cd pq-macos && zip -r ../pq-macos.zip * && cd ..
+          cd pq-linux && zip -r ../pq-linux.zip * && cd ..
+        
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            pq-windows.zip
+            pq-macos.zip
+            pq-linux.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Push events to matching v*, i.e. v1.0, v20.15.10
+  workflow_dispatch:  # Allow manual triggering without releasing
+
+jobs:
+  build:
+    name: Build ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - {
+              name: "Windows",
+              os: windows-latest,
+              target: "x86_64-pc-windows-msvc",
+              extension: "dll",
+              platform_name: "windows"
+            }
+          - {
+              name: "macOS",
+              os: macos-latest,
+              target: "x86_64-apple-darwin",
+              extension: "dylib",
+              platform_name: "macos"
+            }
+          - {
+              name: "Linux",
+              os: ubuntu-20.04,  # Use Ubuntu 20.04 which has GLIBC 2.31
+              target: "x86_64-unknown-linux-gnu",
+              extension: "so", 
+              platform_name: "linux"
+            }
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Set up C++ environment for each platform
+      - name: Set up Windows C++ environment
+        if: matrix.config.platform_name == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up macOS C++ environment
+        if: matrix.config.platform_name == 'macos'
+        run: |
+          brew update
+          brew install llvm
+          echo "LLVM_CONFIG=$(brew --prefix llvm)/bin/llvm-config" >> $GITHUB_ENV
+          echo "CC=$(brew --prefix llvm)/bin/clang" >> $GITHUB_ENV
+          echo "CXX=$(brew --prefix llvm)/bin/clang++" >> $GITHUB_ENV
+
+      - name: Set up Linux C++ environment
+        if: matrix.config.platform_name == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libclang-dev gcc-8 g++-8
+          
+          # Set GCC 8 as the compiler to ensure compatibility with older systems
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-8 800 --slave /usr/bin/g++ g++ /usr/bin/g++-8
+          
+          # Verify GLIBC version
+          ldd --version
+
+      # Install Rust with the appropriate components
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.config.target }}
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.config.target }}
+
+      # Check if bindgen is needed and install it
+      - name: Install additional Rust dependencies
+        run: |
+          cargo install bindgen-cli --version 0.69.1 || true
+
+      # Set up any platform-specific environment variables
+      - name: Set platform-specific environment
+        shell: bash
+        run: |
+          if [ "${{ matrix.config.platform_name }}" = "windows" ]; then
+            echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
+          elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
+            echo "MACOSX_DEPLOYMENT_TARGET=10.13" >> $GITHUB_ENV
+          elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
+            # Force static linking of standard libraries for Linux builds
+            # This helps avoid GLIBC version dependencies
+            echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
+            
+            # If using C++ standard library, prefer static linking
+            echo "CXXSTDLIB_STATIC=1" >> $GITHUB_ENV
+            
+            # For libraries that support it, prefer static linking
+            echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
+            echo "POLARS_STATICALLY_LINK=1" >> $GITHUB_ENV
+          fi
+
+      # Check for build.rs or need for additional setup
+      - name: Display build configuration
+        run: |
+          ls -la
+          if [ -f "build.rs" ]; then
+            echo "Custom build script found"
+            cat build.rs
+          fi
+          # Check Cargo.toml for dependencies
+          echo "Cargo.toml contents:"
+          cat Cargo.toml
+        shell: bash
+
+      # Force older GLIBC symbols for Linux
+      - name: Configure Linux GLIBC compatibility
+        if: matrix.config.platform_name == 'linux'
+        run: |
+          # Create a wrapper script to set GLIBC compatibility flags
+          cat > glibc-compat-wrapper.sh << 'EOF'
+          #!/bin/bash
+          # Pass all environment variables
+          env > /tmp/env-vars.txt
+          
+          # Export needed env vars
+          export CC=gcc-8
+          export CXX=g++-8
+          
+          # Run the command with appropriate flags
+          exec "$@"
+          EOF
+          
+          chmod +x glibc-compat-wrapper.sh
+          
+          echo "Using GCC 8 for maximum compatibility"
+          gcc --version
+        shell: bash
+
+      - name: Build release with static linking
+        run: |
+          if [ "${{ matrix.config.platform_name }}" = "linux" ]; then
+            # For Linux, use the wrapper script
+            ./glibc-compat-wrapper.sh cargo build --release
+          else
+            # For other platforms, build normally
+            cargo build --release --target ${{ matrix.config.target }}
+          fi
+        shell: bash
+        env:
+          RUST_BACKTRACE: 1
+          # Force static linking of C/C++ dependencies
+          POLARS_STATICALLY_LINK: 1
+          # Use vendored SSL if OpenSSL is used
+          OPENSSL_STATIC: 1
+          # Use vendored versions of dependencies where possible
+          CARGO_FEATURE_VENDORED: 1
+        
+      - name: Prepare release files
+        shell: bash
+        run: |
+          mkdir -p release_package
+          
+          # Copy and rename the compiled library with the correct extension
+          if [ "${{ matrix.config.platform_name }}" = "windows" ]; then
+            cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
+          elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
+            cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
+          elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
+            # For Linux builds, check both potential naming patterns
+            if [ -f "target/release/libstata_parquet_io.${{ matrix.config.extension }}" ]; then
+              cp target/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
+            elif [ -f "target/release/stata_parquet_io.${{ matrix.config.extension }}" ]; then
+              cp target/release/stata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
+            else
+              echo "Warning: Could not find the expected library files. Contents of target/release:"
+              ls -la target/release/
+              exit 1
+            fi
+            
+            # Verify GLIBC requirements
+            echo "Checking GLIBC requirements of the built library:"
+            objdump -p release_package/pq.${{ matrix.config.extension }} | grep GLIBC || echo "No GLIBC dependencies found (fully static)"
           fi
           
           # Copy ADO files
