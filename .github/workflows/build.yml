@@ -95,6 +95,7 @@ jobs:
               && source \$HOME/.cargo/env \
               && rustup target add ${{ matrix.config.target }} \
               && cargo build --release --target ${{ matrix.config.target }}
+          "
 
       - name: Build release (non-Linux)
         if: matrix.config.platform_name != 'linux'
