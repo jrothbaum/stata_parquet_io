@@ -32,36 +32,29 @@ fn main() {
     
     // Common settings
     build.cpp(true)
-         .file("vendor/stplugin.cpp")
-         .define("SYSTEM", system_define);
+         .file("vendor/stplugin.cpp");
          
     // Platform-specific settings
    if target_os == "linux" {
-        build.flag("-shared")
-             .flag("-fPIC")
-             .flag("-DSYSTEM=OPUNIX")
-             .flag("-DSD_PLUGINMAJ=3")  // Plugin major version
-             .flag("-DSD_PLUGINMIN=0")  // Plugin minor version
-             .flag("-std=c++11");       // C++11 standard
-        
-        // Ensure symbol visibility is correct
-        build.flag("-fvisibility=default");  // Make symbols visible by default
-        
-        // Same flags for Rust linker
-        println!("cargo:rustc-link-arg=-shared");
-        println!("cargo:rustc-link-arg=-fPIC");
-        println!("cargo:rustc-link-arg=-Wl,--no-undefined");  // Ensure all symbols are resolved
-        println!("cargo:rustc-link-arg=-ldl");  // Link with dynamic loading library
-    } else if target_os == "macos" {
-        // C++ compilation flags
-        build.flag("-bundle")
-             .flag("-DSYSTEM=APPLEMAC")
+        // Linux-specific settings
+        build.define("SYSTEM", "OPUNIX")
              .flag("-std=c++11")       // Use C++11 standard
-             .flag("-DSPI=3.0");       // Define SPI version 3.0
+             .flag("-DSPI=3.0");       // Define SPI version
         
-        // Rust linker flags
-        println!("cargo:rustc-link-arg=-bundle");
-        println!("cargo:rustc-link-arg=-std=c++11");
+        // Link with dynamic loading library needed by stplugin.h
+        println!("cargo:rustc-link-lib=dylib=dl");
+    } else if target_os == "macos" {
+        // macOS-specific settings
+        build.define("SYSTEM", "APPLEMAC")
+             .flag("-std=c++11")       // Use C++11 standard
+             .flag("-DSPI=3.0");       // Define SPI version
+        
+        // macOS may need specific framework linkage
+        println!("cargo:rustc-link-arg=-framework");
+        println!("cargo:rustc-link-arg=CoreFoundation");
+    } else {
+        // Windows or other platforms
+        build.define("SYSTEM", system_define);
     }
     
     // Compile
@@ -72,10 +65,29 @@ fn main() {
     let vendor_dir = manifest_dir.join("vendor");
     
     // 6. Generate the bindings
-    let bindings = bindgen::Builder::default()
+    let mut bindgen_builder = bindgen::Builder::default()
         .header("wrapper_generated.h") // crate-relative, not absolute
         .clang_arg(format!("-I{}", vendor_dir.display())) // tell Clang where "vendor/" is
-        .clang_arg(format!("-DSYSTEM={}", system_define)) // Define SYSTEM for clang too
+        .clang_arg(format!("-DSYSTEM={}", system_define)); // Define SYSTEM for clang too
+    
+    // Add platform-specific clang args
+    if target_os == "linux" {
+        // Add C++11 standard flag for clang/bindgen
+        bindgen_builder = bindgen_builder
+            .clang_arg("-std=c++11")
+            .clang_arg("-DSPI=3.0");  // Add SPI version if needed
+            
+        // If you have system includes that might be needed
+        if let Ok(gcc_include) = std::process::Command::new("g++")
+            .args(&["-E", "-xc++", "-v", "/dev/null"])
+            .output() 
+        {
+            // This will capture standard include directories from g++
+            println!("cargo:warning=Checking g++ include paths");
+        }
+    }
+    
+    let bindings = bindgen_builder
         .parse_callbacks(Box::new(bindgen::CargoCallbacks))
         .generate()
         .expect("Unable to generate bindings");
