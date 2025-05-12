@@ -80,21 +80,28 @@ jobs:
           fi
         shell: bash
 
-      - name: Build release (Linux using manylinux2014)
+      - name: Build release (Linux)
         if: matrix.config.platform_name == 'linux'
         run: |
-          docker run --rm -v $PWD:/workspace -w /workspace quay.io/pypa/manylinux2014_x86_64 bash -c "
-            yum install -y gcc gcc-c++ cmake make curl wget \
-            && wget 'https://github.com/llvm/llvm-project/releases/download/llvmorg-16.0.0/clang+llvm-16.0.0-x86_64-linux-gnu-rhel-8.0.tar.xz' \
-            && mkdir -p /opt/clang_16 \
-            && tar -xf clang+llvm-16.0.0-x86_64-linux-gnu-rhel-8.0.tar.xz -C /opt/clang_16 --strip-components=1 \
-            && export PATH=/opt/clang_16/bin:\$PATH \
-            && export LIBCLANG_PATH=/opt/clang_16/lib \
-            && export LD_LIBRARY_PATH=/opt/clang_16/lib:\$LD_LIBRARY_PATH \
-            && curl https://sh.rustup.rs -sSf | sh -s -- -y \
-            && source \$HOME/.cargo/env \
-            && rustup target add x86_64-unknown-linux-gnu \
-            && cargo build --release --target x86_64-unknown-linux-gnu
+          docker run --rm -v $PWD:/workspace -w /workspace almalinux:8 bash -c "
+            set -ex
+            # Install basic build tools and repos
+            dnf install -y gcc gcc-c++ make cmake curl wget git epel-release
+            
+            # Install LLVM and Clang
+            dnf install -y clang-devel llvm-devel
+            
+            # Find libclang path and set environment variables
+            export LIBCLANG_PATH=\$(find /usr/lib64 /usr/lib -name \"libclang.so*\" | head -n 1 | xargs dirname)
+            export LD_LIBRARY_PATH=\${LIBCLANG_PATH}:\${LD_LIBRARY_PATH}
+            
+            # Install Rust
+            curl https://sh.rustup.rs -sSf | sh -s -- -y
+            source \$HOME/.cargo/env
+            
+            # Build your project
+            rustup target add x86_64-unknown-linux-gnu
+            cargo build --release --target x86_64-unknown-linux-gnu
           "
 
       - name: Build release (non-Linux)
