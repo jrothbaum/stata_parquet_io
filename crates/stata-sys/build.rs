@@ -37,17 +37,21 @@ fn main() {
          
     // Platform-specific settings
    if target_os == "linux" {
-        // Make symbols explicitly visible (more like Windows)
         build.flag("-shared")
              .flag("-fPIC")
              .flag("-DSYSTEM=OPUNIX")
-             .flag("-std=c++11")       // Use C++11 standard
-             .flag("-DSPI=3.0");       // Define SPI version 3.0
+             .flag("-DSD_PLUGINMAJ=3")  // Plugin major version
+             .flag("-DSD_PLUGINMIN=0")  // Plugin minor version
+             .flag("-std=c++11");       // C++11 standard
         
-        // Same flags for Rust
+        // Ensure symbol visibility is correct
+        build.flag("-fvisibility=default");  // Make symbols visible by default
+        
+        // Same flags for Rust linker
         println!("cargo:rustc-link-arg=-shared");
         println!("cargo:rustc-link-arg=-fPIC");
-        println!("cargo:rustc-link-arg=-std=c++11");
+        println!("cargo:rustc-link-arg=-Wl,--no-undefined");  // Ensure all symbols are resolved
+        println!("cargo:rustc-link-arg=-ldl");  // Link with dynamic loading library
     } else if target_os == "macos" {
         // C++ compilation flags
         build.flag("-bundle")
