@@ -1,164 +1,162 @@
 {smcl}
-{* *! version 1.0.0  May 2025}{...}
-{vieweralsosee "[R] import" "help import"}{...}
-{vieweralsosee "[R] export" "help export"}{...}
-{viewerjumpto "Syntax" "polars_parquet##syntax"}{...}
-{viewerjumpto "Description" "polars_parquet##description"}{...}
-{viewerjumpto "Options" "polars_parquet##options"}{...}
-{viewerjumpto "Examples" "polars_parquet##examples"}{...}
-{viewerjumpto "Stored results" "polars_parquet##results"}{...}
-{viewerjumpto "Author" "polars_parquet##author"}{...}
+{* *! version 1.0.0 May 2025}{...}
 {title:Title}
 
 {phang}
-{bf:polars_parquet} {hline 2} Read and write Parquet files in Stata
+{bf:pq} {hline 2} Read, write, and manage Parquet files in Stata
 
 {marker syntax}{...}
 {title:Syntax}
 
-{pstd}
-Read Parquet file into Stata
+{phang}
+Import a Parquet file into Stata:
 
 {p 8 17 2}
-{cmd:pq_use} [{varlist}] {cmd:using} {it:filename}{cmd:,} [{it:options}]
+{cmd:pq use} [{varlist}] {cmd:using} {it:filename} [, {opt clear} {opt in(range)} {opt if(expression)}]
 
-{pstd}
-Write Stata data to Parquet file
-
-{p 8 17 2}
-{cmd:pq_save} [{varlist}] {cmd:using} {it:filename}{cmd:,} [{it:options}]
-
-{pstd}
-Describe contents of Parquet file
+{phang}
+Save Stata data as a Parquet file:
 
 {p 8 17 2}
-{cmd:pq_describe} {cmd:using} {it:filename}{cmd:,} [{it:options}]
+{cmd:pq save} [{varlist}] {cmd:using} {it:filename} [, {opt replace} {opt in(range)} {opt if(expression)} {opt noautorename}]
 
-{synoptset 20 tabbed}{...}
-{synopthdr:pq_use options}
-{synoptline}
-{syntab:Main}
-{synopt:{opt clear}}remove data in memory before loading parquet file{p_end}
-{synopt:{opt in(first_row/last_row)}}read subset of rows from parquet file{p_end}
-{synopt:{opt if(expression)}}read only rows that satisfy the specified condition{p_end}
-{synoptline}
+{phang}
+Describe contents of a Parquet file:
 
-{synoptset 20 tabbed}{...}
-{synopthdr:pq_save options}
-{synoptline}
-{syntab:Main}
-{synopt:{opt replace}}overwrite existing parquet file{p_end}
-{synopt:{opt in(first_row/last_row)}}write subset of rows to parquet file{p_end}
-{synopt:{opt if(expression)}}write only rows that satisfy the specified condition{p_end}
-{synoptline}
-
-{synoptset 20 tabbed}{...}
-{synopthdr:pq_describe options}
-{synoptline}
-{syntab:Main}
-{synopt:{opt quietly}}suppress output{p_end}
-{synopt:{opt detailed}}show detailed information about each variable{p_end}
-{synoptline}
+{p 8 17 2}
+{cmd:pq describe} {cmd:using} {it:filename} [, {opt quietly} {opt detailed}]
 
 {marker description}{...}
 {title:Description}
 
 {pstd}
-{cmd:polars_parquet} is a Stata package for reading and writing Parquet files. It provides high-performance 
-access to data stored in Apache Parquet format, enabling efficient data exchange with other systems like Python, R, 
-and big data frameworks.
-
-{pstd}
-The package includes three main commands:
-
-{phang2}
-{cmd:pq_use} - loads data from a Parquet file into Stata's memory
-
-{phang2}
-{cmd:pq_save} - writes Stata data to a Parquet file
-
-{phang2}
-{cmd:pq_describe} - provides information about the structure and contents of a Parquet file
-
-{pstd}
-This package is built on the Polars data processing library, which provides efficient handling of Parquet files.
+{cmd:pq} provides commands for working with Apache Parquet files in Stata. Parquet is a columnar storage file format 
+designed to efficiently store and process large datasets. This package allows Stata users to directly read from
+and write to Parquet files, facilitating data interchange with other data science tools and platforms that support
+this format, such as Python (pandas, polars), R, Spark, and many others.
 
 {marker options}{...}
 {title:Options}
 
-{dlgtab:pq_use options}
+{dlgtab:Options for pq use}
 
 {phang}
-{opt clear} clears data from Stata's memory before loading the Parquet file.
+{opt clear} specifies that it is okay to replace the data in memory, even though the current data have not been saved to disk.
 
 {phang}
-{opt in(first_row/last_row)} specifies a range of rows to read from the Parquet file. For example, {cmd:in(1/100)} 
-reads the first 100 rows, while {cmd:in(101/200)} reads rows 101 through 200.
+{opt in(range)} specifies a subset of rows to read. The format is {it:offset/rows} where {it:offset} is the starting row (1-based indexing) 
+and {it:rows} is the ending row. For example, {cmd:in(10/20)} would read rows 10 through 20.
 
 {phang}
-{opt if(expression)} specifies a condition that rows must satisfy to be included. The expression uses 
-SQL-like syntax for filtering.
+{opt if(expression)} imports only rows that satisfy the specified condition. This filter is applied directly during reading
+and can significantly improve performance compared to reading all data and then filtering in Stata.
 
-{dlgtab:pq_save options}
-
-{phang}
-{opt replace} specifies that the Parquet file should be overwritten if it already exists.
+{dlgtab:Options for pq save}
 
 {phang}
-{opt in(first_row/last_row)} specifies a range of rows to write to the Parquet file.
+{opt replace} permits {cmd:pq save} to overwrite an existing Parquet file.
 
 {phang}
-{opt if(expression)} specifies a condition that rows must satisfy to be included in the output file.
-
-{dlgtab:pq_describe options}
+{opt in(range)} specifies a subset of rows to save, using the same format as in {cmd:pq use}.
 
 {phang}
-{opt quietly} suppresses the display of information about the Parquet file.
+{opt if(expression)} saves only rows that satisfy the specified condition.
 
 {phang}
-{opt detailed} displays additional information about each variable in the Parquet file, including 
-string length for string variables.
+{opt noautorename} prevents automatic renaming of variables based on Parquet metadata stored in variable labels.
+By default, variables that were renamed when imported will be restored to their original Parquet column names when saved.
+
+{dlgtab:Options for pq describe}
+
+{phang}
+{opt quietly} suppresses display of column information, but still stores results in return values.
+
+{phang}
+{opt detailed} provides more detailed information about each column, including string lengths for string columns.
 
 {marker examples}{...}
 {title:Examples}
 
-{pstd}Load a complete Parquet file into Stata{p_end}
-{phang2}{cmd:. pq_use using "path/to/data.parquet", clear}{p_end}
+{pstd}Load a Parquet file into Stata:{p_end}
+{phang2}{cmd:. pq use using example.parquet, clear}{p_end}
 
-{pstd}Load specific variables from a Parquet file{p_end}
-{phang2}{cmd:. pq_use id name age using "path/to/data.parquet", clear}{p_end}
+{pstd}Load only specific variables:{p_end}
+{phang2}{cmd:. pq use id name age using example.parquet, clear}{p_end}
 
-{pstd}Load the first 1000 rows from a Parquet file{p_end}
-{phang2}{cmd:. pq_use using "path/to/data.parquet", clear in(1/1000)}{p_end}
+{pstd}Load with a filter condition:{p_end}
+{phang2}{cmd:. pq use using example.parquet, clear if(age > 30)}{p_end}
 
-{pstd}Load rows where age is greater than 18{p_end}
-{phang2}{cmd:. pq_use using "path/to/data.parquet", clear if(age > 18)}{p_end}
+{pstd}Load a subset of rows:{p_end}
+{phang2}{cmd:. pq use using example.parquet, clear in(101/200)}{p_end}
 
-{pstd}Save all variables to a Parquet file{p_end}
-{phang2}{cmd:. pq_save * using "path/to/output.parquet", replace}{p_end}
+{pstd}Describe contents of a Parquet file:{p_end}
+{phang2}{cmd:. pq describe using example.parquet}{p_end}
 
-{pstd}Save specific variables to a Parquet file{p_end}
-{phang2}{cmd:. pq_save id name age using "path/to/output.parquet", replace}{p_end}
+{pstd}Describe with detailed information:{p_end}
+{phang2}{cmd:. pq describe using example.parquet, detailed}{p_end}
 
-{pstd}Describe the contents of a Parquet file{p_end}
-{phang2}{cmd:. pq_describe using "path/to/data.parquet"}{p_end}
+{pstd}Save data as a Parquet file:{p_end}
+{phang2}{cmd:. pq save using newfile.parquet, replace}{p_end}
 
-{pstd}Get detailed description of a Parquet file{p_end}
-{phang2}{cmd:. pq_describe using "path/to/data.parquet", detailed}{p_end}
+{pstd}Save only specific variables:{p_end}
+{phang2}{cmd:. pq save id name income using newfile.parquet, replace}{p_end}
 
-{marker results}{...}
-{title:Stored results}
+{pstd}Save with a filter condition:{p_end}
+{phang2}{cmd:. pq save using filtered.parquet, replace if(age >= 18)}{p_end}
+
+{marker remarks}{...}
+{title:Remarks}
 
 {pstd}
-{cmd:pq_describe} stores the following in {cmd:r()}:
+This package uses Polars (a fast DataFrame library written in Rust) through a Stata plugin interface to provide
+efficient reading and writing of Parquet files. The implementation supports various data types including
+string, numeric, datetime, date, time, and strL variables.
+
+{pstd}
+When you import a Parquet file with {cmd:pq use}, the original column names from the Parquet file
+are stored as variable labels with the format {cmd:{{}parquet_name:original_name{}}}.
+When you later save the data with {cmd:pq save}, these columns will be automatically renamed back
+to their original Parquet names unless you specify the {opt noautorename} option.
+
+{pstd}
+Binary columns in Parquet files are not currently supported and will be automatically dropped when importing.
+
+{marker returned}{...}
+{title:Returned values}
+
+{pstd}
+{cmd:pq describe} returns the following in {cmd:r()}:
+
+{synoptset 20 tabbed}{...}
+{p2col 5 20 24 2: Scalars}{p_end}
+{synopt:{cmd:r(n_rows)}}Number of rows in the Parquet file{p_end}
+{synopt:{cmd:r(n_columns)}}Number of columns in the Parquet file{p_end}
 
 {synoptset 20 tabbed}{...}
 {p2col 5 20 24 2: Macros}{p_end}
-{synopt:{cmd:r(n_rows)}}number of rows in the Parquet file{p_end}
-{synopt:{cmd:r(n_columns)}}number of columns in the Parquet file{p_end}
-{synopt:{cmd:r(name_#)}}name of the #th column{p_end}
-{synopt:{cmd:r(type_#)}}data type of the #th column{p_end}
-{synopt:{cmd:r(string_length_#)}}string length of the #th column (if string and detailed option is used){p_end}
+{synopt:{cmd:r(name_#)}}Name of column # (where # goes from 1 to the number of columns){p_end}
+{synopt:{cmd:r(type_#)}}Data type of column #{p_end}
+{synopt:{cmd:r(rename_#)}}Rename information for column # (if available){p_end}
+{synopt:{cmd:r(string_length_#)}}String length for string columns (if detailed option specified){p_end}
+
+{marker technical}{...}
+{title:Technical notes}
+
+{pstd}
+The package requires a companion plugin that must be installed in Stata's PLUS directory.
+The plugin files (pq.dll for Windows, pq.so for Linux, pq.dylib for macOS) must be properly installed
+for the package to function. You can override the plugin location by setting the global macro
+{cmd:parquet_dll_override} to the path of the plugin.
+
+{pstd}
+The package works with Stata 16.0 and later versions.
+
+{marker acknowledgments}{...}
+{title:Acknowledgments}
+
+{pstd}
+This package uses the Polars library for Parquet file handling, which is built using Rust and provides
+excellent performance for large datasets.
 
 {marker author}{...}
 {title:Author}

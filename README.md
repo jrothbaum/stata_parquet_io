@@ -11,7 +11,8 @@
 - Automatic handling of data types between Stata and Parquet
 - Preserves original Parquet column names
 
-## Installation (PENDING - NOT IMPLEMENTED)
+## Installation (PENDING)
+- Current status - github actions create a the proper files for Windows, Linux, and Mac.  I need to test them (rather than my local Windows build).
 
 ```stata
 * Option 1: Install from SSC (when available)
@@ -99,7 +100,7 @@ display r(type_1)       // Data type of first column
 This package uses a plugin based on the *blazingly-fast* (as required for all Rust packages, but also true in at least this case) [Polars](https://github.com/pola-rs/polars) library to handle Parquet files efficiently.  Polars is being developed by [Ritchie Vink](https://www.ritchievink.com/) and many others.
 
 ## Limitations
-Right now, there is no support for long strings (> 2045 characters) or binary data.  This is a limitation of the Stata C plugin architecture.  It has no support for assigning to them and any workaround is too complicated or slow to be worth implementing now.  At some point, I may use readstat and IO to save a skinny file to merge 1:1 using _n on to the data using the [polars_readstat](https://github.com/jrothbaum/polars_readstat) ffi bindings to [readstat](https://github.com/WizardMac/ReadStat).  However, I haven't even started with writing files in that library and I don't plan to anytime soon.
+Right now, support for long strings (> 2045 characters, strL string variables) is being implemented.  The read from parquet is complete, but I have not yet completed the write.  Binary data is not supported, and I'm not sure I will implement parquet<->stata support for Binary<->strL binary. 
 
 ## Benchmarks
 This was run on my computer, with the following specs:<br>
