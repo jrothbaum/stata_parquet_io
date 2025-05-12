@@ -34,7 +34,7 @@ jobs:
             }
           - {
               name: "Linux",
-              os: ubuntu-latest, # Using ubuntu-latest for newer environment
+              os: ubuntu-latest,
               target: "x86_64-unknown-linux-gnu",
               extension: "so",  
               platform_name: "linux"
@@ -42,7 +42,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4 # Updated to v4
+        uses: actions/checkout@v4
 
       # Set up C++ environment for each platform
       - name: Set up Windows C++ environment
@@ -75,11 +75,7 @@ jobs:
         with:
           key: ${{ matrix.config.target }}
 
-      # Removed 'Install additional Rust dependencies' step assuming bindgen is a build-dependency
-      # If bindgen is used as a CLI tool directly, and not a build-dependency,
-      # then uncomment and consider removing '|| true' if its installation is critical.
-
-      # Set up any platform-specific environment variables
+      # Set up platform-specific environment variables
       - name: Set platform-specific environment
         shell: bash
         run: |
@@ -88,9 +84,10 @@ jobs:
           elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
             # MACOSX_DEPLOYMENT_TARGET already set above.
             true
+          # Remove static linking for Linux as it's incompatible with cdylib
           elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
-            # Force static linking of standard libraries (excluding glibc)
-            echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
+            # Do not use crt-static for Linux cdylib
+            echo "Using dynamic linking for Linux cdylib"
           fi
 
       - name: Display build configuration
@@ -102,21 +99,17 @@ jobs:
           fi
         shell: bash
 
-      # Build release with static linking
-      - name: Build release with static linking
+      # Build release
+      - name: Build release
         run: cargo build --release --target ${{ matrix.config.target }}
         env:
           RUST_BACKTRACE: 1
-          # Force static linking of C/C++ dependencies
-          POLARS_STATICALLY_LINK: 1
-          # Use vendored SSL if OpenSSL is used
-          OPENSSL_STATIC: 1
+          # Force static linking of C/C++ dependencies, but not for Linux
+          POLARS_STATICALLY_LINK: ${{ matrix.config.platform_name != 'linux' && '1' || '0' }}
+          # Use vendored SSL if OpenSSL is used, but not for Linux cdylib
+          OPENSSL_STATIC: ${{ matrix.config.platform_name != 'linux' && '1' || '0' }}
           # Use vendored versions of dependencies where possible
           CARGO_FEATURE_VENDORED: 1
-          # Set CC and CXX for musl if your build script needs specific compilers
-          # CC_x86_64_unknown_linux_musl: "musl-gcc"
-          # CXX_x86_64_unknown_linux_musl: "musl-g++"
-          # BINDGEN_EXTRA_CLANG_ARGS: "-I/usr/include" # Example if bindgen needs specific include paths
 
       - name: Prepare release files
         shell: bash
@@ -140,11 +133,9 @@ jobs:
               exit 1 # Fail the job if the library is not found
             fi
             
-            # Verify shared library requirements (should be minimal for musl)
-            echo "Checking GLIBC requirements of the built library:"
-            objdump -p release_package/pq.${{ matrix.config.extension }} | grep GLIBC || echo "No GLIBC dependencies found (this is unexpected for gnu target)""
-            # Check for GLIBC presence (expected to be absent for musl target)
-            objdump -p release_package/pq.${{ matrix.config.extension }} | grep GLIBC && echo "Warning: GLIBC dependency found unexpectedly for musl target!" || echo "No GLIBC dependencies found (expected for musl target)"
+            # Check library dependencies for Linux
+            echo "Checking library dependencies:"
+            ldd release_package/pq.${{ matrix.config.extension }} || echo "Could not run ldd, possibly statically linked"
           fi
           
           # Copy ADO files (will fail job if files are missing)
@@ -172,7 +163,7 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4 # Updated to v4
+        uses: actions/checkout@v4
         
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -184,7 +175,7 @@ jobs:
         run: |
           cd pq-windows && zip -r ../pq-windows.zip * && cd ..
           cd pq-macos && zip -r ../pq-macos.zip * && cd ..
-          cd pq-linux && zip -r ../pq-linux.zip * && cd Id..
+          cd pq-linux && zip -r ../pq-linux.zip * && cd ..
         
       - name: Create Release
         id: create_release
