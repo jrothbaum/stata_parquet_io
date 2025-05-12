@@ -42,7 +42,8 @@ fn main() {
              .flag("-DSYSTEM=OPUNIX")
              .flag("-DSD_PLUGINMAJ=3")  // Plugin major version
              .flag("-DSD_PLUGINMIN=0")  // Plugin minor version
-             .flag("-std=c++11");       // C++11 standard
+             .flag("-std=c++11")        // C++11 standard
+             .flag("-D_GLIBCXX_USE_CXX11_ABI=0");
         
         // Ensure symbol visibility is correct
         build.flag("-fvisibility=default");  // Make symbols visible by default
