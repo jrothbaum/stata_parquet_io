@@ -30,7 +30,7 @@ jobs:
             }
           - {
               name: "Linux",
-              os: ubuntu-latest,
+              os: ubuntu-20.04,
               target: "x86_64-unknown-linux-gnu",
               extension: "so", 
               platform_name: "linux"
@@ -85,6 +85,9 @@ jobs:
             echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
           elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
             echo "MACOSX_DEPLOYMENT_TARGET=10.13" >> $GITHUB_ENV
+          elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
+            # Target older glibc for Linux compatibility
+            echo "RUSTFLAGS=-C target-feature=+crt-static -C link-arg=-Wl,--compress-debug-sections=zlib" >> $GITHUB_ENV
           fi
 
       # Check for build.rs or need for additional setup
@@ -125,11 +128,11 @@ jobs:
           
           # Copy the compiled library with the correct extension
           if [ "${{ matrix.config.platform_name }}" = "windows" ]; then
-            cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/
+            cp target/${{ matrix.config.target }}/release/pq.${{ matrix.config.extension }} release_package/
           elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
-            cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/
+            cp target/${{ matrix.config.target }}/release/pq.${{ matrix.config.extension }} release_package/
           elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
-            cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/
+            cp target/${{ matrix.config.target }}/release/pq.${{ matrix.config.extension }} release_package/
           fi
           
           # Copy ADO files
