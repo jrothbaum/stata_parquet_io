@@ -36,15 +36,18 @@ fn main() {
          .define("SYSTEM", system_define);
          
     // Platform-specific settings
-    if target_os == "linux" {
-        // C++ compilation flags
+   if target_os == "linux" {
+        // Make symbols explicitly visible (more like Windows)
         build.flag("-shared")
              .flag("-fPIC")
-             .flag("-DSYSTEM=OPUNIX");
+             .flag("-DSYSTEM=OPUNIX")
+             .flag("-fvisibility=default")  // Make all symbols visible
+             .flag("-Wl,--export-dynamic");  // Export all symbols
         
-        // Rust linker flags
+        // Same flags for Rust
         println!("cargo:rustc-link-arg=-shared");
         println!("cargo:rustc-link-arg=-fPIC");
+        println!("cargo:rustc-link-arg=-Wl,--export-dynamic");
     } else if target_os == "macos" {
         // C++ compilation flags
         build.flag("-bundle")
