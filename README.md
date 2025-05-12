@@ -12,7 +12,7 @@
 - Preserves original Parquet column names
 
 ## Installation (PENDING)
-- Current status - github actions create a the proper files for Windows, Linux, and Mac.  I need to test them (rather than my local Windows build).
+- Current status - github actions create the proper files for Windows, Linux, and Mac.  I need to test them (rather than my local Windows build).
 
 ```stata
 * Option 1: Install from SSC (when available)
