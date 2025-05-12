@@ -1,13 +1,9 @@
 name: Build and Release
 
-# Specify the events that trigger this workflow
 on:
-  # Run on pushes to specific tags
   push:
     tags:
-      - 'v*'  # Push events to matching v*, i.e. v1.0, v20.15.10
-  
-  # Allow manual triggering from the Actions tab
+      - 'v*'
   workflow_dispatch:
 
 jobs:
@@ -36,7 +32,7 @@ jobs:
               name: "Linux",
               os: ubuntu-latest,
               target: "x86_64-unknown-linux-gnu",
-              extension: "so",  
+              extension: "so",
               platform_name: "linux"
             }
 
@@ -44,7 +40,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Set up C++ environment for each platform
       - name: Set up Windows C++ environment
         if: matrix.config.platform_name == 'windows'
         uses: ilammy/msvc-dev-cmd@v1
@@ -52,19 +47,11 @@ jobs:
       - name: Set up macOS C++ environment
         if: matrix.config.platform_name == 'macos'
         run: |
-          # Xcode Command Line Tools typically provide a sufficient clang/clang++.
-          # Ensure installation, '|| true' so it doesn't fail if already installed.
           xcode-select --install || true
           echo "MACOSX_DEPLOYMENT_TARGET=10.13" >> $GITHUB_ENV
 
-      - name: Set up Linux C++ environment
-        if: matrix.config.platform_name == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake libclang-dev
-
-      # Install Rust with the appropriate components
-      - name: Install Rust toolchain
+      - name: Install Rust toolchain (non-Linux)
+        if: matrix.config.platform_name != 'linux'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.config.target }}
@@ -75,19 +62,13 @@ jobs:
         with:
           key: ${{ matrix.config.target }}
 
-      # Set up platform-specific environment variables
       - name: Set platform-specific environment
         shell: bash
         run: |
           if [ "${{ matrix.config.platform_name }}" = "windows" ]; then
             echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
           elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
-            # MACOSX_DEPLOYMENT_TARGET already set above.
             true
-          # Remove static linking for Linux as it's incompatible with cdylib
-          elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
-            # Do not use crt-static for Linux cdylib
-            echo "Using dynamic linking for Linux cdylib"
           fi
 
       - name: Display build configuration
@@ -99,51 +80,54 @@ jobs:
           fi
         shell: bash
 
-      # Build release
-      - name: Build release
+      - name: Build release (Linux using manylinux2014)
+        if: matrix.config.platform_name == 'linux'
+        run: |
+          docker run --rm -v $PWD:/workspace -w /workspace quay.io/pypa/manylinux2014_x86_64 bash -c "
+            yum install -y gcc gcc-c++ cmake make clang openssl-devel \
+              && curl https://sh.rustup.rs -sSf | sh -s -- -y \
+              && source \$HOME/.cargo/env \
+              && rustup target add ${{ matrix.config.target }} \
+              && cargo build --release --target ${{ matrix.config.target }}
+          "
+
+      - name: Build release (non-Linux)
+        if: matrix.config.platform_name != 'linux'
         run: cargo build --release --target ${{ matrix.config.target }}
         env:
           RUST_BACKTRACE: 1
-          # Force static linking of C/C++ dependencies, but not for Linux
           POLARS_STATICALLY_LINK: ${{ matrix.config.platform_name != 'linux' && '1' || '0' }}
-          # Use vendored SSL if OpenSSL is used, but not for Linux cdylib
           OPENSSL_STATIC: ${{ matrix.config.platform_name != 'linux' && '1' || '0' }}
-          # Use vendored versions of dependencies where possible
           CARGO_FEATURE_VENDORED: 1
 
       - name: Prepare release files
         shell: bash
         run: |
           mkdir -p release_package
-          
-          # Copy and rename the compiled library with the correct extension
+
           if [ "${{ matrix.config.platform_name }}" = "windows" ]; then
             cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
           elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
             cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
           elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
-            # For Linux builds, check both potential naming patterns (lib prefix)
             if [ -f "target/${{ matrix.config.target }}/release/libstata_parquet_io.${{ matrix.config.extension }}" ]; then
               cp target/${{ matrix.config.target }}/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
             elif [ -f "target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }}" ]; then
               cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
             else
               echo "Error: Could not find the expected library file."
-              ls -la target/${{ matrix.config.target }}/release/ # List contents for debugging
-              exit 1 # Fail the job if the library is not found
+              ls -la target/${{ matrix.config.target }}/release/
+              exit 1
             fi
-            
-            # Check library dependencies for Linux
+
             echo "Checking library dependencies:"
-            ldd release_package/pq.${{ matrix.config.extension }} || echo "Could not run ldd, possibly statically linked"
+            ldd release_package/pq.${{ matrix.config.extension }} || echo "ldd unavailable"
           fi
-          
-          # Copy ADO files (will fail job if files are missing)
+
           cp src/ado/p/pq.ado release_package/
           cp src/ado/p/pq.pkg release_package/
           cp src/ado/p/pq.sthlp release_package/
-          
-          # List what we have in the release package
+
           echo "Files in release package:"
           ls -la release_package/
 
@@ -156,27 +140,26 @@ jobs:
 
   release:
     name: Create GitHub Release
-    # Only run this job if triggered by a tag push, not by workflow_dispatch
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
-        
+
       - name: List artifacts
         run: ls -R
-      
+
       - name: Create platform zip files
         run: |
           cd pq-windows && zip -r ../pq-windows.zip * && cd ..
           cd pq-macos && zip -r ../pq-macos.zip * && cd ..
           cd pq-linux && zip -r ../pq-linux.zip * && cd ..
-        
+
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v1
