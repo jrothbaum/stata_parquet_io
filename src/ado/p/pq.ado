@@ -113,12 +113,19 @@ program pq_use, rclass
 	local row_to_read = max(0,min(`n_rows',`last_n') - `offset' + (`offset' > 0))
 	
 	
+	tempfile temp_strl
+	//	local temp_strl C:\Users\jonro\Downloads\temp_strl
+	local temp_strl_stub `temp_strl'
 	
 	
 	quietly set obs `row_to_read'
 
-	local match_vars_non_binarystrl
+	local match_vars_non_binary
+
+	local var_number = 0
+	local strl_var_indexes
 	foreach vari in `matched_vars' {
+		local var_number = `var_number' + 1
 		local type_info ``vari''
 		//	Set rename_to to nothing
 		local rename_to
@@ -161,10 +168,13 @@ program pq_use, rclass
 			quietly gen double `name_to_create' = .
 			format `name_to_create' %tchh:mm:ss
 		}
-		else if ("`type'" == "binary" | "`type'" == "strl") {
-			//	quietly gen strL `name_to_create' = ""
-			di "Dropping `name_to_create' as cannot process strL or binary columns"
+		else if ("`type'" == "binary") {
+			di "Dropping `name_to_create' as cannot process binary columns"
 			local keep = 0
+		}
+		else if ("`type'" == "strl") {
+			local strl_var_indexes `strl_var_indexes' `var_number'
+			quietly gen strL `name_to_create' = ""
 		}
 		else {
 			quietly gen double `type' `name_to_create' = .
@@ -176,16 +186,35 @@ program pq_use, rclass
 
 		if (`keep') {
 			//	di "keeping `vari'"
-			local match_vars_non_binarystrl `match_vars_non_binarystrl' `vari'
+			local match_vars_non_binary `match_vars_non_binary' `vari'
 		}
 	}
 
-	local matched_vars `match_vars_non_binarystrl'
+	local matched_vars `match_vars_non_binary'
 
 	local offset = max(0,`offset' - 1)
 	local n_rows = `offset' + `row_to_read'
 
 	plugin call polars_parquet_plugin, read "`using'" "from_macro" `n_rows' `offset' `"`sql_if'"' `"`mapping'"'
+
+	
+	if ("`strl_var_indexes'" != "") {
+		di "Slowly processing strL variables"
+		foreach var_indexi in `strl_var_indexes' {
+			forvalues batchi = 1/`n_batches' {
+				local pathi `strl_path_`var_indexi'_`batchi''
+				local namei `strl_name_`var_indexi'_`batchi''
+				local starti `strl_start_`var_indexi'_`batchi''
+				local endi `strl_end_`var_indexi'_`batchi''
+
+				if `batchi' == 1 {
+					di "	`namei'"
+				}
+				pq_process_strl, path(`pathi') name(`namei') start(`starti') end(`endi')
+			}
+		}
+	}
+
 end
 
 
@@ -408,4 +437,28 @@ program pq_register_plugin
 		global pq_plugin_loaded = 1
 	}
 
+end
+
+
+capture program drop pq_process_strl
+program pq_process_strl
+	version 16.0
+
+	syntax , 	path(string)			///
+				name(varname)			///
+				start(integer)			///
+				end(integer)
+				
+	local index = max(`start', 1)
+
+	file open fstrl using "`path'", read text
+	file read fstrl line
+	while r(eof) == 0 {
+		quietly replace `name' = `"`line'"'  if _n == `index'		
+
+		local index = `index' + 1
+		file read fstrl line
+	}
+	file close fstrl
+	capture erase "`pathi'"
 end

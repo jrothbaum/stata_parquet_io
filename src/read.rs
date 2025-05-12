@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
 use rayon::prelude::*;
 use polars::error::ErrString;
 use polars::prelude::*;
@@ -13,7 +14,6 @@ use crate::stata_interface::{
     ST_retcode,
     display,
     set_macro,
-    set_scalar,
     replace_number,
     replace_string,
     get_macro
@@ -230,6 +230,7 @@ pub fn read_to_stata(
     //  display(&format!("Processing with strategy: {:?}, threads: {}", strategy, n_threads));
     
     // Process data in batches
+    set_macro("n_batches", &n_batches.to_string(), false);
     for batchi in 0..n_batches {
         let mut df_batch = df.clone();
 
@@ -267,7 +268,8 @@ pub fn read_to_stata(
             batch_offseti, 
             &all_columns,
             strategy,
-            n_threads
+            n_threads,
+            batchi,
         ) {
             Ok(_) => {
                 // Do nothing on success
@@ -335,7 +337,8 @@ fn process_batch_with_strategy(
     start_index: usize,
     all_columns: &Vec<ColumnInfo>,
     strategy: ParallelizationStrategy,
-    n_threads: usize
+    n_threads: usize,
+    n_batch:usize,
 ) -> PolarsResult<()> {
 
     // If only 1 thread requested or batch is too small, use single-threaded version
@@ -381,30 +384,38 @@ fn process_batch_with_strategy(
             }
         }
 
-        if !special_columns.is_empty() {
-            display(&format!("Cannot process strL or binary columns: {:?}",special_columns));
-        }
-         // Then, process special columns (strl/binary) in parallel threads but with sequential row processing
         // if !special_columns.is_empty() {
-        //     special_columns.into_par_iter()
-        //         .try_for_each(|(col_idx, col_info)| {
-        //             let col = batch.column(&col_info.name)?;
-                    
-        //             // Process special column sequentially by row
-        //             match col_info.stata_type.as_str() {
-        //                 "strl" => {
-        //                     process_strl_column(col, 0, batch.height(), start_index, col_idx + 1)
-        //                 },
-        //                 "binary" => {
-        //                     process_binary_column(col, 0, batch.height(), start_index, col_idx + 1)
-        //                 },
-        //                 _ => {
-        //                     // Should never get here due to partition filter
-        //                     Ok(())
-        //                 }
-        //             }
-        //         })?;
+        //     display(&format!("Cannot process strL or binary columns: {:?}",special_columns));
         // }
+         // Then, process special columns (strl/binary) in parallel threads but with sequential row processing
+        if !special_columns.is_empty() {
+            special_columns.into_par_iter()
+                .try_for_each(|(col_idx, col_info)| {
+                    //  let col = batch.column(&col_info.name)?;
+                    
+                    // Process special column sequentially by row
+                    match col_info.stata_type.as_str() {
+                        "strl" => {
+                            process_strl_column(
+                                batch,
+                                &PlSmallStr::from(&col_info.name),
+                                0 as usize,
+                                batch.height(),
+                                start_index,
+                                n_batch + 1,
+                                col_idx+1,
+                            )
+                        },
+                        // "binary" => {
+                        //     process_binary_column(col, 0, batch.height(), start_index, col_idx + 1)
+                        // },
+                        _ => {
+                            // Should never get here due to partition filter
+                            Ok(())
+                        }
+                    }
+                })?;
+        }
         
         Ok(())
     })
@@ -486,85 +497,6 @@ fn process_regular_by_column(
 }
 
 
-// Process batch with row-wise parallelization using Rayon
-fn process_batch_by_row(
-    batch: &DataFrame,
-    start_index: usize,
-    all_columns: &Vec<ColumnInfo>,
-    n_threads: usize
-) -> PolarsResult<()> {
-    // If only 1 thread requested or batch is too small, use single-threaded version
-    let row_count = batch.height();
-    let min_multithreaded = 10000;
-    
-    if n_threads <= 1 || row_count < min_multithreaded {
-        return process_batch_single_thread(batch, start_index, all_columns);
-    }
-    
-    // Setup thread pool with rayon
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(n_threads)
-        .build()
-        .map_err(|e| PolarsError::ComputeError(
-            ErrString::from(format!("Failed to build thread pool: {}", e))
-        ))?;
-    
-    // Process rows in parallel using rayon
-    pool.install(|| {
-        // Calculate chunk size for processing
-        let chunk_size = std::cmp::max(100, row_count / (n_threads * 4));
-        
-        // Create chunks of row ranges and process them in parallel
-        (0..row_count).into_par_iter()
-            .chunks(chunk_size)
-            .try_for_each(|chunk| {
-                // Get the start and end row for this chunk
-                let start_row = chunk[0];
-                let end_row = chunk[chunk.len() - 1] + 1;
-                
-                // Process this range of rows for all columns
-                process_row_range(batch, start_index, start_row, end_row, all_columns)
-            })
-    })
-}
-
-
-// Process batch with column-wise parallelization
-fn process_batch_by_column(
-    batch: &DataFrame,
-    start_index: usize,
-    all_columns: &Vec<ColumnInfo>,
-    n_threads: usize
-) -> PolarsResult<()> {
-    // If only 1 thread requested, use single-threaded version
-    if n_threads <= 1 {
-        return process_batch_single_thread(batch, start_index, all_columns);
-    }
-    
-    // Setup thread pool with rayon
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(n_threads)
-        .build()
-        .map_err(|e| PolarsError::ComputeError(
-            ErrString::from(format!("Failed to build thread pool: {}", e))
-        ))?;
-    
-    // Process columns in parallel using rayon
-    pool.install(|| {
-        all_columns.par_iter().enumerate()
-            .try_for_each(|(col_idx, col_info)| {
-                // Get the column by name
-                let col = match batch.column(&col_info.name) {
-                    Ok(c) => c,
-                    Err(e) => return Err(e)
-                };
-                
-                // Process each value in the column
-                process_single_column(col, col_info, start_index, col_idx + 1)
-            })
-    })
-}
-
 // Single-threaded implementation (fallback)
 fn process_batch_single_thread(
     batch: &DataFrame,
@@ -572,7 +504,51 @@ fn process_batch_single_thread(
     all_columns: &Vec<ColumnInfo>
 ) -> PolarsResult<()> {
     // Process all rows for all columns in a single thread
-    process_row_range(batch, start_index, 0, batch.height(), all_columns)
+    set_macro("n_batches", "1", false);
+
+    let (special_columns, regular_columns): (Vec<_>, Vec<_>) = all_columns.iter().enumerate()
+        .partition(|(_, col_info)| {
+            col_info.stata_type == "strl" || col_info.stata_type == "binary"
+        });
+        
+    let regular_column_infos: Vec<ColumnInfo> = regular_columns.iter()
+                .map(|(_, col_info)| (*col_info).clone())
+                .collect();
+    let regular_process_out = process_row_range(batch, start_index, 0, batch.height(), &regular_column_infos);
+
+
+
+    if !special_columns.is_empty() {
+        special_columns.iter()
+            .try_for_each(|(col_idx, col_info)| {
+                //  let col = batch.column(&col_info.name)?;
+                
+                // Process special column sequentially by row
+                match col_info.stata_type.as_str() {
+                    "strl" => {
+                        // Process and propagate any error
+                        process_strl_column(
+                            batch,
+                            &PlSmallStr::from(&col_info.name),
+                            0 as usize,
+                            batch.height(),
+                            start_index,
+                            1 as usize,
+                            col_idx + 1,
+                        )
+                    },
+                    // "binary" => {
+                    //     process_binary_column(col, 0, batch.height(), start_index, col_idx + 1)
+                    // },
+                    _ => {
+                        // Should never get here due to partition filter
+                        Ok(())
+                    }
+                }
+            })?;
+    }
+
+    regular_process_out
 }
 
 // Process a specific range of rows for all columns
@@ -591,10 +567,11 @@ fn process_row_range(
         // Process each value in the column based on its Stata type
         match col_info.stata_type.as_str() {
             "strl" => {
-                let message= format!("Strl assignment not implemented yet: {}",col.name());
-                return Err(PolarsError::SchemaMismatch(
-                    ErrString::from(message)
-                ));                
+                //  Do nothing, handled elsewhwere
+                // let message= format!("Strl assignment not implemented yet: {}",col.name());
+                // return Err(PolarsError::SchemaMismatch(
+                //     ErrString::from(message)
+                // ));                
             },
             "binary" => {
                 let message= format!("Binary assignment not implemented yet: {}",col.name());
@@ -648,9 +625,10 @@ fn process_single_column(
     // Process each value in the column based on its Stata type
     match col_info.stata_type.as_str() {
         "strl" => {
-            return Err(PolarsError::SchemaMismatch(
-                ErrString::from("Strl assignment not implemented yet")
-            ));                
+            //  Do nothing, handled elsewhwere
+            // return Err(PolarsError::SchemaMismatch(
+            //     ErrString::from("Strl assignment not implemented yet")
+            // ));                
         },
         "binary" => {
             return Err(PolarsError::SchemaMismatch(
@@ -781,4 +759,90 @@ fn process_numeric_column(
     }
     
     Ok(())
+}
+
+
+
+fn process_strl_column(
+    batch:&DataFrame,
+    column_name: &PlSmallStr,
+    start_row: usize,
+    end_row: usize,
+    start_index: usize,
+    n_batch:usize,
+    col_idx:usize,
+) -> PolarsResult<()> {
+    
+    let path_stub = get_macro(
+        &"temp_strl_stub",
+        false,
+        None
+    );
+
+    let path = format!(
+        "{}_{}_{}.csv",
+        path_stub,
+        col_idx,
+        n_batch,
+    );
+    
+    set_macro(
+        &format!(
+            "strl_path_{}_{}",
+            col_idx,
+            n_batch
+        ),
+        &path,
+        false,
+    );
+    set_macro(
+        &format!(
+            "strl_name_{}_{}",
+            col_idx,
+            n_batch
+        ),
+        &column_name,
+        false,
+    );
+    set_macro(
+        &format!(
+            "strl_start_{}_{}",
+            col_idx,
+            n_batch
+        ),
+        &(start_row + start_index).to_string(),
+        false,
+    );
+
+    set_macro(
+        &format!(
+            "strl_end_{}_{}",
+            col_idx,
+            n_batch
+        ),
+        &(end_row + start_index).to_string(),
+        false,
+    );
+    let sink_target = SinkTarget::Path(Arc::new(PathBuf::from(path)));
+    let mut csv_options = CsvWriterOptions::default();
+    csv_options.include_header = false;
+    match batch.select([&column_name.to_string()])
+                                                  .unwrap()
+                                                  .lazy()
+                                                  .sink_csv(
+                                                    sink_target,
+                                                    csv_options,
+                                                    None,
+                                                    SinkOptions::default()
+                                                  )
+                                                  .unwrap()
+                                                  .collect() {
+            Err(e) => {
+                display(&format!("Strl csv write error for {}: {}", column_name, e));
+                Err(e)
+            },
+            Ok(_) => {
+                Ok(())
+            }
+        }
 }
