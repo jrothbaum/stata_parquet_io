@@ -41,7 +41,7 @@ fn main() {
         build.flag("-shared")
              .flag("-fPIC")
              .flag("-DSYSTEM=OPUNIX")
-             .flag("-D_GLIBCXX_USE_CXX11_ABI=0");  // Use older C++ ABI
+             .flag("-std=c++11");
         
         // Same flags for Rust
         println!("cargo:rustc-link-arg=-shared");
