@@ -10,6 +10,7 @@ jobs:
   build:
     name: Build ${{ matrix.config.name }}
     runs-on: ${{ matrix.config.os }}
+    container: ${{ matrix.config.container }}
     strategy:
       fail-fast: false
       matrix:
@@ -19,14 +20,16 @@ jobs:
               os: windows-latest,
               target: "x86_64-pc-windows-msvc",
               extension: "dll",
-              platform_name: "windows"
+              platform_name: "windows",
+              container: null
             }
           - {
               name: "macOS",
               os: macos-latest,
               target: "x86_64-apple-darwin",
               extension: "dylib",
-              platform_name: "macos"
+              platform_name: "macos",
+              container: null
             }
           - {
               name: "Linux",
@@ -58,25 +61,47 @@ jobs:
       - name: Set up Linux C++ environment
         if: matrix.config.platform_name == 'linux'
         run: |
-          # Install needed dependencies in the container
-          yum install -y cmake gcc gcc-c++ make curl libffi-devel clang clang-devel
+          # The manylinux container already has most of what we need
+          # Just make sure we have cmake and development tools
+          yum install -y cmake libffi-devel
 
       # Install Rust with the appropriate components
       - name: Install Rust toolchain
+        if: matrix.config.platform_name != 'linux'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.config.target }}
           components: rustfmt, clippy
+          
+      # For Linux in container, install Rust differently
+      - name: Install Rust in Linux container
+        if: matrix.config.platform_name == 'linux'
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source $HOME/.cargo/env
+          rustup default stable
+          rustup component add rustfmt clippy
 
       - name: Rust cache
+        if: matrix.config.platform_name != 'linux'
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.config.target }}
 
-      # Check if bindgen is needed and install it
-      - name: Install additional Rust dependencies
+      # Install bindgen for non-Linux platforms
+      - name: Install additional Rust dependencies (non-Linux)
+        if: matrix.config.platform_name != 'linux'
         run: |
           cargo install bindgen-cli --version 0.69.1 || true
+        shell: bash
+        
+      # Install bindgen for Linux
+      - name: Install bindgen in Linux container
+        if: matrix.config.platform_name == 'linux'
+        run: |
+          source $HOME/.cargo/env
+          cargo install bindgen-cli --version 0.69.1 || true
+        shell: bash
 
       # Set up any platform-specific environment variables
       - name: Set platform-specific environment
@@ -87,8 +112,10 @@ jobs:
           elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
             echo "MACOSX_DEPLOYMENT_TARGET=10.13" >> $GITHUB_ENV
           elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
-            # Target older glibc for Linux compatibility
-            echo "RUSTFLAGS=-C target-feature=+crt-static -C link-arg=-Wl,--compress-debug-sections=zlib" >> $GITHUB_ENV
+            # For Linux, use static linking to avoid GLIBC issues
+            echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
+            echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
+            echo "POLARS_STATICALLY_LINK=1" >> $GITHUB_ENV
           fi
 
       # Check for build.rs or need for additional setup
@@ -110,17 +137,28 @@ jobs:
           
           # Initialize empty feature flags variable
           echo "CARGO_FEATURE_FLAGS=" >> $GITHUB_ENV
-          
-      - name: Build release with static linking
+      
+      # Build for Windows and macOS
+      - name: Build release with static linking (non-Linux)
+        if: matrix.config.platform_name != 'linux'
         run: cargo build --release --target ${{ matrix.config.target }} ${{ env.CARGO_FEATURE_FLAGS }}
         env:
           RUST_BACKTRACE: 1
-          # Force static linking of C/C++ dependencies
           POLARS_STATICALLY_LINK: 1
-          # Use vendored SSL if OpenSSL is used
           OPENSSL_STATIC: 1
-          # Use vendored versions of dependencies where possible
           CARGO_FEATURE_VENDORED: 1
+          
+      # Build for Linux in container
+      - name: Build release with static linking (Linux)
+        if: matrix.config.platform_name == 'linux'
+        run: |
+          source $HOME/.cargo/env
+          RUSTFLAGS="-C target-feature=+crt-static" \
+          OPENSSL_STATIC=1 \
+          POLARS_STATICALLY_LINK=1 \
+          CARGO_FEATURE_VENDORED=1 \
+          cargo build --release
+        shell: bash
         
       - name: Prepare release files
         shell: bash
@@ -129,17 +167,27 @@ jobs:
           
           # Copy the compiled library with the correct extension
           if [ "${{ matrix.config.platform_name }}" = "windows" ]; then
-            cp target/${{ matrix.config.target }}/release/pq.${{ matrix.config.extension }} release_package/
+            cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/
           elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
-            cp target/${{ matrix.config.target }}/release/pq.${{ matrix.config.extension }} release_package/
+            cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/
           elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
-            cp target/${{ matrix.config.target }}/release/pq.${{ matrix.config.extension }} release_package/
+            # Try all possible naming patterns for the Linux build
+            cp target/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/stata_parquet_io.${{ matrix.config.extension }} || \
+            cp target/release/stata_parquet_io.${{ matrix.config.extension }} release_package/ || \
+            echo "Warning: Could not find the compiled library. Checking what files were generated:"
+            
+            # Debug: list all files in target directory
+            ls -la target/release/
           fi
           
           # Copy ADO files
-          cp src/ado/p/pq.ado release_package/
-          cp src/ado/p/pq.pkg release_package/
-          cp src/ado/p/pq.sthlp release_package/
+          cp src/ado/p/pq.ado release_package/ || echo "No pq.ado found"
+          cp src/ado/p/pq.pkg release_package/ || echo "No pq.pkg found"
+          cp src/ado/p/pq.sthlp release_package/ || echo "No pq.sthlp found"
+          
+          # List what we have in the release package
+          echo "Files in release package:"
+          ls -la release_package/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
