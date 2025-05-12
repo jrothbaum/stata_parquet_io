@@ -43,7 +43,9 @@ fn main() {
              .flag("-DSD_PLUGINMAJ=3")  // Plugin major version
              .flag("-DSD_PLUGINMIN=0")  // Plugin minor version
              .flag("-std=c++11")        // C++11 standard
-             .flag("-D_GLIBCXX_USE_CXX11_ABI=0");
+             .flag("-D_GLIBCXX_USE_CXX11_ABI=0")
+             .flag("-fvisibility=default")
+             .flag("-Wl,--export-dynamic");
         
         // Ensure symbol visibility is correct
         build.flag("-fvisibility=default");  // Make symbols visible by default
@@ -51,8 +53,8 @@ fn main() {
         // Same flags for Rust linker
         println!("cargo:rustc-link-arg=-shared");
         println!("cargo:rustc-link-arg=-fPIC");
-        println!("cargo:rustc-link-arg=-Wl,--no-undefined");  // Ensure all symbols are resolved
         println!("cargo:rustc-link-arg=-ldl");  // Link with dynamic loading library
+        println!("cargo:rustc-link-arg=-Wl,--export-dynamic");
     } else if target_os == "macos" {
         // C++ compilation flags
         build.flag("-bundle")
