@@ -41,8 +41,7 @@ fn main() {
         build.flag("-shared")
              .flag("-fPIC")
              .flag("-DSYSTEM=OPUNIX")
-             .flag("-fvisibility=default")  // Make all symbols visible
-             .flag("-Wl,--export-dynamic");  // Export all symbols
+             .flag("-D_GLIBCXX_USE_CXX11_ABI=0");  // Use older C++ ABI
         
         // Same flags for Rust
         println!("cargo:rustc-link-arg=-shared");
