@@ -35,7 +35,7 @@ jobs:
           - {
               name: "Linux",
               os: ubuntu-latest, # Using ubuntu-latest for newer environment
-              target: "x86_64-unknown-linux-musl", # Changed to musl for full static linking
+              target: "x86_64-unknown-linux-gnu",
               extension: "so",  
               platform_name: "linux"
             }
@@ -61,7 +61,7 @@ jobs:
         if: matrix.config.platform_name == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake libclang-dev musl-tools # Added musl-tools for musl target
+          sudo apt-get install -y build-essential cmake libclang-dev
 
       # Install Rust with the appropriate components
       - name: Install Rust toolchain
@@ -89,9 +89,8 @@ jobs:
             # MACOSX_DEPLOYMENT_TARGET already set above.
             true
           elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
-            # No RUSTFLAGS=-C target-feature=+crt-static needed for musl target.
-            # Add musl-specific RUSTFLAGS here if required for your project.
-            true
+            # Force static linking of standard libraries (excluding glibc)
+            echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
           fi
 
       - name: Display build configuration
@@ -142,8 +141,8 @@ jobs:
             fi
             
             # Verify shared library requirements (should be minimal for musl)
-            echo "Checking shared library requirements of the built library:"
-            ldd release_package/pq.${{ matrix.config.extension }} || echo "ldd failed (likely fully static or non-ELF)"
+            echo "Checking GLIBC requirements of the built library:"
+            objdump -p release_package/pq.${{ matrix.config.extension }} | grep GLIBC || echo "No GLIBC dependencies found (this is unexpected for gnu target)""
             # Check for GLIBC presence (expected to be absent for musl target)
             objdump -p release_package/pq.${{ matrix.config.extension }} | grep GLIBC && echo "Warning: GLIBC dependency found unexpectedly for musl target!" || echo "No GLIBC dependencies found (expected for musl target)"
           fi
