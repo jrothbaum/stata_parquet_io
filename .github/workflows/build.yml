@@ -28,13 +28,12 @@ jobs:
               extension: "dylib",
               platform_name: "macos"
             }
-          - {
-              name: "Linux",
-              os: ubuntu-20.04,
-              target: "x86_64-unknown-linux-gnu",
-              extension: "so", 
-              platform_name: "linux"
-            }
+          - name: Linux
+            os: ubuntu-latest
+            target: "x86_64-unknown-linux-gnu"
+            extension: "so"
+            platform_name: "linux"
+            container: "quay.io/pypa/manylinux2014_x86_64" # Uses CentOS 7 with older GLIBC
 
     steps:
       - name: Checkout repository
