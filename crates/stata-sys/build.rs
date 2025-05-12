@@ -32,29 +32,36 @@ fn main() {
     
     // Common settings
     build.cpp(true)
-         .file("vendor/stplugin.cpp");
+         .file("vendor/stplugin.cpp")
+         .define("SYSTEM", system_define);
          
     // Platform-specific settings
    if target_os == "linux" {
-        // Linux-specific settings
-        build.define("SYSTEM", "OPUNIX")
-             .flag("-std=c++11")       // Use C++11 standard
-             .flag("-DSPI=3.0");       // Define SPI version
+        build.flag("-shared")
+             .flag("-fPIC")
+             .flag("-DSYSTEM=OPUNIX")
+             .flag("-DSD_PLUGINMAJ=3")  // Plugin major version
+             .flag("-DSD_PLUGINMIN=0")  // Plugin minor version
+             .flag("-std=c++11");       // C++11 standard
         
-        // Link with dynamic loading library needed by stplugin.h
-        println!("cargo:rustc-link-lib=dylib=dl");
+        // Ensure symbol visibility is correct
+        build.flag("-fvisibility=default");  // Make symbols visible by default
+        
+        // Same flags for Rust linker
+        println!("cargo:rustc-link-arg=-shared");
+        println!("cargo:rustc-link-arg=-fPIC");
+        println!("cargo:rustc-link-arg=-Wl,--no-undefined");  // Ensure all symbols are resolved
+        println!("cargo:rustc-link-arg=-ldl");  // Link with dynamic loading library
     } else if target_os == "macos" {
-        // macOS-specific settings
-        build.define("SYSTEM", "APPLEMAC")
+        // C++ compilation flags
+        build.flag("-bundle")
+             .flag("-DSYSTEM=APPLEMAC")
              .flag("-std=c++11")       // Use C++11 standard
-             .flag("-DSPI=3.0");       // Define SPI version
+             .flag("-DSPI=3.0");       // Define SPI version 3.0
         
-        // macOS may need specific framework linkage
-        println!("cargo:rustc-link-arg=-framework");
-        println!("cargo:rustc-link-arg=CoreFoundation");
-    } else {
-        // Windows or other platforms
-        build.define("SYSTEM", system_define);
+        // Rust linker flags
+        println!("cargo:rustc-link-arg=-bundle");
+        println!("cargo:rustc-link-arg=-std=c++11");
     }
     
     // Compile
@@ -63,48 +70,19 @@ fn main() {
     // 5. Where is the crate root?
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let vendor_dir = manifest_dir.join("vendor");
-
-    // 6. Generate the bindings
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    println!("OUT_DIR = {:?}", env::var("OUT_DIR"));
     
-    // Initialize the bindings builder differently based on platform
-    let bindings_result = if target_os == "linux" {
-        // Linux-specific approach with fixes for clang issues
-        println!("cargo:warning=Using Linux-specific bindgen configuration");
-        
-        // Create a more robust wrapper header with full paths for Linux
-        let full_path_wrapper = format!(
-            "#define SYSTEM OPUNIX\n#include \"{}/vendor/stplugin.h\"\n",
-            manifest_dir.display()
-        );
-        let wrapper_path = out_dir.join("wrapper_linux.h");
-        fs::write(&wrapper_path, full_path_wrapper)
-            .expect("Failed to write Linux wrapper header");
-        
-        // Print debug info
-        println!("cargo:warning=Using wrapper path: {}", wrapper_path.display());
-        println!("cargo:warning=Include path: {}", manifest_dir.display());
-        
-        // Linux-specific bindgen configuration
-        bindgen::Builder::default()
-            .header(wrapper_path.to_str().unwrap())
-            .clang_arg("-x")
-            .clang_arg("c++")
-            .clang_arg("-std=c++11")
-            .clang_arg(format!("-I{}", manifest_dir.display()))
-            .clang_arg("-DSPI=3.0")
-            .detect_include_paths(true)
-            .layout_tests(false)
-            .parse_callbacks(Box::new(bindgen::CargoCallbacks))
-            .generate()
-    } else {
-        // Original approach for non-Linux platforms
-        bindgen::Builder::default()
-            .header("wrapper_generated.h")
-            .clang_arg(format!("-I{}", vendor_dir.display()))
-            .clang_arg(format!("-DSYSTEM={}", system_define))
-            .parse_callbacks(Box::new(bindgen::CargoCallbacks))
-            .generate()
-    };
+    // 6. Generate the bindings
+    let bindings = bindgen::Builder::default()
+        .header("wrapper_generated.h") // crate-relative, not absolute
+        .clang_arg(format!("-I{}", vendor_dir.display())) // tell Clang where "vendor/" is
+        .clang_arg(format!("-DSYSTEM={}", system_define)) // Define SYSTEM for clang too
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks))
+        .generate()
+        .expect("Unable to generate bindings");
+    
+    // 7. Write the bindings to OUT_DIR
+    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
+    bindings
+        .write_to_file(out_path.join("bindings.rs"))
+        .expect("Couldn't write bindings!");
 }
