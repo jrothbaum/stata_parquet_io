@@ -66,9 +66,16 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.config.platform_name }}" = "windows" ]; then
+            # Windows-specific flags for Stata plugin
             echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
+            # Additional C/C++ flags for Windows could be added here
           elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
-            true
+            # Mac-specific flags for Stata plugin
+            echo "RUSTFLAGS=-C link-args=-bundle" >> $GITHUB_ENV
+            echo "SYSTEM=APPLEMAC" >> $GITHUB_ENV
+          elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
+            # Linux-specific flags for Stata plugin
+            echo "SYSTEM=OPUNIX" >> $GITHUB_ENV
           fi
 
       - name: Display build configuration
@@ -94,24 +101,42 @@ jobs:
             # Find libclang path and set environment variables
             export LIBCLANG_PATH=\$(find /usr/lib64 /usr/lib -name \"libclang.so*\" | head -n 1 | xargs dirname)
             export LD_LIBRARY_PATH=\${LIBCLANG_PATH}:\${LD_LIBRARY_PATH}
+            export SYSTEM=OPUNIX
             
             # Install Rust
             curl https://sh.rustup.rs -sSf | sh -s -- -y
             source \$HOME/.cargo/env
             
-            # Build your project
+            # Build your project with Stata plugin flags
             rustup target add x86_64-unknown-linux-gnu
-            cargo build --release --target x86_64-unknown-linux-gnu
+            RUSTFLAGS='-C link-arg=-shared -C link-arg=-fPIC' cargo build --release --target x86_64-unknown-linux-gnu
           "
 
-      - name: Build release (non-Linux)
-        if: matrix.config.platform_name != 'linux'
-        run: cargo build --release --target ${{ matrix.config.target }}
+      - name: Build release (Windows)
+        if: matrix.config.platform_name == 'windows'
+        run: |
+          # Set Visual Studio to compile C files as C++
+          cargo build --release --target ${{ matrix.config.target }}
         env:
           RUST_BACKTRACE: 1
-          POLARS_STATICALLY_LINK: ${{ matrix.config.platform_name != 'linux' && '1' || '0' }}
-          OPENSSL_STATIC: ${{ matrix.config.platform_name != 'linux' && '1' || '0' }}
+          POLARS_STATICALLY_LINK: 1
+          OPENSSL_STATIC: 1
           CARGO_FEATURE_VENDORED: 1
+          # Windows-specific Stata plugin environment variables
+          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/NODEFAULTLIB:libcmt"
+
+      - name: Build release (macOS)
+        if: matrix.config.platform_name == 'macos'
+        run: |
+          cargo build --release --target ${{ matrix.config.target }}
+        env:
+          RUST_BACKTRACE: 1
+          POLARS_STATICALLY_LINK: 1
+          OPENSSL_STATIC: 1
+          CARGO_FEATURE_VENDORED: 1
+          SYSTEM: APPLEMAC
+          # Mac-specific Stata plugin flags
+          RUSTFLAGS: "-C link-args=-bundle"
 
       - name: Prepare release files
         shell: bash
