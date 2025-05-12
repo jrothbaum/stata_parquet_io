@@ -51,7 +51,7 @@ fn main() {
     } else if target_os == "macos" {
         // C++ compilation flags
         build.flag("-bundle")
-             .flag("-DSYSTEM=APPLEMAC");
+             .flag("-DSYSTEM=APPLEMAC")
              .flag("-std=c++11")       // Use C++11 standard
              .flag("-DSPI=3.0");       // Define SPI version 3.0
         
