@@ -28,12 +28,14 @@ jobs:
               extension: "dylib",
               platform_name: "macos"
             }
-          - name: Linux
-            os: ubuntu-latest
-            target: "x86_64-unknown-linux-gnu"
-            extension: "so"
-            platform_name: "linux"
-            container: "quay.io/pypa/manylinux2014_x86_64" # Uses CentOS 7 with older GLIBC
+          - {
+              name: "Linux",
+              os: ubuntu-latest,
+              target: "x86_64-unknown-linux-gnu",
+              extension: "so", 
+              platform_name: "linux",
+              container: "quay.io/pypa/manylinux2014_x86_64"  # CentOS 7 based with GLIBC 2.17
+            }
 
     steps:
       - name: Checkout repository
@@ -56,8 +58,8 @@ jobs:
       - name: Set up Linux C++ environment
         if: matrix.config.platform_name == 'linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake libclang-dev
+          # Install needed dependencies in the container
+          yum install -y cmake gcc gcc-c++ make curl libffi-devel clang clang-devel
 
       # Install Rust with the appropriate components
       - name: Install Rust toolchain
