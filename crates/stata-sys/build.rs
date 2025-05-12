@@ -41,19 +41,23 @@ fn main() {
         build.flag("-shared")
              .flag("-fPIC")
              .flag("-DSYSTEM=OPUNIX")
-             .flag("-std=c++11");
+             .flag("-std=c++11")       // Use C++11 standard
+             .flag("-DSPI=3.0");       // Define SPI version 3.0
         
         // Same flags for Rust
         println!("cargo:rustc-link-arg=-shared");
         println!("cargo:rustc-link-arg=-fPIC");
-        println!("cargo:rustc-link-arg=-Wl,--export-dynamic");
+        println!("cargo:rustc-link-arg=-std=c++11");
     } else if target_os == "macos" {
         // C++ compilation flags
         build.flag("-bundle")
              .flag("-DSYSTEM=APPLEMAC");
+             .flag("-std=c++11")       // Use C++11 standard
+             .flag("-DSPI=3.0");       // Define SPI version 3.0
         
         // Rust linker flags
         println!("cargo:rustc-link-arg=-bundle");
+        println!("cargo:rustc-link-arg=-std=c++11");
     }
     
     // Compile
