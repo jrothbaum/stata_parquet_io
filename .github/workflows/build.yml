@@ -85,7 +85,7 @@ jobs:
         run: |
           docker run --rm -v $PWD:/workspace -w /workspace quay.io/pypa/manylinux2014_x86_64 bash -c "
             yum install -y gcc gcc-c++ cmake make curl unzip wget \
-            && wget https://github.com/llvm/llvm-project/releases/download/llvmorg-16.0.6/clang%2Bllvm-16.0.6-x86_64-linux-gnu-ubuntu-18.04.tar.xz -O clang+llvm-16.0.6-x86_64-linux-gnu-ubuntu-18.04.tar.xz \
+            && wget "https://github.com/llvm/llvm-project/releases/download/llvmorg-16.0.6/clang+llvm-16.0.6-x86_64-linux-gnu-ubuntu-18.04.tar.xz" \
             && tar -xf clang+llvm-16.0.6-x86_64-linux-gnu-ubuntu-18.04.tar.xz \
             && mv clang+llvm-16.0.6-x86_64-linux-gnu-ubuntu-18.04 /opt/clang_16 \
             && export PATH=/opt/clang_16/bin:\$PATH \
