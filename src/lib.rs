@@ -16,6 +16,8 @@ pub mod describe;
 pub mod sql_from_if;
 pub mod utilities;
 
+use std::ptr;
+
 
 use stata_interface::{
     display,
@@ -29,10 +31,16 @@ use read::{
     read_to_stata
 };
 
-// Declare these as extern, but don't implement them
-extern "C" {
-    static mut _stata_: *mut stata_sys::ST_plugin;
-    fn pginit(p: *mut stata_sys::ST_plugin) -> stata_sys::ST_retcode;
+
+#[no_mangle]
+pub static mut _stata_: *mut stata_sys::ST_plugin = ptr::null_mut();
+
+#[no_mangle]
+pub extern "C" fn pginit(p: *mut stata_sys::ST_plugin) -> stata_sys::ST_retcode {
+    unsafe {
+        _stata_ = p;
+    }
+    stata_sys::SD_PLUGINVER
 }
 
 #[no_mangle]
