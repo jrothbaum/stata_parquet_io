@@ -21,7 +21,6 @@ use stata_interface::{
     display,
     ST_retcode,
     ST_plugin,
-    _stata_,
     SD_PLUGINVER
 };
 use describe::file_summary;
@@ -30,15 +29,10 @@ use read::{
     read_to_stata
 };
 
-#[no_mangle]
-pub extern "C" fn pginit(p: *mut ST_plugin) -> ST_retcode {
-    unsafe {
-        // Store the Stata plugin context
-        _stata_ = p;
-        
-        // Return the plugin version to Stata
-        SD_PLUGINVER
-    }
+// Declare these as extern, but don't implement them
+extern "C" {
+    static mut _stata_: *mut stata_sys::ST_plugin;
+    fn pginit(p: *mut stata_sys::ST_plugin) -> stata_sys::ST_retcode;
 }
 
 #[no_mangle]
