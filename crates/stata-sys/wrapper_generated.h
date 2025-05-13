@@ -1,7 +1,2 @@
-#ifndef WRAPPER_H
-#define WRAPPER_H
-
-#define SYSTEM 4
+#define SYSTEM STWIN32
 #include "vendor/stplugin.h"
-
-#endif // WRAPPER_H

@@ -6,13 +6,15 @@ edition = "2021"
 description = "Raw bindings to stata stplugin 3.0 cpp"
 license = "MIT"
 repository = "https://github.com/jrothbaum/stata_parquet_io"
-links = "stata_plugin"
+links = "stplugin_support"
 build = "build.rs"
 
-[build-dependencies]
-bindgen = "0.71.1"
-cc = "1.0"
-pkg-config = "0.3"
+[lib]
+crate-type = ["rlib"]
 
-[target.'cfg(windows)'.dependencies]
-libz-sys = "1.1"
+[dependencies]
+libc = "0.2"
+
+[build-dependencies]
+cc = "1.0"
+bindgen = "0.71.1"

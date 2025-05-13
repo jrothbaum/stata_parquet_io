@@ -5,6 +5,7 @@
 #if !defined(STPLUGIN_H)
 #define STPLUGIN_H
 
+#define SD_FASTMODE
 #if !defined(SD_FASTMODE)
 #define SD_SAFEMODE
 #endif

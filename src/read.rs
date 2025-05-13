@@ -11,7 +11,6 @@ use serde_json;
 
 use crate::mapping::ColumnInfo;
 use crate::stata_interface::{
-    ST_retcode,
     display,
     set_macro,
     replace_number,

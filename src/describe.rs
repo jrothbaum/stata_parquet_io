@@ -1,11 +1,5 @@
 use polars::prelude::*;
-use polars::lazy::dsl;
 use polars_sql::SQLContext;
-
-use std::{fs::File, path::PathBuf};
-use std::sync::{Arc, Mutex};
-use std::thread;
-
 
 
 use crate::mapping::schema_with_stata_types;

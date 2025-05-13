@@ -13,6 +13,7 @@ description = "Stata plugin to read/write parquet files using polars Rust"
 license = "MIT"
 default-run = "stata_parquet_io"
 repository = "https://github.com/jrothbaum/stata_parquet_io"
+build = "build.rs" 
 
 [lib]
 name = "stata_parquet_io"
@@ -22,7 +23,7 @@ crate-type= ["cdylib"]
 polars = { version = "0.47.1", features=["lazy","parquet","streaming","dtype-categorical"] }
 polars-sql = "0.47.1" 
 #   polars-core = "0.47.1"
-stata-sys = { path = "crates/stata-sys" }
+stata-sys = { path = "./crates/stata-sys" }
 rayon = "1.8"
 log = "0.4"
 env_logger = "0.11.8"
@@ -33,5 +34,5 @@ serde_json = "1.0.140"
 [profile.release]
 strip = "symbols"  # Remove debug info but keep symbols needed for performance
 panic = "unwind"     # Default panic behavior (often better for libraries)
-lto = "fat"         # More aggressive link-time optimization for speed
-codegen-units = 1   # Fewer codegen units allow more optimization
+#   lto = "fat"         # More aggressive link-time optimization for speed
+#   codegen-units = 1   # Fewer codegen units allow more optimization

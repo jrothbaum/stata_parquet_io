@@ -1,91 +1,73 @@
 use std::env;
 use std::path::PathBuf;
-use std::fs;
 
 fn main() {
-    // 1. Tell Cargo to rerun if any vendor files change
-    println!("cargo:rerun-if-changed=vendor/stplugin.cpp");
-    println!("cargo:rerun-if-changed=vendor/stplugin.h");
+    // Detect the target OS
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+    println!("cargo:warning=Building for OS: {}", target_os);
     
-    // Get target OS
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    println!("Target OS: {}", target_os);
-    
-    // 2. Define system type for stplugin.h based on target OS
-    let system_define = match target_os.as_str() {
-        "windows" => "STWIN32",
-        "macos" => "APPLEMAC",
-        "linux" => "OPUNIX",
-        _ => "OPUNIX", // Default to UNIX-like for other platforms
-    };
-    
-    // 3. Create a wrapper header that defines the system
-    let wrapper_content = format!(
-        "#define SYSTEM {}\n#include \"vendor/stplugin.h\"\n",
-        system_define
-    );
-    fs::write("wrapper_generated.h", wrapper_content)
-        .expect("Failed to write wrapper header");
-    
-    // 4. Compile the C++ code with platform-specific settings
+    // Set up C/C++ compilation
     let mut build = cc::Build::new();
     
-    // Common settings
-    build.cpp(true)
-         .file("vendor/stplugin.cpp")
-         .define("SYSTEM", system_define);
-         
-    // Platform-specific settings
-   if target_os == "linux" {
-        build.flag("-shared")
-             .flag("-fPIC")
-             .flag("-DSYSTEM=OPUNIX")
-             .flag("-DSD_PLUGINMAJ=3")  // Plugin major version
-             .flag("-DSD_PLUGINMIN=0")  // Plugin minor version
-             .flag("-std=c++11")        // C++11 standard
-             .flag("-D_GLIBCXX_USE_CXX11_ABI=0")
-             .flag("-fvisibility=default")
-             .flag("-Wl,--export-dynamic");
-        
-        // Ensure symbol visibility is correct
-        build.flag("-fvisibility=default");  // Make symbols visible by default
-        
-        // Same flags for Rust linker
-        println!("cargo:rustc-link-arg=-shared");
-        println!("cargo:rustc-link-arg=-fPIC");
-        println!("cargo:rustc-link-arg=-ldl");  // Link with dynamic loading library
-        println!("cargo:rustc-link-arg=-Wl,--export-dynamic");
-    } else if target_os == "macos" {
-        // C++ compilation flags
-        build.flag("-bundle")
-             .flag("-DSYSTEM=APPLEMAC")
-             .flag("-std=c++11")       // Use C++11 standard
-             .flag("-DSPI=3.0");       // Define SPI version 3.0
-        
-        // Rust linker flags
-        println!("cargo:rustc-link-arg=-bundle");
-        println!("cargo:rustc-link-arg=-std=c++11");
+    // Configure build based on target OS
+    match target_os.as_str() {
+        "windows" => {
+            build.define("SYSTEM", "STWIN32")
+                 .flag("-shared")
+                 .flag("-fPIC");
+        },
+        "macos" => {
+            build.define("SYSTEM", "APPLEMAC")
+                 .flag("-bundle");
+        },
+        _ => { // Assume Linux/Unix
+            build.define("SYSTEM", "OPUNIX")
+                 .flag("-shared")
+                 .flag("-fPIC")
+                 .define("SYSTEM", "OPUNIX");
+        },
     }
     
-    // Compile
-    build.compile("stata_plugin");
+    // Tell cargo to invalidate the built crate whenever the wrapper changes
+    println!("cargo:rerun-if-changed=vendor/stplugin.h");
+    println!("cargo:rerun-if-changed=vendor/stplugin.cpp");
     
-    // 5. Where is the crate root?
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let vendor_dir = manifest_dir.join("vendor");
+    // Compile the minimal C/C++ code needed - this is just the support code
+    build
+        .cpp(true) // Compile as C++
+        .file("vendor/stplugin.cpp")
+        .compile("stplugin_support");
     
-    // 6. Generate the bindings
+    // Generate bindings using bindgen - with more comprehensive allowlists
     let bindings = bindgen::Builder::default()
-        .header("wrapper_generated.h") // crate-relative, not absolute
-        .clang_arg(format!("-I{}", vendor_dir.display())) // tell Clang where "vendor/" is
-        .clang_arg(format!("-DSYSTEM={}", system_define)) // Define SYSTEM for clang too
+        .header("vendor/stplugin.h")
+        // More comprehensive allowlists to expose the full Stata API
+        .allowlist_function("pginit")
+        .allowlist_type("ST_.*")          // Match all Stata types (ST_plugin, ST_retcode, etc.)
+        .allowlist_var("_stata_")
+        .allowlist_var("SD_.*")           // Match all Stata constants
+        .allowlist_var("SF_.*")           // Match all Stata macros
+        .allowlist_var("SW_.*")           // Additional Stata variables
+        .allowlist_var("SV_.*")           // Additional Stata variables
+        // Tell bindgen about platform-specific defines
+        .clang_arg(match target_os.as_str() {
+            "windows" => "-DSYSTEM=STWIN32",
+            "macos" => "-DSYSTEM=APPLEMAC",
+            _ => "-DSYSTEM=OPUNIX"
+        })
         .parse_callbacks(Box::new(bindgen::CargoCallbacks))
         .generate()
         .expect("Unable to generate bindings");
     
-    // 7. Write the bindings to OUT_DIR
+    // Write the bindings to the $OUT_DIR/bindings.rs file
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let binding_path = out_path.join("bindings.rs");
+    println!("cargo:warning=Writing bindings to: {}", binding_path.display());
+    
     bindings
-        .write_to_file(out_path.join("bindings.rs"))
+        .write_to_file(binding_path)
         .expect("Couldn't write bindings!");
+    
+    // Don't set output library name here, as stata-sys is just a binding crate
+    // The parent crate (stata_parquet_io) should handle naming the plugin file
 }

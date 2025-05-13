@@ -8,6 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 static PRINT_COUNTER: AtomicUsize = AtomicUsize::new(0);
 const MAX_PRINTS: usize = 250;
 
+pub type pginit = u8;
+
 // Helper function to check and increment the counter
 fn should_print() -> bool {
     let current = PRINT_COUNTER.fetch_add(1, Ordering::SeqCst);

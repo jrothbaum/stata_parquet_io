@@ -1,8 +1,12 @@
-pub use stata_sys::{ST_retcode, ST_plugin};
+pub use stata_sys::{
+    _stata_,
+    ST_retcode, 
+    ST_plugin,
+    SD_PLUGINVER
+};
 use stata_sys;
 
-use std::ffi::CString;
-use std::os::raw::c_char;
+
 
 #[inline]
 pub fn display(msg: &str) -> i32 {

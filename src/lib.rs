@@ -8,7 +8,6 @@ use std::slice;
 use polars::prelude::*;
 
 
-
 pub mod read;
 pub mod write;
 pub mod mapping;
@@ -17,13 +16,30 @@ pub mod describe;
 pub mod sql_from_if;
 pub mod utilities;
 
-use stata_interface::{display, ST_retcode, ST_plugin};
+
+use stata_interface::{
+    display,
+    ST_retcode,
+    ST_plugin,
+    _stata_,
+    SD_PLUGINVER
+};
 use describe::file_summary;
 use read::{
     file_exists_and_is_file,
     read_to_stata
 };
 
+#[no_mangle]
+pub extern "C" fn pginit(p: *mut ST_plugin) -> ST_retcode {
+    unsafe {
+        // Store the Stata plugin context
+        _stata_ = p;
+        
+        // Return the plugin version to Stata
+        SD_PLUGINVER
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retcode {
