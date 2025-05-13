@@ -138,6 +138,7 @@ pub fn stata_column_info_to_schema(
             ("string",_) => StataType::String,
             ("strl",_) => StataType::Strl,
             ("binary",_) => StataType::Binary,
+            ("byte",_) => StataType::Byte,
             ("int",_) => {
                 let date_type = match_var_format_stata(&col.format);
                 match date_type {
