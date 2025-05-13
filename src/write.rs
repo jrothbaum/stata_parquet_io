@@ -78,8 +78,8 @@ pub fn write_from_stata(
     } else {
         serde_json::from_str(mapping).unwrap()
     };
-    println!("columns     = {:?}", all_columns);
-    println!("column info = {:?}", column_info);
+    //    println!("columns     = {:?}", all_columns);
+    //    println!("column info = {:?}", column_info);
 
     // Convert Option<&str> to Option<String>
     let sql_if_owned = sql_if.map(|s| s.to_string());
