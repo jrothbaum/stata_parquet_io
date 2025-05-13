@@ -83,7 +83,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
         
         // Remaining arguments are passed to the subfunction
         let subfunction_args = &args[1..];
-        println!("subfunction_args = {:?}",subfunction_args);
+        //    println!("subfunction_args = {:?}",subfunction_args);
         
         
         // Call the appropriate subfunction
