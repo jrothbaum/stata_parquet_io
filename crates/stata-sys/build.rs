@@ -30,13 +30,13 @@ fn main() {
     
     // Tell cargo to invalidate the built crate whenever the wrapper changes
     println!("cargo:rerun-if-changed=vendor/stplugin.h");
-    println!("cargo:rerun-if-changed=vendor/stplugin.cpp");
+    //    println!("cargo:rerun-if-changed=vendor/stplugin.cpp");
     
     // Compile the minimal C/C++ code needed - this is just the support code
-    build
-        .cpp(true) // Compile as C++
-        .file("vendor/stplugin.cpp")
-        .compile("stplugin_support");
+    //    build
+    //        .cpp(true) // Compile as C++
+    //        .file("vendor/stplugin.cpp")
+    //        .compile("stplugin_support");
     
     // Generate bindings using bindgen - with more comprehensive allowlists
     let bindings = bindgen::Builder::default()
