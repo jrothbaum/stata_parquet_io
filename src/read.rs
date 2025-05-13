@@ -138,7 +138,7 @@ pub fn scan_lazyframe(path:&str) -> Result<LazyFrame,PolarsError> {
 
     let schema = df.as_mut().unwrap().collect_schema();
 
-    println!("schema = {:?}", schema);
+    //    println!("schema = {:?}", schema);
 
     df
 }
