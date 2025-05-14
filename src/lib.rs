@@ -78,6 +78,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
             rust_args
         };
         
+        // display(&format!("{:?}",&args));
         // First argument is the subfunction name
         let subfunction_name = args[0];
         
@@ -88,6 +89,9 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
         
         // Call the appropriate subfunction
         match subfunction_name {
+            "setup_check" => {
+                return 0 as ST_retcode;
+            }
             "read" => {
                 if !file_exists_and_is_file(&subfunction_args[0]) {
                     stata_interface::display(&format!("File does not exist ({})",subfunction_args[0]));

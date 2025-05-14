@@ -123,6 +123,7 @@ program pq_use, rclass
 	local match_vars_non_binary
 
 	local var_number = 0
+	local dropped_vars = 0
 	local strl_var_indexes
 	foreach vari in `matched_vars' {
 		local var_number = `var_number' + 1
@@ -174,6 +175,7 @@ program pq_use, rclass
 		}
 		else if ("`type'" == "strl") {
 			local strl_var_indexes `strl_var_indexes' `var_number'
+			local strl_position_`var_number' = `var_number' - `dropped_vars'
 			quietly gen strL `name_to_create' = ""
 		}
 		else {
@@ -187,6 +189,9 @@ program pq_use, rclass
 		if (`keep') {
 			//	di "keeping `vari'"
 			local match_vars_non_binary `match_vars_non_binary' `vari'
+		}
+		else {
+			local dropped_vars = `dropped_vars' + 1
 		}
 	}
 
@@ -210,7 +215,10 @@ program pq_use, rclass
 				if `batchi' == 1 {
 					di "	`namei'"
 				}
-				pq_process_strl, path(`pathi') name(`namei') start(`starti') end(`endi')
+				
+				//	di "strl_position_`var_indexi' = `strl_position_`var_indexi''"
+				//	di `"pq_process_strl, path(`pathi') name(`namei') var_index(`strl_position_`var_indexi'') first(`starti') last(`endi')"'
+				pq_process_strl, path(`pathi') name(`namei') var_index(`strl_position_`var_indexi'') first(`starti') last(`endi')
 			}
 		}
 	}
@@ -230,7 +238,7 @@ program pq_describe, rclass
 	pq_register_plugin
 	local b_quiet = ("`quietly'" != "")
 	local b_detailed = ("`detailed'" != "")
-	pq_register_plugin
+	
 	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' ""
 
 	
@@ -414,7 +422,11 @@ end
 
 capture program drop pq_register_plugin
 program pq_register_plugin
-	if (0${pq_plugin_loaded} == 0) {
+
+	//	di "PLUGIN CHECK"
+	capture plugin call polars_parquet_plugin, setup_check ""
+	
+	if (_rc > 0) {
 		// Plugin is not loaded, so initialize it
 		if "`c(os)'" == "MacOSX" {
 		  local plugin_extension = "dylib"
@@ -434,9 +446,7 @@ program pq_register_plugin
 			local parquet_path = "`c(sysdir_plus)'p"
 		}
 		program polars_parquet_plugin, plugin using("`parquet_path'/pq.`plugin_extension'")
-		global pq_plugin_loaded = 1
 	}
-
 end
 
 
@@ -446,19 +456,23 @@ program pq_process_strl
 
 	syntax , 	path(string)			///
 				name(varname)			///
-				start(integer)			///
-				end(integer)
-				
-	local index = max(`start', 1)
+				var_index(integer)		///
+				first(integer)			///
+				last(integer)
 
-	file open fstrl using "`path'", read text
-	file read fstrl line
-	while r(eof) == 0 {
-		quietly replace `name' = `"`line'"'  if _n == `index'		
-
-		local index = `index' + 1
-		file read fstrl line
-	}
-	file close fstrl
+	local first = max(`first',1)
+	//	di `"mata: read_strl_block("`path'", `var_index', `first', `last')"'
+	mata: read_strl_block("`path'", `var_index', `first', `last')		
 	capture erase "`pathi'"
+end
+
+mata:
+	void read_strl_block(string scalar path,
+						 real scalar var_index,
+						 real scalar first,
+						 real scalar last) {
+		strl_values = cat(path)
+		st_sstore(first::last,var_index,strl_values)		
+	}
+
 end
