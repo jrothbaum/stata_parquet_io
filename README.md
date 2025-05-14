@@ -74,6 +74,10 @@ pq describe using filename.parquet, quietly
 
 ## Advanced Features
 
+### Thread management
+
+By default, stata_parquet_io will use all the threads available on the computer.  If that is not desirable, set the environment variable POLARS_MAX_THREADS to the number of threads you want to use (for example on a shared system).  This will limit the number of threads used in the parquet read/write operations (from polars in Rust) and in serializing the data to Stata.
+
 ### Variable Name Handling
 
 When reading Parquet files, the original column names are preserved in variable labels. When saving back to Parquet, the package automatically restores the original Parquet column names unless the `noautorename` option is specified.
