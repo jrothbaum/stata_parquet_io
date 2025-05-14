@@ -35,8 +35,8 @@ pq use using filename.parquet, clear
 pq use var1 var2 var3 using filename.parquet, clear
 
 * Read with observation filtering (STILL UNDER DEVELOPMENT AND TESTING)
-pq use using filename.parquet, clear in 1/1000
-pq use using filename.parquet, clear if value > 100
+pq use using filename.parquet, clear in(1/1000)
+pq use using filename.parquet, clear if(value > 100)
 
 * Use wildcards to select variables
 pq use x* using filename.parquet, clear
@@ -52,8 +52,8 @@ pq save using filename.parquet, replace
 pq save var1 var2 var3 using filename.parquet, replace
 
 * Save with observation filtering (STILL UNDER DEVELOPMENT AND TESTING)
-pq save using filename.parquet, replace in 1/1000
-pq save using filename.parquet, replace if value > 100
+pq save using filename.parquet, replace in(1/1000)
+pq save using filename.parquet, replace if(value > 100)
 
 * Disable automatic variable renaming (by default restores original Parquet names)
 pq save using filename.parquet, replace noautorename
