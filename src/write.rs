@@ -1,15 +1,13 @@
+use core::error;
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
-use log::debug;
-use polars::prelude::{self, NamedFrom, TimeUnit};
+use polars::prelude::{NamedFrom, TimeUnit};
 use polars::prelude::*;
 use polars_sql::SQLContext;
 use rayon::prelude::*;
 use std::error::Error;
-use std::collections::{
-    HashMap,
-    HashSet
-};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::stata_interface;
 use crate::stata_interface::{
@@ -21,9 +19,9 @@ use crate::mapping::{self, StataColumnInfo};
 use crate::utilities::{
     DAY_SHIFT_SAS_STATA,
     SEC_SHIFT_SAS_STATA,
-    SEC_MILLISECOND,
+    //  SEC_MILLISECOND,
     SEC_MICROSECOND,
-    SEC_NANOSECOND,
+    //  SEC_NANOSECOND,
     get_thread_count,
     ParallelizationStrategy,
     determine_parallelization_strategy,
@@ -58,7 +56,7 @@ pub fn write_from_stata(
     })
     .collect();
     
-    let column_info: Vec<StataColumnInfo>= if (mapping == "" || mapping == "from_macros") {
+    let column_info: Vec<StataColumnInfo>= if mapping == "" || mapping == "from_macros" {
         //  display("Reading column info from macros");
 
         let n_vars_str = get_macro(&"var_count", false, None);
@@ -325,7 +323,7 @@ impl StataDataScan {
         sql_if: Option<String>,
         parallel_strategy:Option<ParallelizationStrategy>,
     ) -> Self {
-        let rows_to_read = if (n_rows > 0) {
+        let rows_to_read = if n_rows > 0 {
             n_rows
         } else {
             stata_interface::n_obs() as usize
@@ -451,25 +449,80 @@ fn process_column(
     let series = match dtype {
         DataType::String => {
             let str_length = mapping::find_str_length_by_name(column_info, col_name).unwrap_or(0);
-            let values: Vec<String> = if parallelize_rows {
-                // Process rows in parallel
-                (0..n_rows_to_read)
-                    .into_par_iter()
-                    .map(|row_idx| {
-                        let row = offset + row_idx + 1;
-                        stata_interface::read_string(col_idx + 1, row, str_length)
-                    })
-                    .collect()
+            
+            //  display(&format!("{}:{}, {}",col_name,dtype,str_length));
+            
+            let s_series = if str_length > 0 {
+                let values: Vec<String> = if parallelize_rows {
+                    // Process rows in parallel
+                    (0..n_rows_to_read)
+                        .into_par_iter()
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            stata_interface::read_string(col_idx + 1, row, str_length)
+                        })
+                        .collect()
+                } else {
+                    // Process rows sequentially
+                    (0..n_rows_to_read)
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            stata_interface::read_string(col_idx + 1, row, str_length)
+                        })
+                        .collect()
+                };
+                Series::new(col_name.clone(), values)
             } else {
-                // Process rows sequentially
-                (0..n_rows_to_read)
-                    .map(|row_idx| {
-                        let row = offset + row_idx + 1;
-                        stata_interface::read_string(col_idx + 1, row, str_length)
-                    })
-                    .collect()
+                let error_found = AtomicBool::new(false);
+
+                let values: Vec<Option<String>> = if parallelize_rows {    
+                    // Process rows in parallel
+                    (0..n_rows_to_read)
+                        .into_par_iter()
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_string_strl(col_idx + 1, row) {
+                                Ok(val) => Some(val),
+                                Err(_) => {
+                                    error_found.store(true, Ordering::Relaxed);
+                                    display(
+                                        &format!("{} ({},{}): binary value found where string expected in strl variable, saving as blank",
+                                        col_name,
+                                        row,
+                                        col_idx
+                                    )); 
+                                    None
+                                }
+                            }
+                        })
+                        .collect()
+                } else {
+                    // Process rows sequentially
+                    (0..n_rows_to_read)
+                        .map(|row_idx| {
+                            let row = offset + row_idx + 1;
+                            match stata_interface::read_string_strl(col_idx + 1, row) {
+                                Ok(val) => Some(val),
+                                Err(_) => {
+                                    error_found.store(true, Ordering::Relaxed); 
+                                    None
+                                }
+                            }
+                        })
+                        .collect()
+                };
+
+                if error_found.load(Ordering::Relaxed) {
+                    display(
+                        &format!("*****{}: binary value(s) found where string expected in strl variable, saving as blank*****",
+                        col_name
+                    ));
+                }
+
+                Series::new(col_name.clone(), values)
             };
-            Series::new(col_name.clone(), values)
+
+            s_series
         }
         DataType::Boolean => {
             let values = process_numeric_data::<bool>(col_idx, n_rows_to_read, offset, parallelize_rows);

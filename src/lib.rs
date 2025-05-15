@@ -149,7 +149,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     None,
                 ) {
                     Ok(_) => 0 as i32,
-                    Err(e) => 198 as i32
+                    Err(_e) => 198 as i32
                 };
                 return output as ST_retcode;
             },

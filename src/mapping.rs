@@ -320,8 +320,7 @@ pub fn schema_with_stata_types(
 
 fn generate_rename_map(schema: &Schema) -> HashMap<String, String> {
     let mut rename_map: HashMap<String, String> = HashMap::new();
-    let mut used_names: HashSet<String> = HashSet::new();
-
+    
     let reserved_words: HashSet<&str> = [
         "aggregate",
         "array",

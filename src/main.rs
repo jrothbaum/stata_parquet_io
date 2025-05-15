@@ -20,11 +20,7 @@ pub mod utilities;
 mod sql_from_if;
 
 
-use describe::{
-    get_schema,
-    get_row_count,
-    file_summary
-}; 
+use describe::file_summary; 
 use crate::read::{  
     scan_lazyframe,
     read_to_stata

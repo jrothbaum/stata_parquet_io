@@ -20,7 +20,7 @@ const _CHECK_SD_PLUGINVER: () = {
 // Define SF_MAKELONG and related constants
 #[inline]
 pub const fn SF_MAKELONG(x: u32, y: u32) -> i32 {
-    ((x as i32) | ((y as i32) << 16))
+    (x as i32) | ((y as i32) << 16)
 }
 
 pub const SD_PLUGINVER: i32 = SF_MAKELONG(SD_PLUGINMAJ, SD_PLUGINMIN);
@@ -297,5 +297,38 @@ unsafe fn SF_sstore(i: i32, j: i32, s: *mut std::os::raw::c_char) -> i32 {
         (func)(i, j, s)
     } else {
         panic!("sstore function is not available")
+    }
+}
+
+
+//  strl functions
+#[inline]
+pub unsafe fn SF_sdatalen(i: i32, j: i32) -> i32 {
+    if let Some(func) = (*_stata_).sdatalen {
+        (func)(i,j)
+    } else {
+        panic!("sdatalen function is not available")
+    }
+}
+
+#[inline]
+pub unsafe fn SF_strldata(
+    i: i32,
+    j: i32,
+    s: *mut std::os::raw::c_char,
+    len: i32) -> i32 {
+    if let Some(func) = (*_stata_).strldata {
+        (func)(i, j, s, len)
+    } else {
+        panic!("strldata function is not available")
+    }
+}
+
+#[inline]
+pub unsafe fn SF_var_is_binary(i: i32, j: i32) -> bool {
+    if let Some(func) = (*_stata_).isbinary {
+        (func)(i,j) > 0
+    } else {
+        panic!("isbinary function is not available")
     }
 }

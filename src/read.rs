@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::path::PathBuf;
 use rayon::prelude::*;
 use polars::error::ErrString;
@@ -136,7 +136,7 @@ pub fn file_exists_and_is_file(path: &str) -> bool {
 pub fn scan_lazyframe(path:&str) -> Result<LazyFrame,PolarsError> {
     let mut df = LazyFrame::scan_parquet(path, ScanArgsParquet::default());
 
-    let schema = df.as_mut().unwrap().collect_schema();
+    //  let schema = df.as_mut().unwrap().collect_schema();
 
     //    println!("schema = {:?}", schema);
 
@@ -606,61 +606,6 @@ fn process_row_range(
                 // Handle numeric types (including date/time which get converted to numeric)
                 process_numeric_column(col, col_info, start_row, end_row, start_index, col_idx + 1)?;
             }
-        }
-    }
-    
-    Ok(())
-}
-
-// Process a single column (for column-wise parallelization)
-fn process_single_column(
-    col: &Column,
-    col_info: &ColumnInfo,
-    start_index: usize,
-    col_idx: usize
-) -> PolarsResult<()> {
-    let row_count = col.len();
-    
-    // Process each value in the column based on its Stata type
-    match col_info.stata_type.as_str() {
-        "strl" => {
-            //  Do nothing, handled elsewhwere
-            // return Err(PolarsError::SchemaMismatch(
-            //     ErrString::from("Strl assignment not implemented yet")
-            // ));                
-        },
-        "binary" => {
-            return Err(PolarsError::SchemaMismatch(
-                ErrString::from("Binary assignment not implemented yet")
-            ));                
-        },
-        "string" => {
-            // Handle string types
-            if let Ok(str_col) = col.str() {
-                for row_idx in 0..row_count {
-                    let global_row_idx = row_idx + start_index;
-
-                    // Get the string value at this row position
-                    let opt_val = match str_col.get(row_idx) {
-                        Some(s) => Some(s.to_string()),
-                        None => None
-                    };
-                    
-                    replace_string(
-                        opt_val, 
-                        global_row_idx + 1, // +1 because replace_string expects 1-indexed
-                        col_idx             // col_idx is already 1-indexed
-                    );
-                }
-            }
-        },
-        "datetime" => {
-            // Process datetime with appropriate time unit
-            process_datetime_column(col, 0, row_count, start_index, col_idx)?;
-        },
-        _ => {
-            // Handle numeric types (including date/time which get converted to numeric)
-            process_numeric_column(col, col_info, 0, row_count, start_index, col_idx)?;
         }
     }
     
