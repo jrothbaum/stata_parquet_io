@@ -80,7 +80,8 @@ By default, stata_parquet_io will use all the threads available on the computer.
 
 ### Variable Name Handling
 
-When reading Parquet files, the original column names are preserved in variable labels. When saving back to Parquet, the package automatically restores the original Parquet column names unless the `noautorename` option is specified.
+Parquet files can have much more flexible variable names than Stata, including spaces, dashes, pretty much anything.  They also isn't really a limit to the length of a variable name for a parquet file.  Stata variable names are limited to 32 alphanumeric characters. 
+ When reading Parquet files, the original column names are preserved in variable labels. When saving back to Parquet, the package automatically restores the original Parquet column names unless the `noautorename` option is specified.
 
 ### Return Values
 
