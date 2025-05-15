@@ -104,7 +104,7 @@ display r(type_1)       // Data type of first column
 This package uses a plugin based on the *blazingly-fast* (as required for all Rust packages, but also true in at least this case) [Polars](https://github.com/pola-rs/polars) library to handle Parquet files efficiently.  Polars is being developed by [Ritchie Vink](https://www.ritchievink.com/) and many others.
 
 ## Limitations
-Right now, support for long strings (> 2045 characters, strL string variables) is being implemented.  The read from parquet is complete, but I have not yet completed the write.  Binary data is not supported, and I'm not sure I will implement parquet<->stata support for Binary<->strL binary. 
+Binary data is not supported, and I'm not sure I will implement parquet<->stata support for Binary<->strL binary.  Reads of strL string columns will be slow as there is no support for setting strL values in the C plugin and I needed to use I/O to implement a hacky workaround.
 
 ## Benchmarks
 This was run on my computer, with the following specs:<br>
