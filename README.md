@@ -95,11 +95,6 @@ display r(name_1)       // Name of first column
 display r(type_1)       // Data type of first column
 ```
 
-## Requirements
-
-- Stata 16.0 or higher
-- The appropriate plugin file for your operating system (.dll for Windows, .dylib for Mac, .so for Linux)
-
 ## Technical Details
 
 This package uses a plugin based on the *blazingly-fast* (as required for all Rust packages, but also true in at least this case) [Polars](https://github.com/pola-rs/polars) library to handle Parquet files efficiently.  Polars is being developed by [Ritchie Vink](https://www.ritchievink.com/) and many others.
