@@ -12,7 +12,7 @@
 - Preserves original Parquet column names
 
 ## Installation (PENDING)
-- Current status - github actions create the proper files for Windows, Linux, and Mac.  I need to test them (rather than my local Windows build).
+- Current status - github actions create the proper files for Windows, Linux, and Mac.  I have successfully tested that the linux files work.  I need to test that Github version of the Windows build works (it works when compiled locally - just need to test that the Github version does, too).
 
 ```stata
 * Option 1: Install from SSC (when available)
@@ -80,7 +80,8 @@ By default, stata_parquet_io will use all the threads available on the computer.
 
 ### Variable Name Handling
 
-When reading Parquet files, the original column names are preserved in variable labels. When saving back to Parquet, the package automatically restores the original Parquet column names unless the `noautorename` option is specified.
+Parquet files can have much more flexible variable names than Stata, including spaces, dashes, pretty much anything.  They also isn't really a limit to the length of a variable name for a parquet file.  Stata variable names are limited to 32 alphanumeric characters. 
+ When reading Parquet files, the original column names are preserved in variable labels. When saving back to Parquet, the package automatically restores the original Parquet column names unless the `noautorename` option is specified.
 
 ### Return Values
 
@@ -93,11 +94,6 @@ display r(n_columns)    // Number of columns
 display r(name_1)       // Name of first column
 display r(type_1)       // Data type of first column
 ```
-
-## Requirements
-
-- Stata 16.0 or higher
-- The appropriate plugin file for your operating system (.dll for Windows, .dylib for Mac, .so for Linux)
 
 ## Technical Details
 
