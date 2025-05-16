@@ -1,4 +1,4 @@
-# PQ - Parquet File Reader/Writer for Stata
+# Read/Write parquet files in stata
 
 `pq` is a Stata package that enables reading and writing Parquet files directly in Stata. This plugin bridges the gap between Stata's data analysis capabilities and the increasingly popular Parquet file format, which is optimized for storage and performance with large datasets.
 
