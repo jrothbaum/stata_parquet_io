@@ -51,6 +51,7 @@ pub fn map_polars_to_stata(
     dtype: &DataType,
     str_length: usize,
 ) -> StataType {
+
     match dtype {
         //  Boolean
         DataType::Boolean => StataType::Byte,
@@ -72,7 +73,9 @@ pub fn map_polars_to_stata(
         DataType::Date => StataType::Date,
         DataType::Time => StataType::Time,
         DataType::Datetime(_, _) => StataType::DateTime,
-        DataType::String => {
+        DataType::String 
+        | DataType::Categorical(_,_)
+        | DataType::Enum(_,_) => {
             if str_length > 2045 {
                 StataType::Strl
             } else {
@@ -82,7 +85,11 @@ pub fn map_polars_to_stata(
         DataType::Binary => StataType::Binary,
         
         // Other types default to Double (most flexible numeric type)
-        _ => StataType::Double,
+        _ => {
+            display(&format!("Undefined parquet type: {}", dtype));
+
+            StataType::Double
+        },
     }
 }
 
@@ -247,6 +254,7 @@ pub fn schema_with_stata_types(
             dtype: format!("{:?}", dtype),
             stata_type: stata_type.to_string().to_owned(),
         };
+
 
         all_columns.push(column_info);
         if !quietly {
@@ -482,7 +490,9 @@ fn get_string_column_lengths(
     let string_columns: Vec<PlSmallStr> = schema
         .iter()
         .filter_map(|(name, dtype)| {
-            if matches!(dtype, DataType::String) {
+            if matches!(dtype, DataType::String) 
+                | matches!(dtype,DataType::Categorical(_,_))
+                | matches!(dtype,DataType::Enum(_,_)) {
                 Some(name.clone())
             } else {
                 None

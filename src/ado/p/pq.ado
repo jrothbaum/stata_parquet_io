@@ -101,11 +101,14 @@ program pq_use, rclass
 	// If namelist is empty or blank, return the full varlist
     if "`namelist'" == "" | "`namelist'" == "*" {
         local matched_vars `vars_in_file'
+		local match_all = 1
     }
     else {
         // Use function to match the variables from name list to the ones on the file
         pq_match_variables `namelist', against(`vars_in_file')
+
 		local matched_vars = r(matched_vars)
+		local match_all = 0
     }
 
 	//	Create the empty data
@@ -122,19 +125,20 @@ program pq_use, rclass
 
 	local match_vars_non_binary
 
-	local var_number = 0
 	local dropped_vars = 0
 	local strl_var_indexes
+
 	foreach vari in `matched_vars' {
-		local var_number = `var_number' + 1
-		local type_info ``vari''
+		local var_number: list posof "`vari'" in vars_in_file
+		local type `type_`var_number''
+		local string_length `string_length_`var_number''
+		//	di "var_number: `var_number'"
+		//	di "vari: `vari'"
+		//	di "string_length_`var_number': `string_length'"
+		
 		//	Set rename_to to nothing
 		local rename_to
 		
-		tokenize `type_info', parse("|")
-		local type `1'
-		local string_length `3'
-
 		//	Does it need to be renamed?
 		local name_to_create `vari'
 		forvalues i = 1/`n_renamed' {

@@ -8,6 +8,7 @@ use polars_sql::SQLContext;
 use polars::datatypes::{AnyValue, TimeUnit};
 use std::error::Error;
 use serde_json;
+use std::collections::HashSet;
 
 use crate::mapping::ColumnInfo;
 use crate::stata_interface::{
@@ -160,7 +161,7 @@ pub fn read_to_stata(
     };
 
     // Get column info either from mapping or macros
-    let all_columns: Vec<ColumnInfo> = if mapping.is_empty() || mapping == "from_macros" {
+    let all_columns_unfiltered: Vec<ColumnInfo> = if mapping.is_empty() || mapping == "from_macros" {
         let n_vars_str = get_macro("n_vars", false, None);
         let n_vars = match n_vars_str.parse::<usize>() {
             Ok(num) => num,
@@ -173,6 +174,16 @@ pub fn read_to_stata(
     } else {
         serde_json::from_str(mapping).unwrap()
     };
+
+
+    // First, create a HashSet of column names from variables_as_str for efficient lookups
+    let selected_column_names: HashSet<&str> = variables_as_str.split_whitespace().collect();
+
+    // Then filter all_columns to only keep columns whose names are in the HashSet
+    let all_columns: Vec<ColumnInfo> = all_columns_unfiltered
+        .into_iter()
+        .filter(|col_info| selected_column_names.contains(col_info.name.as_str()))
+        .collect();
 
     //  display(&format!("Column information: {:?}", all_columns));
 
@@ -203,10 +214,13 @@ pub fn read_to_stata(
     }
 
     // Create column expressions from the provided variable list
-    let columns: Vec<Expr> = variables_as_str.split_whitespace()
-        .map(|s| col(s))
+    let columns: Vec<Expr> = selected_column_names
+        .iter()
+        .map(|&s| col(s))
         .collect();
 
+    //  display(&format!("columns: {:?}", columns));
+    
     // Configure batch processing
     let batch_size: usize = 1_000_000;
     let n_batches = (n_rows as f64 / batch_size as f64).ceil() as usize;
@@ -231,7 +245,8 @@ pub fn read_to_stata(
     // Process data in batches
     set_macro("n_batches", &n_batches.to_string(), false);
     for batchi in 0..n_batches {
-        let mut df_batch = df.clone();
+        let mut df_batch = df.clone()
+                                        .select(&columns);
 
         let batch_offseti = offset + batchi * batch_size;
 
@@ -285,7 +300,7 @@ pub fn read_to_stata(
 
 
 // To cast all categorical columns to string:
-fn cast_catenum_to_string(lf: &LazyFrame) -> Result<LazyFrame, PolarsError> {
+pub fn cast_catenum_to_string(lf: &LazyFrame) -> Result<LazyFrame, PolarsError> {
     // Collect the schema from the LazyFrame
     let mut lf_internal = lf.to_owned();
     let schema = lf_internal.collect_schema()?;

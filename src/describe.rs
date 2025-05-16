@@ -9,7 +9,10 @@ use crate::stata_interface:: {
     set_macro,
 };
 
-use crate::read::scan_lazyframe;
+use crate::read::{
+    cast_catenum_to_string, scan_lazyframe
+    
+};
 
 pub fn file_summary(
     path:&str,
@@ -47,6 +50,9 @@ pub fn file_summary(
             }
         };
     }
+
+    df = cast_catenum_to_string(&df).unwrap();
+
     schema_with_stata_types(
         &df,
         &schema,
