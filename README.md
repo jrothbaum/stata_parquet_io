@@ -115,18 +115,18 @@ Basically, it just draws a bunch of random normally distributed float variables 
 
 
 ```
-
-
-
 . benchmark_parquet_io_data,      n_cols(10)      ///
 >                                 n_rows(1000)
 Number of observations (_N) was 0, now 1,000.
 (          1,000,              10)
     1: Stata:       save:        0.00
-    2: Parquet:     save:        0.00             1.33
+    2: Parquet:     save:        0.01             8.00
     3: Stata:       use:         0.01
-    4: Parquet:     use:         0.01             0.63
+    4: Parquet:     use:         0.01             0.90
 
+    Loading only 5 variables of 10
+    5: Stata:       use:         0.00
+    6: Parquet:     use:         0.01              .
 
 .                                 
 . 
@@ -135,19 +135,27 @@ Number of observations (_N) was 0, now 1,000.
 Number of observations (_N) was 0, now 10,000.
 (         10,000,              10)
     1: Stata:       save:        0.00
-    2: Parquet:     save:        0.01             6.00
-    3: Stata:       use:         0.00
-    4: Parquet:     use:         0.01             3.75
+    2: Parquet:     save:        0.01            11.00
+    3: Stata:       use:         0.01
+    4: Parquet:     use:         0.02             3.29
 
-.                                 
+    Loading only 5 variables of 10
+    5: Stata:       use:         0.00
+    6: Parquet:     use:         0.01           8.00
+
+. 
 . benchmark_parquet_io_data,      n_cols(10)      ///
 >                                 n_rows(100000)
 Number of observations (_N) was 0, now 100,000.
 (        100,000,              10)
-    1: Stata:       save:        0.00
-    2: Parquet:     save:        0.02             8.00
-    3: Stata:       use:         0.00
-    4: Parquet:     use:         0.04            44.00
+    1: Stata:       save:        0.01
+    2: Parquet:     save:        0.04             5.13
+    3: Stata:       use:         0.01
+    4: Parquet:     use:         0.09            17.60
+
+    Loading only 5 variables of 10
+    5: Stata:       use:         0.01
+    6: Parquet:     use:         0.07           7.22
 
 .                                 
 .                                 
@@ -155,10 +163,14 @@ Number of observations (_N) was 0, now 100,000.
 >                                 n_rows(1000000)
 Number of observations (_N) was 0, now 1,000,000.
 (      1,000,000,              10)
-    1: Stata:       save:        0.02
-    2: Parquet:     save:        0.20            10.05
-    3: Stata:       use:         0.01
-    4: Parquet:     use:         0.27            20.85
+    1: Stata:       save:        0.03
+    2: Parquet:     save:        0.26             9.07
+    3: Stata:       use:         0.02
+    4: Parquet:     use:         0.28            16.24
+
+    Loading only 5 variables of 10
+    5: Stata:       use:         0.04
+    6: Parquet:     use:         0.15           3.48
 
 .                                 
 .                                 
@@ -166,23 +178,42 @@ Number of observations (_N) was 0, now 1,000,000.
 >                                 n_rows(10000000)
 Number of observations (_N) was 0, now 10,000,000.
 (     10,000,000,              10)
-    1: Stata:       save:        0.15
-    2: Parquet:     save:        1.55            10.17
-    3: Stata:       use:         0.11
-    4: Parquet:     use:         1.89            17.06
+    1: Stata:       save:        0.19
+    2: Parquet:     save:        1.76             9.43
+    3: Stata:       use:         0.13
+    4: Parquet:     use:         2.28            18.21
+
+    Loading only 5 variables of 10
+    5: Stata:       use:         0.37
+    6: Parquet:     use:         2.01           5.38
 
 . 
-. benchmark_parquet_io_data,      n_cols(5000)    ///
->                                 n_rows(10000)
-Number of observations (_N) was 0, now 10,000.
-(         10,000,           5,000)
-    1: Stata:       save:        0.08
-    2: Parquet:     save:        1.07            13.58
-    3: Stata:       use:         0.06
-    4: Parquet:     use:         2.83            50.54
+. benchmark_parquet_io_data,      n_cols(100)     ///
+>                                 n_rows(1000000)
+Number of observations (_N) was 0, now 1,000,000.
+(      1,000,000,             100)
+    1: Stata:       save:        0.17
+    2: Parquet:     save:        1.64             9.42
+    3: Stata:       use:         0.10
+    4: Parquet:     use:         2.92            27.82
 
+    Loading only 5 variables of 100
+    5: Stata:       use:         0.14
+    6: Parquet:     use:         0.17           1.20
 
+. 
+. benchmark_parquet_io_data,      n_cols(1000)    ///
+>                                 n_rows(100000)
+Number of observations (_N) was 0, now 100,000.
+(        100,000,           1,000)
+    1: Stata:       save:        0.17
+    2: Parquet:     save:        1.65             9.98
+    3: Stata:       use:         0.12
+    4: Parquet:     use:         2.27            19.72
 
+    Loading only 5 variables of 1000
+    5: Stata:       use:         0.08
+    6: Parquet:     use:         0.06           0.75
 
 ```
 
@@ -191,6 +222,11 @@ Number of observations (_N) was 0, now 10,000.
 
 Benchmark code:
 ```
+//  If you don't care about all the options, here's the simplest version 
+//      of how to work with parquet files
+
+
+capture program drop benchmark_parquet_io_data
 program define benchmark_parquet_io_data
 	version 16
 	syntax		, 	n_cols(integer)			///
@@ -217,6 +253,11 @@ program define benchmark_parquet_io_data
 		}
 	}
 	
+	local n_to_load = 5
+	local subset_to_load
+	forvalues i=1/`n_to_load' {
+		local subset_to_load `subset_to_load' c_`i'
+	}
 	
 	
 	
@@ -245,21 +286,40 @@ program define benchmark_parquet_io_data
 		timer on 4
 		di `"pq use "`path_save_root'.parquet", clear"'
 		pq use "`path_save_root'.parquet", clear
-		
 		timer off 4
+		
+		
+		di "use stata"
+		timer on 5
+		use `subset_to_load' using "`path_save_root'.dta", clear
+		timer off 5
+		
+		di "use parquet"
+		timer on 6
+		di `"pq use "`path_save_root'.parquet", clear"'
+		pq use `subset_to_load' using "`path_save_root'.parquet", clear
+		timer off 6
 		
 		timer list
 		local save_stata = r(t1)
 		local save_parquet = r(t2)
 		local use_stata = r(t3)
 		local use_parquet = r(t4)
+		local use_stata_subset = r(t5)
+		local use_parquet_subset = r(t6)
 		local save_ratio = r(t2)/r(t1)
 		local use_ratio = r(t4)/r(t3)
+		local use_ratio_subset = r(t6)/r(t5)
 		noisily di "(" %15.0fc `n_rows' ", " %15.0fc `n_cols' ")"
 		noisily di "	1: Stata:	save:	" %9.2f `save_stata'
 		noisily di "	2: Parquet:	save:	" %9.2f `save_parquet' "	" %9.2f `save_ratio'
 		noisily di "	3: Stata:	use:	" %9.2f `use_stata'
 		noisily di "	4: Parquet:	use:	" %9.2f `use_parquet'  "	" %9.2f `use_ratio'
+		
+		noisily di ""
+		noisily di "	Loading only `n_to_load' variables of `n_cols'"
+		noisily di "	5: Stata:	use:	" %9.2f `use_stata_subset'
+		noisily di "	6: Parquet:	use:	" %9.2f `use_parquet_subset'  "      " %9.2f `use_ratio_subset'
 	}
 	
 	capture erase `path_save_root'.parquet
@@ -267,4 +327,31 @@ program define benchmark_parquet_io_data
 	
 end
 
+
+clear
+set seed 1565225
+
+benchmark_parquet_io_data, 	n_cols(10)	///
+				n_rows(1000)
+				
+
+benchmark_parquet_io_data, 	n_cols(10)	///
+				n_rows(10000)
+
+benchmark_parquet_io_data, 	n_cols(10)	///
+				n_rows(100000)
+				
+				
+benchmark_parquet_io_data, 	n_cols(10)	///
+				n_rows(1000000)
+				
+				
+benchmark_parquet_io_data, 	n_cols(10)	///
+				n_rows(10000000)
+
+benchmark_parquet_io_data, 	n_cols(100)	///
+				n_rows(1000000)
+
+benchmark_parquet_io_data, 	n_cols(1000)	///
+				n_rows(100000)
 ```

@@ -95,7 +95,7 @@ program define benchmark_parquet_io_data
 		noisily di ""
 		noisily di "	Loading only `n_to_load' variables of `n_cols'"
 		noisily di "	5: Stata:	use:	" %9.2f `use_stata_subset'
-		noisily di "	6: Parquet:	use:	" %9.2f `use_parquet_subset'  "	   " %9.2f `use_ratio_subset'
+		noisily di "	6: Parquet:	use:	" %9.2f `use_parquet_subset'  "      " %9.2f `use_ratio_subset'
 	}
 	
 	capture erase `path_save_root'.parquet
@@ -113,7 +113,7 @@ benchmark_parquet_io_data, 	n_cols(10)	///
 
 benchmark_parquet_io_data, 	n_cols(10)	///
 				n_rows(10000)
-				
+
 benchmark_parquet_io_data, 	n_cols(10)	///
 				n_rows(100000)
 				
