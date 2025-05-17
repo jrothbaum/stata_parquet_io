@@ -55,21 +55,15 @@ pq save var1 var2 var3 using filename.parquet, replace
 pq save using filename.parquet, replace in(1/1000)
 pq save using filename.parquet, replace if(value > 100)
 
-* Disable automatic variable renaming (by default restores original Parquet names)
+* Disable automatic variable renaming.  Renaming by default restores original Parquet names from labels if a rename was needed (reserved words like int or variables longer than 32 characters, etc.)
 pq save using filename.parquet, replace noautorename
 ```
 
 ### Examining Parquet Files
 
 ```stata
-* Basic structure information
-pq describe using filename.parquet
-
-* Detailed information including data types
-pq describe using filename.parquet, detailed
-
-* Silent mode (store results without display)
-pq describe using filename.parquet, quietly
+* Basic structure information (detailed and quietly are really for getting slightly more information before calling pq use, but you can use it)
+pq describe using filename.parquet, [detailed quietly]
 ```
 
 ## Advanced Features
