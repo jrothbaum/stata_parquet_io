@@ -235,6 +235,33 @@ capture program drop pq_describe
 program pq_describe, rclass
     version 16.0
     
+	local input_args = `"`0'"'
+
+	// Check if "using" is present in arguments
+    local using_pos = strpos(`" `input_args' "', " using ")
+    
+    if `using_pos' > 0{
+        // 	Extract everything before "using"
+        local pre_using = substr(`"`input_args'"', 1, `using_pos'-1)
+
+		if `"`pre_using'"' != "" {
+			di as error "varlist not allowed"
+			error 101
+		}
+        local rest = substr(`"`input_args'"', `using_pos'+6, .)
+		local 0 = `"using `rest'"'
+        
+        syntax using/ [, quietly detailed]
+    }
+    else {
+        // No "using" - parse everything as filename and options
+        local 0 = `"using `input_args'"'
+        syntax using/ [, quietly detailed]
+        
+        // As intended, pre_using needs to be blank
+
+    }
+
     // Parse syntax
     syntax  using/, 					///
 			[quietly					///
@@ -247,7 +274,7 @@ program pq_describe, rclass
 	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' ""
 
 	
-	local macros_to_return n_row n_columns //	mapping
+	local macros_to_return n_rows n_columns //	mapping
 	forvalues i = 1/`n_columns' {
 		local macros_to_return `macros_to_return' type_`i' name_`i' rename_`i' 
 		
