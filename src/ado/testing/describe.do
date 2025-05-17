@@ -13,6 +13,7 @@ program define test_file
 	use "`path'.dta", clear
 	
 	pq save "`path_save_root'.parquet", replace
+	
 	unab all_vars: *
 	
 	local n_columns_stata = 0

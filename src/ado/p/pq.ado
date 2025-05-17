@@ -349,7 +349,7 @@ program pq_save
 	
 	
     local input_args = `"`0'"'
-    di `"`input_args"'
+    //	di `"`input_args"'
 	// Check if "using" is present in arguments
     local using_pos = strpos(`" `input_args' "', " using ")
     
@@ -375,6 +375,19 @@ program pq_save
 	
 	pq_register_plugin
 	
+	if "`replace'" == "" {
+		//	Check if file exists as file or path
+		quietly local is_file = fileexists("`using'")
+		mata: st_local("is_directory",  strofreal(direxists("`using'")))
+
+		if `is_file' | `is_directory' {
+			di as error "File exists: `using'"
+			di as error `" 	Add ", replace" if you want to overwrite the file"'
+			error 602
+		}
+	}
+
+
 	local StataColumnInfo from_macros
 	local var_count = 0
 	local n_rename = 0
