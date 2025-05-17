@@ -83,18 +83,6 @@ By default, stata_parquet_io will use all the threads available on the computer.
 Parquet files can have much more flexible variable names than Stata, including spaces, dashes, pretty much anything.  They also isn't really a limit to the length of a variable name for a parquet file.  Stata variable names are limited to 32 alphanumeric characters. 
  When reading Parquet files, the original column names are preserved in variable labels. When saving back to Parquet, the package automatically restores the original Parquet column names unless the `noautorename` option is specified.
 
-### Return Values
-
-The `pq describe` command returns details about the Parquet file structure that can be accessed via Stata's `r()` values:
-
-```stata
-pq describe using filename.parquet, quietly
-display r(n_rows)       // Number of rows
-display r(n_columns)    // Number of columns
-display r(name_1)       // Name of first column
-display r(type_1)       // Data type of first column
-```
-
 ## Technical Details
 
 This package uses a plugin based on the *blazingly-fast* (as required for all Rust packages, but also true in at least this case) [Polars](https://github.com/pola-rs/polars) library to handle Parquet files efficiently.  Polars is being developed by [Ritchie Vink](https://www.ritchievink.com/) and many others.
