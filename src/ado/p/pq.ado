@@ -202,9 +202,10 @@ program pq_use, rclass
 	local matched_vars `match_vars_non_binary'
 
 	local offset = max(0,`offset' - 1)
-	local n_rows = `offset' + `row_to_read'
+	//	local n_rows = `offset' + `row_to_read'
 
-	plugin call polars_parquet_plugin, read "`using'" "from_macro" `n_rows' `offset' `"`sql_if'"' `"`mapping'"'
+	//	di `"plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' "`mapping'""'
+	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"'
 
 	
 	if ("`strl_var_indexes'" != "") {
