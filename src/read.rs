@@ -153,6 +153,7 @@ pub fn read_to_stata(
     mapping: &str,
     parallel_strategy: Option<ParallelizationStrategy>,
 ) -> Result<i32, Box<dyn Error>> {
+
     // Handle empty variable list by getting from macros
     let variables_as_str = if variables_as_str.is_empty() || variables_as_str == "from_macro" {
         &get_macro("matched_vars", false, Some(1024 * 1024 * 10))
@@ -244,6 +245,11 @@ pub fn read_to_stata(
     
     // Process data in batches
     set_macro("n_batches", &n_batches.to_string(), false);
+
+
+    // display(&format!("Batches: {}", n_batches));
+    // display(&format!("Offset: {}", offset));
+    // display(&format!("Rows: {}", n_rows));
     for batchi in 0..n_batches {
         let mut df_batch = df.clone()
                                         .select(&columns);
@@ -279,7 +285,7 @@ pub fn read_to_stata(
         // Process the batch with the selected parallelization strategy
         match process_batch_with_strategy(
             &batch_df, 
-            batch_offseti, 
+            batch_offseti - offset, //  The index to assign to ignores the offset in the original data
             &all_columns,
             strategy,
             n_threads,
