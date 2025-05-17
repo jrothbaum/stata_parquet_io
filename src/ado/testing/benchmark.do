@@ -1,7 +1,3 @@
-//  If you don't care about all the options, here's the simplest version 
-//      of how to work with parquet files
-
-
 capture program drop benchmark_parquet_io_data
 program define benchmark_parquet_io_data
 	version 16
