@@ -99,23 +99,33 @@ pub fn write_from_stata(
         a_scan_arc,
         ScanArgsAnonymous::default()
     );
-    let lf_unwrapped = lf.unwrap();
-    
+    let lf_unwrapped = lf.unwrap().with_new_streaming(true);
     let sink_target = SinkTarget::Path(Arc::new(PathBuf::from(path)));
-    match lf_unwrapped.sink_parquet(
+
+    // First set up the sink and handle potential errors there
+    let result_lf = match lf_unwrapped.sink_parquet(
         sink_target, 
         ParquetWriteOptions::default(),
-         None,
-        SinkOptions::default()).unwrap().collect() {
+        None,
+        SinkOptions::default()) {
             Err(e) => {
-                display(&format!("Parquet write error: {}", e));
-                Ok(198)
+                display(&format!("Parquet sink setup error: {}", e));
+                return Ok(198);
             },
-            Ok(_) => {
-                display(&format!("File saved to {}", path));
-                Ok(0)
-            }
+            Ok(lf) => lf,
+        };
+
+    // Then trigger execution with collect and handle those errors
+    match result_lf.collect() {
+        Err(e) => {
+            display(&format!("Parquet write error during collection: {}", e));
+            Ok(198)
+        },
+        Ok(_) => {
+            display(&format!("File saved to {}", path));
+            Ok(0)
         }
+    }
 }
 
 fn get_rename_list() -> HashMap<PlSmallStr,PlSmallStr> {

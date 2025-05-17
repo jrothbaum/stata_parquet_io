@@ -178,8 +178,8 @@ program pq_use, rclass
 			local keep = 0
 		}
 		else if ("`type'" == "strl") {
-			local strl_var_indexes `strl_var_indexes' `var_number'
 			local strl_position_`var_number' = `var_number' - `dropped_vars'
+			local strl_var_indexes `strl_var_indexes' `var_number'
 			quietly gen strL `name_to_create' = ""
 		}
 		else {
@@ -210,11 +210,12 @@ program pq_use, rclass
 	if ("`strl_var_indexes'" != "") {
 		di "Slowly processing strL variables"
 		foreach var_indexi in `strl_var_indexes' {
+			local lookup_number `strl_position_`var_indexi''
 			forvalues batchi = 1/`n_batches' {
-				local pathi `strl_path_`var_indexi'_`batchi''
-				local namei `strl_name_`var_indexi'_`batchi''
-				local starti `strl_start_`var_indexi'_`batchi''
-				local endi `strl_end_`var_indexi'_`batchi''
+				local pathi `strl_path_`lookup_number'_`batchi''
+				local namei `strl_name_`lookup_number'_`batchi''
+				local starti `strl_start_`lookup_number'_`batchi''
+				local endi `strl_end_`lookup_number'_`batchi''
 
 				if `batchi' == 1 {
 					di "	`namei'"
