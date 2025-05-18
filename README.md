@@ -48,7 +48,7 @@ pq use x* using filename.parquet, clear
 * Save entire dataset
 pq save using filename.parquet, replace
 
-* Save specific variables (STILL UNDER DEVELOPMENT AND TESTING)
+* Save specific variables
 pq save var1 var2 var3 using filename.parquet, replace
 
 * Save a subset of observations
