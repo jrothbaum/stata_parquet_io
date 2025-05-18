@@ -71,6 +71,22 @@ program define in_test_parquet_io_data
 		compare_files `all_vars'
 		di _newline(2)
 	
+	
+		/*
+		di "Test in on save"
+		pq use "`path_save_root'.parquet", clear
+		pq save "`path_save_root'_subset.parquet", replace in(`in_set`i'')
+		
+		pq use "`path_save_root'_subset.parquet", clear
+		rename * *_pq
+		quietly merge 1:1 _n using "`path_save_root'.dta", nogen
+
+		di "N for `in_set`i'':	" _N
+		di "Disagreements in for `in_set`i'':"
+		compare_files `all_vars'
+
+		di _newline(2)
+		*/
 	}
 	
 	
@@ -91,8 +107,9 @@ program define in_test_parquet_io_data
 	
 	
 	
-	//	capture erase `path_save_root'.parquet
-	//	capture erase `path_save_root'.dta
+	capture erase `path_save_root'.parquet
+	//	capture erase `path_save_root'_subset.parquet
+	capture erase `path_save_root'.dta
 	
 end
 

@@ -57,9 +57,6 @@ and can significantly improve performance compared to reading all data and then 
 {opt replace} permits {cmd:pq save} to overwrite an existing Parquet file.
 
 {phang}
-{opt in(range)} specifies a subset of rows to save, using the same format as in {cmd:pq use}.
-
-{phang}
 {opt if(expression)} saves only rows that satisfy the specified condition.
 
 {phang}

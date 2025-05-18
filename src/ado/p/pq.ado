@@ -25,7 +25,7 @@ program define pq
 end
 
 capture program drop pq_use
-program pq_use, rclass
+program pq_use
     version 16.0
     
     local input_args = `"`0'"'
@@ -38,13 +38,14 @@ program pq_use, rclass
         local namelist = substr(`"`input_args'"', 1, `using_pos'-1)
         local rest = substr(`"`input_args'"', `using_pos'+6, .)
 		local 0 = `"using `rest'"'
-        
-        syntax using/ [, clear in(string) if(string)]
+
+        syntax using/ [, clear in(string) if(string asis)]
     }
     else {
         // No "using" - parse everything as filename and options
         local 0 = `"using `input_args'"'
-        syntax using/ [, clear in(string) if(string)]
+
+        syntax using/ [, clear in(string) if(string asis)]
         
         // namelist is empty since no "using" separator
         local namelist ""
@@ -58,7 +59,6 @@ program pq_use, rclass
 	}
 	
 	if ("`in'" != "") {
-		
 		local offset = substr("`in'", 1, strpos("`in'", "/") -1)
 		local offset = max(`offset',0)
 		local last_n = substr("`in'", strpos("`in'", "/") + 1, .)
@@ -71,16 +71,24 @@ program pq_use, rclass
 	
 	//	Process the if statement, if passed
 	if (`"`if'"' != "") {
+		local greater_than = strpos(`"`if'"', ">") > 0
+		if (`greater_than') {
+			di as error "pq will interpret > as in SQL, which is different than Stata."
+			di as error "	It will not include . as > any value."
+		}
+		//	di `"plugin call polars_parquet_plugin, if "`if'""'
 		plugin call polars_parquet_plugin, if `"`if'"'
 	}
 	else {
 		local sql_if
 	}
 	
+	//	di `"if: `sql_if'"'
 	//	Initialize "mapping" to tell plugin to read from macro variables
 	local mapping from_macros
 	local b_quiet = 1
 	local b_detailed = 1
+	//	di `"plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "`sql_if'""'
 	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"'
 	
 	local vars_in_file
@@ -110,7 +118,7 @@ program pq_use, rclass
 		local matched_vars = r(matched_vars)
 		local match_all = 0
     }
-
+	
 	//	Create the empty data
 	if (`last_n' == 0)	local last_n = `n_rows'
 	local row_to_read = max(0,min(`n_rows',`last_n') - `offset' + (`offset' > 0))
@@ -158,7 +166,9 @@ program pq_use, rclass
 	
 		local keep = 1
 		local strl_limit = 2045
+
 		if ("`type'" == "string") {
+			local string_length = max(1,`string_length')
 			quietly gen str`string_length' `name_to_create' = ""
 		}
 		else if ("`type'" == "datetime") {
@@ -204,7 +214,7 @@ program pq_use, rclass
 	local offset = max(0,`offset' - 1)
 	//	local n_rows = `offset' + `row_to_read'
 
-	//	di `"plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' "`mapping'""'
+	//	di `"plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' "`sql_if'" "`mapping'""'
 	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"'
 
 	
@@ -362,18 +372,20 @@ program pq_save
 		local rest = substr(`"`input_args'"', `using_pos'+6, .)
 
 		local 0 = `"`varlist' using `rest'"'
-		syntax varlist using/ [, replace in(string) if(string) NOAUTORENAME]
+		syntax varlist using/ [, replace if(string asis) NOAUTORENAME]	//	in(string)
 
     }
     else {
         // No "using" - parse everything as filename and options
         local 0 = `"* using `input_args'"'
 		
-        syntax varlist using/ [, replace in(string) if(string) NOAUTORENAME]
+        syntax varlist using/ [, replace if(string asis) NOAUTORENAME]	//	in(string) 
         
         // namelist is empty since no "using" separator
     }
 	
+	//	Currently not available to have an in statement on write
+	local in
 	pq_register_plugin
 	
 	if "`replace'" == "" {
@@ -448,6 +460,12 @@ program pq_save
 	
 	//	Process the if statement, if passed
 	if (`"`if'"' != "") {
+		local greater_than = strpos(`"`if'"', ">") > 0
+		if (`greater_than') {
+			di as error "pq will interpret > as in SQL, which is different than Stata."
+			di as error "	It will not include . as > any value."
+		}
+
 		plugin call polars_parquet_plugin, if `"`if'"'
 	}
 	else {

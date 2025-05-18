@@ -76,6 +76,8 @@ program define in_test_parquet_io_data
 		di `"keep if `if_set`i''"'
 		keep if `if_set`i''
 		save "`path_save_root'.dta", replace
+		
+		di "Test if on load"
 		pq use "`path_save_root'.parquet", clear if(`if_set`i'')
 		
 		
@@ -87,20 +89,55 @@ program define in_test_parquet_io_data
 		di `"N for `if_set`i'':	"' _N
 		di `"Disagreements in for `if_set`i'':"'
 		compare_files `all_vars'
+
 		di _newline(2)
+		
+		
+		
+		
+		
+		di "Test if on save"
+		pq use "`path_save_root'.parquet", clear
+		pq save "`path_save_root'_subset.parquet", replace if(`if_set`i'')
+		
+		pq use "`path_save_root'_subset.parquet", clear
+		rename * *_pq
+		quietly merge 1:1 _n using "`path_save_root'.dta", nogen
+
+		di `"N for `if_set`i'':	"' _N
+		di `"Disagreements in for `if_set`i'':"'
+		compare_files `all_vars'
+
+		di _newline(2)
+		
 	}
 	
 	
 	
 	
+	di "Test saving a subset of variables"
+	pq use "`path_save_root'.parquet", clear
+	pq save c_1 c_2 c_3 using "`path_save_root'_subset.parquet", replace
+	pq use "`path_save_root'_subset.parquet", clear
+	sum
+	
+	
+	pq use "`path_save_root'.parquet", clear
+	pq save c_* using "`path_save_root'_subset.parquet", replace
+	pq use "`path_save_root'_subset.parquet", clear
+	sum
+	
+	pq use "`path_save_root'.parquet", clear
+	pq save c_1-c_3 using "`path_save_root'_subset.parquet", replace
+	pq use "`path_save_root'_subset.parquet", clear
+	sum
 	
 	
 	
 	
-	
-	
-	//	capture erase `path_save_root'.parquet
-	//	capture erase `path_save_root'.dta
+	capture erase `path_save_root'.parquet
+	capture erase `path_save_root'_subset.parquet
+	capture erase `path_save_root'.dta
 	
 end
 
