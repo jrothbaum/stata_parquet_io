@@ -485,12 +485,12 @@ fn process_column(
             } else {
                 let error_found = AtomicBool::new(false);
 
-                let values: Vec<Option<String>> = if parallelize_rows {    
-                    // Process rows in parallel
+                let values: Vec<Option<String>> = if parallelize_rows {
+                    //  Never parallelize strl reads    
                     (0..n_rows_to_read)
-                        .into_par_iter()
                         .map(|row_idx| {
                             let row = offset + row_idx + 1;
+                            
                             match stata_interface::read_string_strl(col_idx + 1, row) {
                                 Ok(val) => Some(val),
                                 Err(_) => {
@@ -499,7 +499,7 @@ fn process_column(
                                         &format!("{} ({},{}): binary value found where string expected in strl variable, saving as blank",
                                         col_name,
                                         row,
-                                        col_idx
+                                        col_idx + 1
                                     )); 
                                     None
                                 }
@@ -511,10 +511,16 @@ fn process_column(
                     (0..n_rows_to_read)
                         .map(|row_idx| {
                             let row = offset + row_idx + 1;
+                            
                             match stata_interface::read_string_strl(col_idx + 1, row) {
                                 Ok(val) => Some(val),
                                 Err(_) => {
-                                    error_found.store(true, Ordering::Relaxed); 
+                                    display(
+                                        &format!("{} ({},{}): binary value found where string expected in strl variable, saving as blank",
+                                        col_name,
+                                        row,
+                                        col_idx + 1
+                                    )); 
                                     None
                                 }
                             }
@@ -598,13 +604,14 @@ fn read_single_batch(
     let rows_remaining = sds.n_rows - offset;
     let n_rows_to_read = std::cmp::min(n_rows, rows_remaining);
     
-    // Configure thread pool
+    //  Configure thread pool
     let n_threads = if n_rows_to_read < 100_000 {
         1 as usize
     } else {
         get_thread_count()
     };
-
+    
+    
     let strategy = parallel_strategy.unwrap_or_else(|| {
         determine_parallelization_strategy(
             sds.schema.len(),
