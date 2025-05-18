@@ -457,7 +457,7 @@ impl StataToSqlConverter {
         match expr {
             Expr::Identifier(name) => Ok(name.clone()),
             Expr::Number(n) => Ok(n.to_string()),
-            Expr::String(s) => Ok(format!("'{}'", s.replace("'", "''"))),
+            Expr::String(s) => Ok(format!("'{}'", s.replace("'", "''").replace("\\\"", "''"))),
             Expr::BinaryOp { left, operator, right } => {
                 let left_sql = self.convert(left)?;
                 let right_sql = self.convert(right)?;

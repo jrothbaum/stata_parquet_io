@@ -27,7 +27,8 @@ program define in_test_parquet_io_data
 	if `n_cols' > `cols_created' {
 		local cols_created = `cols_created' + 1
 		forvalues ci = `cols_created'/`n_cols' {
-			quietly gen c_`ci' = rnormal()
+			local n_not_missing = (`n_rows'*(1-0.1*runiform()))
+			quietly gen c_`ci' = rnormal() if _n < `n_not_missing'
 		}
 	}
 	
@@ -39,26 +40,43 @@ program define in_test_parquet_io_data
 	
 	
 	
+	//	Several if statements
+	local n_if = 1
+	local if_set`n_if' (c_3 > 0 & !missing(c_3))
 	
-	//	Several in sets
-	local n_tenth = floor(`n_rows'/10)
-	local n_in = 1
-	local in_set`n_in' 1/`n_tenth'
+	local n_if = `n_if' + 1
+	local if_set`n_if' (c_3 > 0 & !missing(c_3)) & c_4 < 0
+	
+	local n_if = `n_if' + 1
+	local if_set`n_if' (c_3 > 0 & !missing(c_3)) | c_4 < 0
+	
+	local n_if = `n_if' + 1
+	local if_set`n_if' (c_3 > 0 & !missing(c_3)) | c_4 < 0 & !missing(c_5)
+	
+	local n_if = `n_if' + 1
+	local if_set`n_if' (inrange(c_3, 0.5,1))
+	
+	local n_if = `n_if' + 1
+	local if_set`n_if' inlist(c_1, 100,101, 500)
+	
+	local n_if = `n_if' + 1
+	local if_set`n_if' c_2 == "A"
+	
+	local n_if = `n_if' + 1
+	local if_set`n_if' c_2 == "B" & !missing(c_4) & (c_5 > 100 & !missing(c_5))
 	
 	
-	local n_in = `n_in' + 1
-	local lower_n = (`n_tenth' + 1)
-	local upper_n = (2*`n_tenth')
-	local in_set`n_in' `lower_n'/`upper_n'
+	local n_if = `n_if' + 1
+	local if_set`n_if' c_2 == "B" & !missing(c_4) & c_5 > 100
 	
 	
-	forvalues i = 1/`n_in' {
+	forvalues i = 1/`n_if' {
 		pq use "`path_save_root'.parquet", clear 
 		count
-		di "keep in `in_set`i''"
-		keep in `in_set`i''
+		di `"keep if `if_set`i''"'
+		keep if `if_set`i''
 		save "`path_save_root'.dta", replace
-		pq use "`path_save_root'.parquet", clear in(`in_set`i'')
+		pq use "`path_save_root'.parquet", clear if(`if_set`i'')
 		
 		
 		unab all_vars: *
@@ -66,21 +84,11 @@ program define in_test_parquet_io_data
 		quietly merge 1:1 _n using "`path_save_root'.dta", nogen
 
 		
-		di "N for `in_set`i'':	" _N
-		di "Disagreements in for `in_set`i'':"
+		di `"N for `if_set`i'':	"' _N
+		di `"Disagreements in for `if_set`i'':"'
 		compare_files `all_vars'
 		di _newline(2)
-	
 	}
-	
-	
-	local out_of_range_start = `n_rows' - `n_tenth'/2 + 1
-	local out_of_range_end = `n_rows' + `n_tenth'/2
-	di "Test of read beyond `n_rows'"
-	pq use "`path_save_root'.parquet", clear in(`out_of_range_start'/`out_of_range_end')
-	count
-	sum
-	di "Rows: " _N
 	
 	
 	
