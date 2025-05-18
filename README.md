@@ -11,8 +11,8 @@
 - Automatic handling of data types between Stata and Parquet
 - Preserves original Parquet column names
 
-## Installation (PENDING)
-- Current status - github actions create the proper files for Windows, Linux, and Mac.  I have successfully tested that the linux files work.  I need to test that Github version of the Windows build works (it works when compiled locally - just need to test that the Github version does, too).
+## Installation
+- Current status - github actions create the proper files for Windows, Linux, and Mac.  I have successfully tested that the Linux and Windows github build files work.  I will soon submit them for download via SSC.
 
 ```stata
 * Option 1: Install from SSC (when available)
@@ -51,8 +51,7 @@ pq save using filename.parquet, replace
 * Save specific variables (STILL UNDER DEVELOPMENT AND TESTING)
 pq save var1 var2 var3 using filename.parquet, replace
 
-* Save with observation filtering (STILL UNDER DEVELOPMENT AND TESTING)
-pq save using filename.parquet, replace in(1/1000)
+* Save a subset of observations
 pq save using filename.parquet, replace if(value > 100)
 
 * Disable automatic variable renaming.  Renaming by default restores original Parquet names from labels if a rename was needed (reserved words like int or variables longer than 32 characters, etc.)
