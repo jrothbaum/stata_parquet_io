@@ -791,9 +791,21 @@ fn process_strl_column(
     let sink_target = SinkTarget::Path(Arc::new(PathBuf::from(path)));
     let mut csv_options = CsvWriterOptions::default();
     csv_options.include_header = false;
-    match batch.select([&column_name.to_string()])
-                                                  .unwrap()
-                                                  .lazy()
+    csv_options.serialize_options.quote_style = QuoteStyle::Never;
+
+    let processed = batch.clone().lazy()
+        .select([
+            col(&column_name.to_string())
+                // Encode internal newlines as visible escape sequences
+                .str().replace_all(lit("\n"), lit("\\n"), false) 
+                .str().replace_all(lit("\r"), lit("\\r"), false)
+                .str().replace_all(lit("\""), lit("'"), false)
+                .alias(&column_name.to_string())
+        ])
+        .collect()
+        .unwrap();
+
+    match processed.lazy()
                                                   .sink_csv(
                                                     sink_target,
                                                     csv_options,
