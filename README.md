@@ -15,11 +15,11 @@
 - Current status - github actions create the proper files for Windows, Linux, and Mac.  I have successfully tested that the Linux and Windows github build files work.  I will soon submit them for download via SSC.
 
 ```stata
-* Option 1: Install from SSC (when available)
+* Option 1: Install from SSC (when available - not yet)
 ssc install pq
 
 * Option 2: Manual installation
-* Download the package files and place them in your PLUS directory
+* Download the package files from the latest build at https://github.com/jrothbaum/stata_parquet_io/actions and place them in your PLUS directory
 * The plugin files should be placed in the 'p' folder within your PLUS directory
 ```
 
