@@ -2835,10 +2835,12 @@ name = "stata_parquet_io"
 version = "0.1.0"
 dependencies = [
  "env_logger",
+ "glob",
  "log",
  "polars",
  "polars-sql",
  "rayon",
+ "regex",
  "serde",
  "serde_json",
  "stata-sys",

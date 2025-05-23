@@ -56,3 +56,6 @@ end
 
 
 test_file, path(C:\Users\jonro\Downloads\random_types)
+
+
+pq use "C:\Users\jonro\Downloads\random_types_partitioned.parquet\**.parquet", clear

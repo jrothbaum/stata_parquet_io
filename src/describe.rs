@@ -18,9 +18,15 @@ pub fn file_summary(
     path:&str,
     quietly:bool,
     detailed:bool,
-    sql_if:Option<&str>
+    sql_if:Option<&str>,
+    safe_relaxed: Option<bool>, 
+    asterisk_to_variable_name: Option<&str>
 ) -> i32 {
-    let mut df = match scan_lazyframe(&path) {
+    let mut df = match scan_lazyframe(
+        &path,
+        safe_relaxed,
+        asterisk_to_variable_name,
+    ) {
         Ok(df) => df,
         Err(e) => {
             display(&format!("Error scanning lazyframe: {:?}", e));

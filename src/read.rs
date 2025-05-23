@@ -9,6 +9,8 @@ use polars::datatypes::{AnyValue, TimeUnit};
 use std::error::Error;
 use serde_json;
 use std::collections::HashSet;
+use glob::glob;
+use regex::Regex;
 
 use crate::mapping::ColumnInfo;
 use crate::stata_interface::{
@@ -129,20 +131,335 @@ impl ToStataValue for DatetimeValue {
     }
 }
 
-pub fn file_exists_and_is_file(path: &str) -> bool {
-    let path = Path::new(path);
-    path.exists() && path.is_file()
+pub fn data_exists(path: &str) -> bool {
+    let path_obj = Path::new(path);
+    
+    // display(&format!("=== DEBUG: Checking path: {}", path));
+    // display(&format!("=== DEBUG: Path exists: {}", path_obj.exists()));
+    // display(&format!("=== DEBUG: Is file: {}", path_obj.is_file()));
+    // display(&format!("=== DEBUG: Is dir: {}", path_obj.is_dir()));
+    
+    // Check if it's a regular file
+    if path_obj.exists() && path_obj.is_file() {
+        //  display(&format!("=== DEBUG: Detected as regular file"));
+        return true;
+    }
+    
+    // Check if it's a hive partitioned directory with parquet files
+    if path_obj.exists() && path_obj.is_dir() {
+        //  display(&format!("=== DEBUG: Detected as directory, checking for hive structure"));
+        let result = has_parquet_files_in_hive_structure(path);
+        //  display(&format!("=== DEBUG: Hive structure check result: {}", result));
+        return result;
+    }
+    
+    // Check if it's a glob pattern that matches files
+    //  display(&format!("=== DEBUG: Checking as glob pattern"));
+    let result = is_valid_glob_pattern(path);
+    //  display(&format!("=== DEBUG: Glob pattern check result: {}", result));
+    result
 }
 
-pub fn scan_lazyframe(path:&str) -> Result<LazyFrame,PolarsError> {
-    let mut df = LazyFrame::scan_parquet(path, ScanArgsParquet::default());
-
-    //  let schema = df.as_mut().unwrap().collect_schema();
-
-    //    println!("schema = {:?}", schema);
-
-    df
+fn has_parquet_files_in_hive_structure(dir_path: &str) -> bool {
+    let mut glob_pattern = String::from(dir_path);
+    
+    // Remove trailing slash if present
+    if glob_pattern.ends_with('/') {
+        glob_pattern.pop();
+    }
+    
+    // Normalize for Windows
+    if cfg!(windows) {
+        glob_pattern = glob_pattern.replace('\\', "/");
+    }
+    
+    //  display(&format!("=== DEBUG: Checking hive structure in: {}", glob_pattern));
+    
+    // Check common hive patterns
+    let test_patterns = vec![
+        format!("{}/**/*.parquet", glob_pattern),
+        format!("{}/*/*.parquet", glob_pattern),
+        format!("{}/*/*/*.parquet", glob_pattern),
+        format!("{}/*.parquet", glob_pattern), // Direct parquet files in directory
+    ];
+    
+    // Return true if any pattern finds files
+    for pattern in test_patterns {
+        //  display(&format!("=== DEBUG: Testing hive pattern: {}", pattern));
+        if let Ok(mut paths) = glob(&pattern) {
+            if let Some(first_file) = paths.next() {
+                match first_file {
+                    Ok(file_path) => {
+                        //  display(&format!("=== DEBUG: Found hive file: {:?}", file_path));
+                        return true;
+                    },
+                    Err(e) => {
+                        //  display(&format!("=== DEBUG: Error reading file in pattern {}: {:?}", pattern, e));
+                    }
+                }
+            }
+        } else {
+            //  display(&format!("=== DEBUG: Pattern failed: {}", pattern));
+        }
+    }
+    
+    //  display(&format!("=== DEBUG: No parquet files found in hive structure"));
+    false
 }
+
+fn is_valid_glob_pattern(glob_path: &str) -> bool {
+    // Only check glob patterns (must contain glob characters)
+    if !glob_path.contains('*') && !glob_path.contains('?') && !glob_path.contains('[') {
+        return false;
+    }
+    
+    // Fix common recursive wildcard pattern errors
+    let mut normalized_pattern = if cfg!(windows) {
+        glob_path.replace('\\', "/")
+    } else {
+        glob_path.to_string()
+    };
+    
+    // Fix "**.ext" to "**/*.ext" (recursive wildcards must be their own component)
+    if normalized_pattern.contains("**.") {
+        normalized_pattern = normalized_pattern.replace("**.", "**/*.");
+    }
+    
+    // Check if glob pattern matches any files
+    match glob(&normalized_pattern) {
+        Ok(paths) => {
+            let found_files: Vec<_> = paths.filter_map(Result::ok).collect();
+            
+            // // Debug output (remove in production)
+            // #[cfg(debug_assertions)]
+            // {
+            //     println!("Original pattern: {}", glob_path);
+            //     println!("Normalized pattern: {}", normalized_pattern);
+            //     println!("Found files: {:?}", found_files);
+            // }
+            
+            !found_files.is_empty()
+        },
+        Err(e) => {
+            #[cfg(debug_assertions)]
+            println!("Glob error for pattern '{}': {:?}", normalized_pattern, e);
+            false
+        }
+    }
+}
+
+
+pub fn scan_lazyframe(
+    path: &str, 
+    safe_relaxed: Option<bool>, 
+    asterisk_to_variable_name: Option<&str>
+) -> Result<LazyFrame, PolarsError> {
+    let path_obj = Path::new(path);
+    
+    // Check if it's a directory (hive partitioned dataset)
+    if path_obj.is_dir() {
+        return scan_hive_partitioned(path);
+    }
+    
+    // Handle glob patterns with special options
+    match (safe_relaxed.unwrap_or(false), asterisk_to_variable_name) {
+        (true, _) => scan_with_diagonal_relaxed(path),
+        (_, Some(var_name)) => scan_with_filename_extraction(path, var_name),
+        _ => {
+            // Default behavior - direct scan_parquet on glob (with pattern normalization)
+            let mut normalized_pattern = if cfg!(windows) {
+                path.replace('\\', "/")
+            } else {
+                path.to_string()
+            };
+            
+            // Fix "**.ext" to "**/*.ext"
+            if normalized_pattern.contains("**.") {
+                normalized_pattern = normalized_pattern.replace("**.", "**/*.");
+            }
+            
+            LazyFrame::scan_parquet(&normalized_pattern, ScanArgsParquet::default())
+        }
+    }
+}
+
+fn scan_hive_partitioned(dir_path: &str) -> Result<LazyFrame, PolarsError> {
+    // Detect hive partitioning structure and create appropriate glob
+    let mut glob_pattern = String::from(dir_path);
+    
+    // Remove trailing slash if present
+    if glob_pattern.ends_with('/') {
+        glob_pattern.pop();
+    }
+    
+    // Normalize for Windows
+    if cfg!(windows) {
+        glob_pattern = glob_pattern.replace('\\', "/");
+    }
+    
+    // Check for common hive patterns
+    let test_patterns = vec![
+        format!("{}/**/*.parquet", glob_pattern),
+        format!("{}/*/*.parquet", glob_pattern),
+        format!("{}/*/*/*.parquet", glob_pattern),
+    ];
+    
+    // Find the pattern that matches files
+    for pattern in test_patterns {
+        if let Ok(paths) = glob(&pattern) {
+            let files: Vec<_> = paths.filter_map(Result::ok).collect();
+            if !files.is_empty() {
+                return LazyFrame::scan_parquet(&pattern, ScanArgsParquet::default());
+            }
+        }
+    }
+    
+    Err(PolarsError::ComputeError(format!("No parquet files found in hive partitioned structure: {}", dir_path).into()))
+}
+
+fn scan_with_diagonal_relaxed(glob_path: &str) -> Result<LazyFrame, PolarsError> {
+    // Normalize pattern for Windows and fix recursive wildcards
+    let mut normalized_pattern = if cfg!(windows) {
+        glob_path.replace('\\', "/")
+    } else {
+        glob_path.to_string()
+    };
+    
+    // Fix "**.ext" to "**/*.ext"
+    if normalized_pattern.contains("**.") {
+        normalized_pattern = normalized_pattern.replace("**.", "**/*.");
+    }
+    
+    // Get all matching files
+    let paths = glob(&normalized_pattern)
+        .map_err(|e| PolarsError::ComputeError(format!("Invalid glob pattern: {}", e).into()))?;
+        
+    let file_paths: Result<Vec<PathBuf>, _> = paths.collect();
+    let file_paths = file_paths
+        .map_err(|e| PolarsError::ComputeError(format!("Failed to read glob results: {}", e).into()))?;
+    
+    if file_paths.is_empty() {
+        return Err(PolarsError::ComputeError(format!("No files found matching pattern: {}", normalized_pattern).into()));
+    }
+    
+    // Create individual lazy frames for each file
+    let lazy_frames: Result<Vec<LazyFrame>, PolarsError> = file_paths
+        .iter()
+        .map(|path| {
+            LazyFrame::scan_parquet(
+                path.to_string_lossy().as_ref(), 
+                ScanArgsParquet::default()
+            )
+        })
+        .collect();
+    
+    let lazy_frames = lazy_frames?;
+    
+    // Concatenate with diagonal relaxed
+    concat(
+        lazy_frames,
+        UnionArgs {
+            parallel: true,
+            rechunk: false,
+            to_supertypes: true,
+            diagonal: true,
+            from_partitioned_ds: true,
+            maintain_order: true,
+        }
+    )
+}
+
+fn scan_with_filename_extraction(
+    glob_path: &str, 
+    variable_name: &str
+) -> Result<LazyFrame, PolarsError> {
+    // Normalize pattern for Windows and fix recursive wildcards
+    let mut normalized_pattern = if cfg!(windows) {
+        glob_path.replace('\\', "/")
+    } else {
+        glob_path.to_string()
+    };
+    
+    // Fix "**.ext" to "**/*.ext"
+    if normalized_pattern.contains("**.") {
+        normalized_pattern = normalized_pattern.replace("**.", "**/*.");
+    }
+    
+    // Parse the normalized glob pattern to find asterisk position
+    let asterisk_pos = normalized_pattern.find('*')
+        .ok_or_else(|| PolarsError::ComputeError("No asterisk found in glob pattern".into()))?;
+    
+    // Create regex pattern from normalized glob
+    let before_asterisk = &normalized_pattern[..asterisk_pos];
+    let after_asterisk = &normalized_pattern[asterisk_pos + 1..];
+    
+    // Escape regex special characters in the parts before/after asterisk
+    let before_escaped = regex::escape(before_asterisk);
+    let after_escaped = regex::escape(after_asterisk);
+    
+    let regex_pattern = format!("{}(.+?){}", before_escaped, after_escaped);
+    let re = Regex::new(&regex_pattern)
+        .map_err(|e| PolarsError::ComputeError(format!("Invalid regex pattern: {}", e).into()))?;
+    
+    // Get all matching files using normalized pattern
+    let paths = glob(&normalized_pattern)
+        .map_err(|e| PolarsError::ComputeError(format!("Invalid glob pattern: {}", e).into()))?;
+        
+    let file_paths: Result<Vec<PathBuf>, _> = paths.collect();
+    let file_paths = file_paths
+        .map_err(|e| PolarsError::ComputeError(format!("Failed to read glob results: {}", e).into()))?;
+    
+    if file_paths.is_empty() {
+        return Err(PolarsError::ComputeError(format!("No files found matching pattern: {}", normalized_pattern).into()));
+    }
+    
+    // Create lazy frames with extracted values
+    let lazy_frames: Result<Vec<LazyFrame>, PolarsError> = file_paths
+        .iter()
+        .map(|path| {
+            let path_str = path.to_string_lossy();
+            // Normalize the path string for regex matching
+            let normalized_path_str = if cfg!(windows) {
+                path_str.replace('\\', "/")
+            } else {
+                path_str.to_string()
+            };
+            
+            // Extract value from filename using regex
+            let extracted_value = re.captures(&normalized_path_str)
+                .and_then(|caps| caps.get(1))
+                .map(|m| m.as_str())
+                .unwrap_or("unknown");
+            
+            // Create lazy frame with extracted column
+            LazyFrame::scan_parquet(
+                path_str.as_ref(), 
+                ScanArgsParquet::default()
+            )
+            .map(|lf| {
+                lf.with_columns([
+                    lit(extracted_value).alias(variable_name)
+                ])
+            })
+        })
+        .collect();
+    
+    let lazy_frames = lazy_frames?;
+    
+    // Concatenate all frames
+    concat(
+        lazy_frames,
+        UnionArgs {
+            parallel: true,
+            rechunk: false,
+            to_supertypes: true,
+            diagonal: true,
+            from_partitioned_ds: true,
+            maintain_order: true,
+        }
+    )
+}
+
 
 pub fn read_to_stata(
     path: &str,
@@ -152,6 +469,8 @@ pub fn read_to_stata(
     sql_if: Option<&str>,
     mapping: &str,
     parallel_strategy: Option<ParallelizationStrategy>,
+    safe_relaxed: Option<bool>, 
+    asterisk_to_variable_name: Option<&str>
 ) -> Result<i32, Box<dyn Error>> {
 
     // Handle empty variable list by getting from macros
@@ -189,7 +508,11 @@ pub fn read_to_stata(
     //  display(&format!("Column information: {:?}", all_columns));
 
     // Scan the parquet file to get a LazyFrame
-    let mut df = match scan_lazyframe(path) {
+    let mut df = match scan_lazyframe(
+        path,
+        safe_relaxed,
+        asterisk_to_variable_name,
+    ) {
         Ok(df) => df,
         Err(e) => {
             display(&format!("Error scanning lazyframe: {:?}", e));

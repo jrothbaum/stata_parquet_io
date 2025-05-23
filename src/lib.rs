@@ -27,7 +27,7 @@ use stata_interface::{
 };
 use describe::file_summary;
 use read::{
-    file_exists_and_is_file,
+    data_exists,
     read_to_stata
 };
 
@@ -93,7 +93,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 return 0 as ST_retcode;
             }
             "read" => {
-                if !file_exists_and_is_file(&subfunction_args[0]) {
+                if !data_exists(&subfunction_args[0]) {
                     stata_interface::display(&format!("File does not exist ({})",subfunction_args[0]));
                     return 601 as ST_retcode;
                 }
@@ -105,6 +105,8 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     subfunction_args[3].parse::<usize>().unwrap(),
                     Some(subfunction_args[4]),
                     subfunction_args[5],
+                    None,
+                    Some(true),
                     None,
                 );
         
@@ -120,7 +122,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
 
             },
             "describe" => {
-                if !file_exists_and_is_file(&subfunction_args[0]) {
+                if !data_exists(&subfunction_args[0]) {
                     stata_interface::display(&format!("File does not exist ({})",subfunction_args[0]));
                     return 601 as ST_retcode;
                 }
@@ -128,7 +130,9 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                         subfunction_args[0],
                         subfunction_args[1].parse::<u8>().unwrap() != 0,
                         subfunction_args[2].parse::<u8>().unwrap() != 0,
-                        Some(subfunction_args[3].as_ref())
+                        Some(subfunction_args[3].as_ref()),
+                        Some(true),
+                        None,
                     ) as ST_retcode;
             },
             "save" => {

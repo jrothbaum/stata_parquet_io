@@ -23,7 +23,8 @@ mod sql_from_if;
 use describe::file_summary; 
 use crate::read::{  
     scan_lazyframe,
-    read_to_stata
+    read_to_stata,
+    data_exists
 };
  
 
@@ -79,83 +80,30 @@ fn main() {
         })
         .init();
 
-        
-    write_test();
-}
-
-
-
-#[cfg(debug_assertions)]
-fn write_test() {
-    let write_param1 = ReadParams::new(
-        r#"C:/Users/jonro/Downloads/test_vs_code.parquet"#.to_owned(),
-        "mychar mynum mydate dtime mylabl myord mytime".to_owned(),
-        0,
-        0,
-        Some("".to_owned()),
-        r#"[{"name":"mychar","dtype":"String","format":"%9s","str_length":1},{"name":"mynum","dtype":"Double","format":"%10.0g","str_length":0},{"name":"mydate","dtype":"Long","format":"%td","str_length":0},{"name":"dtime","dtype":"Double","format":"%tc","str_length":0},{"name":"mylabl","dtype":"Double","format":"%10.0g","str_length":0},{"name":"myord","dtype":"Double","format":"%10.0g","str_length":0},{"name":"mytime","dtype":"Double","format":"%tchh:mm:ss","str_length":0}]"#.to_owned(),
-    );
-
-    let result = write::write_from_stata(
-        &write_param1.path,
-        &write_param1.variables_as_str, 
-        write_param1.n_rows,
-        write_param1.offset,
-        write_param1.sql_if.as_deref(), 
-        &write_param1.mapping,
-        None
-    );
+    _ = test_glob_path();
 }
 
 
 #[cfg(debug_assertions)]
-fn read_test() {
-    let path = "C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample.parquet";
-    let sql_if = sql_from_if::stata_to_sql("mynum > 0 | missing(mynum) | mytime > 1.1").unwrap();
+fn test_glob_path() {
+    let valid1 = data_exists("C:/Users/jonro/Downloads/random_types.parquet");
+    let valid2 = data_exists("C:/Users/jonro/Downloads/random_types_*.parquet");
+    let valid3 = data_exists("C:/Users/jonro/Downloads/random_types_partitioned.parquet");
+    let valid4 = data_exists("C:/Users/jonro/Downloads/random_types_partitioned.parquet/**.parquet");
+
+    let invalid1 = data_exists("C:/Users/jonro/Downloads/random_types_wrong.parquet");
+    let invalid2 = data_exists("C:/Users/jonro/Downloads/random_types_*_test.parquet");
+    let invalid3 = data_exists("C:/Users/jonro/Downloads/random_types__test.parquet/**.parquet");
+
+    println!("valid1 = {:?}",valid1);
+    println!("valid2 = {:?}",valid2);
+    println!("valid3 = {:?}",valid3);
+    println!("valid4 = {:?}",valid4);
+    println!("invalid1 = {:?}",invalid1);
+    println!("invalid2 = {:?}",invalid2);
+    println!("invalid3 = {:?}",invalid3);
     
-    // let read_param1 = ReadParams::new(
-    //     "C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample.parquet".to_owned(),
-    //     "mychar mynum mydate dtime mylabl myord mytime".to_owned(),
-    //     6,
-    //     0,
-    //     Some("".to_owned()),
-    //     r#"[{"name":"mychar","dtype":"String","stata_type":"string"},{"name":"mynum","dtype":"Float64","stata_type":"double"},{"name":"mydate","dtype":"Date","stata_type":"date"},{"name":"dtime","dtype":"Datetime(Milliseconds, None)","stata_type":"datetime"},{"name":"mylabl","dtype":"Float64","stata_type":"double"},{"name":"myord","dtype":"Float64","stata_type":"double"},{"name":"mytime","dtype":"Time","stata_type":"time"}]"#.to_owned(),
-    // );
-
-    let read_param1 = ReadParams::new(
-        r#"C:\Users\jonro\Downloads\flights-1m.parquet"#.to_owned(),
-        "FL_DATE DEP_DELAY ARR_DELAY AIR_TIME DISTANCE DEP_TIME ARR_TIME".to_owned(),
-        10000,
-        0,
-        Some("".to_owned()),
-        r#"[{"name":"FL_DATE","dtype":"Date","stata_type":"date"},{"name":"DEP_DELAY","dtype":"Int16","stata_type":"int"},{"name":"ARR_DELAY","dtype":"Int16","stata_type":"int"},{"name":"AIR_TIME","dtype":"Int16","stata_type":"int"},{"name":"DISTANCE","dtype":"Int16","stata_type":"int"},{"name":"DEP_TIME","dtype":"Float32","stata_type":"float"},{"name":"ARR_TIME","dtype":"Float32","stata_type":"float"}]"#.to_owned(),
-    );
-
-    file_summary(
-        &read_param1.path,
-        false,
-        true,
-        read_param1.sql_if.as_deref()
-    );
-    
-
-    let df = scan_lazyframe(&path).unwrap().collect().unwrap();
-    println!("{}", df);
-
-
-    let read_result = read_to_stata(
-        &read_param1.path,
-        &read_param1.variables_as_str,
-        read_param1.n_rows,
-        read_param1.offset,
-        read_param1.sql_if.as_deref(),
-        &read_param1.mapping,
-        None,
-    );
-    //  test_stata_if_to_sql();
 }
-
-
 
 
 #[cfg(debug_assertions)]
