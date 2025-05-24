@@ -63,6 +63,9 @@ pq save "`tparquet'_2018.parquet", replace
 pq save "`tparquet'_2019.parquet", replace
 
 clear
+
+pq describe "`tparquet'_*.parquet", asterisk_to_variable(year)
+return list
 pq use "`tparquet'_*.parquet", clear asterisk_to_variable(year)
 
 sum

@@ -281,13 +281,10 @@ program pq_describe, rclass
 		}
         local rest = substr(`"`input_args'"', `using_pos'+6, .)
 		local 0 = `"using `rest'"'
-        
-        syntax using/ [, quietly detailed]
     }
     else {
         // No "using" - parse everything as filename and options
         local 0 = `"using `input_args'"'
-        syntax using/ [, quietly detailed]
         
         // As intended, pre_using needs to be blank
 
@@ -296,13 +293,14 @@ program pq_describe, rclass
     // Parse syntax
     syntax  using/, 					///
 			[quietly					///
-			 detailed]
+			 detailed					///
+			 asterisk_to_variable(string)]
 
 	pq_register_plugin
 	local b_quiet = ("`quietly'" != "")
 	local b_detailed = ("`detailed'" != "")
 	
-	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' ""
+	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "" "`asterisk_to_variable'"
 
 	
 	local macros_to_return n_rows n_columns //	mapping
