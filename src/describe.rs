@@ -19,7 +19,7 @@ pub fn file_summary(
     quietly:bool,
     detailed:bool,
     sql_if:Option<&str>,
-    safe_relaxed: Option<bool>, 
+    safe_relaxed: bool, 
     asterisk_to_variable_name: Option<&str>
 ) -> i32 {
     let mut df = match scan_lazyframe(
@@ -42,6 +42,7 @@ pub fn file_summary(
         },
     };
     
+    //  display(&format!("schema: {:?}", schema));
     if let Some(sql) = sql_if.filter(|s| !s.trim().is_empty()) {
         let mut ctx = SQLContext::new();
         ctx.register("df", df);

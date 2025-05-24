@@ -6,6 +6,7 @@ use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::slice;
 use polars::prelude::*;
+use utilities::ParallelizationStrategy;
 
 
 pub mod read;
@@ -98,6 +99,30 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     return 601 as ST_retcode;
                 }
                 
+                // for i in 0..9 {
+                //     display(&format!("{} = {:?}", i,subfunction_args[i]));
+                // }
+                let parallel_strategy:Option<ParallelizationStrategy> = match subfunction_args[6] {
+                    "columns" => Some(ParallelizationStrategy::ByColumn),
+                    "rows" => Some(ParallelizationStrategy::ByRow),
+                    //  Use default based on file dimensions
+                    _ => None
+                };
+
+                
+                let safe_relaxed = match subfunction_args[7] {
+                    "0" => false,
+                    "1" => true,
+                    _ => false
+                };
+
+                let asterisk_to_variable_name = if subfunction_args[8].is_empty() {
+                    None
+                } else {
+                    Some(subfunction_args[8])
+                };
+
+
                 let read_result = read_to_stata(
                     subfunction_args[0],
                     subfunction_args[1],
@@ -105,9 +130,9 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     subfunction_args[3].parse::<usize>().unwrap(),
                     Some(subfunction_args[4]),
                     subfunction_args[5],
-                    None,
-                    Some(true),
-                    None,
+                    parallel_strategy,
+                    safe_relaxed,
+                    asterisk_to_variable_name,
                 );
         
                 // Use match to handle the Result
@@ -126,13 +151,19 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     stata_interface::display(&format!("File does not exist ({})",subfunction_args[0]));
                     return 601 as ST_retcode;
                 }
+
+                let asterisk_to_variable_name = if subfunction_args[4].is_empty() {
+                    None
+                } else {
+                    Some(subfunction_args[4])
+                };
                 return file_summary(
                         subfunction_args[0],
                         subfunction_args[1].parse::<u8>().unwrap() != 0,
                         subfunction_args[2].parse::<u8>().unwrap() != 0,
                         Some(subfunction_args[3].as_ref()),
-                        Some(true),
-                        None,
+                        true,
+                        asterisk_to_variable_name,
                     ) as ST_retcode;
             },
             "save" => {

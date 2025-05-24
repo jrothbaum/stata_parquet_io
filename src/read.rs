@@ -251,7 +251,7 @@ fn is_valid_glob_pattern(glob_path: &str) -> bool {
 
 pub fn scan_lazyframe(
     path: &str, 
-    safe_relaxed: Option<bool>, 
+    safe_relaxed: bool, 
     asterisk_to_variable_name: Option<&str>
 ) -> Result<LazyFrame, PolarsError> {
     let path_obj = Path::new(path);
@@ -262,9 +262,9 @@ pub fn scan_lazyframe(
     }
     
     // Handle glob patterns with special options
-    match (safe_relaxed.unwrap_or(false), asterisk_to_variable_name) {
-        (true, _) => scan_with_diagonal_relaxed(path),
+    match (safe_relaxed, asterisk_to_variable_name) {
         (_, Some(var_name)) => scan_with_filename_extraction(path, var_name),
+        (true, _) => scan_with_diagonal_relaxed(path),
         _ => {
             // Default behavior - direct scan_parquet on glob (with pattern normalization)
             let mut normalized_pattern = if cfg!(windows) {
@@ -437,8 +437,9 @@ fn scan_with_filename_extraction(
                 ScanArgsParquet::default()
             )
             .map(|lf| {
+                //  display(&format!("Matched, {}: {}", variable_name, extracted_value));
                 lf.with_columns([
-                    lit(extracted_value).alias(variable_name)
+                    smart_lit(extracted_value).alias(variable_name)
                 ])
             })
         })
@@ -461,6 +462,23 @@ fn scan_with_filename_extraction(
 }
 
 
+fn smart_lit(value: &str) -> Expr {
+    let trimmed = value.trim();
+    
+    // Try integer
+    if let Ok(int_val) = trimmed.parse::<i64>() {
+        return lit(int_val);
+    }
+    
+    // Try float
+    if let Ok(float_val) = trimmed.parse::<f64>() {
+        return lit(float_val);
+    }
+    
+    // Default to string
+    lit(value)
+}
+
 pub fn read_to_stata(
     path: &str,
     variables_as_str: &str,
@@ -469,7 +487,7 @@ pub fn read_to_stata(
     sql_if: Option<&str>,
     mapping: &str,
     parallel_strategy: Option<ParallelizationStrategy>,
-    safe_relaxed: Option<bool>, 
+    safe_relaxed: bool, 
     asterisk_to_variable_name: Option<&str>
 ) -> Result<i32, Box<dyn Error>> {
 

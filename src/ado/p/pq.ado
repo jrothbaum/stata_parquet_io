@@ -38,24 +38,33 @@ program pq_use
         local namelist = substr(`"`input_args'"', 1, `using_pos'-1)
         local rest = substr(`"`input_args'"', `using_pos'+6, .)
 		local 0 = `"using `rest'"'
-
-        syntax using/ [, clear in(string) if(string asis)]
-    }
+	}
     else {
         // No "using" - parse everything as filename and options
         local 0 = `"using `input_args'"'
-
-        syntax using/ [, clear in(string) if(string asis)]
-        
+    
         // namelist is empty since no "using" separator
         local namelist ""
     }
+
+	syntax using/ [, 	clear 					///
+						in(string) 				///
+						if(string asis) 		///
+						relaxed 				///
+						asterisk_to_variable(string)	///
+						parallelize(string)]
+
     pq_register_plugin
 	`clear'
 	
 	if `=_N' > 0 {
 		display as error "There is already data loaded, pass clear if you want to load a parquet file"
 		exit 2000
+	}
+
+	if (!inlist("`parallelize'", "", "columns", "rows")) {
+		display as error `"Acceptable options for parallelize are "columns", "rows", and "", passed "`parallelize'""'
+		exit 198
 	}
 	
 	if ("`in'" != "") {
@@ -88,8 +97,8 @@ program pq_use
 	local mapping from_macros
 	local b_quiet = 1
 	local b_detailed = 1
-	//	di `"plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "`sql_if'""'
-	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"'
+	//	di `"plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "`sql_if'" "`asterisk_to_variable'""'
+	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'"
 	
 	local vars_in_file
 	local n_renamed = 0
@@ -214,8 +223,19 @@ program pq_use
 	local offset = max(0,`offset' - 1)
 	//	local n_rows = `offset' + `row_to_read'
 
-	//	di `"plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' "`sql_if'" "`mapping'""'
-	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"'
+	//	Tell polars to concatenate file list with "vertical_relaxed"
+	//		so that it can combine different schema types
+	//		to their supertype 
+	//		i.e. if a is an int8 in file 1 and an int16 in file 2,
+	//			it won't throw an error, but make it an int16 in the final file
+	local vertical_relaxed = "`relaxed'" != ""
+
+	//	asterisk_to_variable - for files /file/*.parquet, convert
+	//		* to a variable, so /file/2019.parquet, file/2020.parquet
+	//		will have the item in asterisk_to_variable as 2019 and 2020
+	//		for the records on the file
+	//	di `"plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' "`sql_if'" "`mapping'" "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'""'
+	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'"
 
 	
 	if ("`strl_var_indexes'" != "") {
@@ -526,7 +546,7 @@ program pq_process_strl
 
 	local first = max(`first',1)
 	//	di `"mata: read_strl_block("`path'", `var_index', `first', `last')"'
-	mata: read_strl_block("`path'", `var_index', `first', `last')		
+	mata: read_strl_block("`path'", `var_index', `first', `last')
 	capture erase "`pathi'"
 end
 
@@ -536,6 +556,7 @@ mata:
 						 real scalar first,
 						 real scalar last) {
 		strl_values = cat(path)
+		
 		st_sstore(first::last,var_index,strl_values)		
 	}
 
