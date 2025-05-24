@@ -19,7 +19,7 @@
 ssc install pq
 
 * Option 2: Manual installation
-* Download the package files from the latest build at https://github.com/jrothbaum/stata_parquet_io/actions and place them in your PLUS directory
+* Download the package files from the latest build at releases (https://github.com/jrothbaum/stata_parquet_io/releases) and place them in your PLUS directory
 * The plugin files should be placed in the 'p' folder within your PLUS directory
 ```
 

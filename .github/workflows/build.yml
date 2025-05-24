@@ -5,7 +5,10 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
-
+permissions:
+  contents: write
+  issues: read
+  pull-requests: read
 jobs:
   build:
     name: Build ${{ matrix.config.name }}
@@ -156,7 +159,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
