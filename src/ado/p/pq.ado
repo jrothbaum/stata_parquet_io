@@ -7,15 +7,15 @@ program define pq
     local todo `todo'
 
     if ("`todo'" == "use") {
-		di `"pq_use `0'"'
+		//	di `"pq_use `0'"'
 		pq_use `0'
     }
     else if ("`todo'" == "save") {
-		di `"pq_save `0'"'
+		//	di `"pq_save `0'"'
         pq_save `0'
     }
     else if ("`todo'" == "describe") {
-		di `"pq_describe `0'"'
+		//	di `"pq_describe `0'"'
         pq_describe `0'
     }
     else {
