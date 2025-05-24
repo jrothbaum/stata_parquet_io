@@ -34,7 +34,7 @@ pq use using filename.parquet, clear
 * Read specific variables
 pq use var1 var2 var3 using filename.parquet, clear
 
-* Read with observation filtering (STILL UNDER DEVELOPMENT AND TESTING)
+* Read with observation filtering
 pq use using filename.parquet, clear in(1/1000)
 pq use using filename.parquet, clear if(value > 100)
 
