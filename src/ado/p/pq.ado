@@ -392,17 +392,16 @@ program pq_save
 		local rest = substr(`"`input_args'"', `using_pos'+6, .)
 
 		local 0 = `"`varlist' using `rest'"'
-		syntax varlist using/ [, replace if(string asis) NOAUTORENAME]	//	in(string)
-
     }
     else {
         // No "using" - parse everything as filename and options
         local 0 = `"* using `input_args'"'
-		
-        syntax varlist using/ [, replace if(string asis) NOAUTORENAME]	//	in(string) 
         
         // namelist is empty since no "using" separator
     }
+
+	syntax varlist using/ [, replace if(string asis) NOAUTORENAME]	//	in(string) 
+        
 	
 	//	Currently not available to have an in statement on write
 	local in
