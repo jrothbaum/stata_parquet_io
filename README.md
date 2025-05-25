@@ -15,8 +15,9 @@
 - Current status - github actions create the proper files for Windows, Linux, and Mac.  I have successfully tested that the Linux and Windows github build files work.  I will soon submit them for download via SSC.
 
 ```stata
-* Option 1: Install from SSC (when available - not yet)
+* Option 1: Install from SSC
 ssc install pq
+(https://ideas.repec.org/c/boc/bocode/s459458.html)
 
 * Option 2: Manual installation
 * Download the package files from the latest build at releases (https://github.com/jrothbaum/stata_parquet_io/releases) and place them in your PLUS directory
