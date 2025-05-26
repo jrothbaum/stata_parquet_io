@@ -25,9 +25,9 @@ jobs:
               platform_name: "windows"
             }
           - {
-              name: "macOS",
+              name: "macOS Universal",
               os: macos-latest,
-              target: "x86_64-apple-darwin",
+              target: "universal",
               extension: "dylib",
               platform_name: "macos"
             }
@@ -57,7 +57,7 @@ jobs:
         if: matrix.config.platform_name != 'linux'
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.config.target }}
+          targets: ${{ matrix.config.platform_name == 'macos' && 'x86_64-apple-darwin,aarch64-apple-darwin' || matrix.config.target }}
           components: rustfmt, clippy
 
       - name: Rust cache
@@ -107,13 +107,38 @@ jobs:
             cargo build --release --target x86_64-unknown-linux-gnu
           "
 
-      - name: Build release (non-Linux)
-        if: matrix.config.platform_name != 'linux'
+      - name: Build release (macOS Universal)
+        if: matrix.config.platform_name == 'macos'
+        run: |
+          # Build for x86_64 (Intel)
+          cargo build --release --target x86_64-apple-darwin
+          
+          # Build for aarch64 (ARM)
+          cargo build --release --target aarch64-apple-darwin
+          
+          # Create universal binary
+          mkdir -p target/universal-apple-darwin/release
+          lipo -create \
+            target/x86_64-apple-darwin/release/libstata_parquet_io.dylib \
+            target/aarch64-apple-darwin/release/libstata_parquet_io.dylib \
+            -output target/universal-apple-darwin/release/libstata_parquet_io.dylib
+          
+          # Verify the universal binary
+          echo "Universal binary architecture info:"
+          lipo -info target/universal-apple-darwin/release/libstata_parquet_io.dylib
+        env:
+          RUST_BACKTRACE: 1
+          POLARS_STATICALLY_LINK: 1
+          OPENSSL_STATIC: 1
+          CARGO_FEATURE_VENDORED: 1
+
+      - name: Build release (non-Linux, non-macOS)
+        if: matrix.config.platform_name != 'linux' && matrix.config.platform_name != 'macos'
         run: cargo build --release --target ${{ matrix.config.target }}
         env:
           RUST_BACKTRACE: 1
-          POLARS_STATICALLY_LINK: ${{ matrix.config.platform_name != 'linux' && '1' || '0' }}
-          OPENSSL_STATIC: ${{ matrix.config.platform_name != 'linux' && '1' || '0' }}
+          POLARS_STATICALLY_LINK: 1
+          OPENSSL_STATIC: 1
           CARGO_FEATURE_VENDORED: 1
 
       - name: Prepare release files
@@ -124,7 +149,11 @@ jobs:
           if [ "${{ matrix.config.platform_name }}" = "windows" ]; then
             cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
           elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
-            cp target/${{ matrix.config.target }}/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
+            # Use the universal binary
+            cp target/universal-apple-darwin/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
+            
+            echo "Universal binary verification:"
+            lipo -info release_package/pq.${{ matrix.config.extension }}
           elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
             if [ -f "target/${{ matrix.config.target }}/release/libstata_parquet_io.${{ matrix.config.extension }}" ]; then
               cp target/${{ matrix.config.target }}/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
@@ -176,7 +205,26 @@ jobs:
           cd pq-windows && zip -r ../pq-windows.zip * && cd ..
           cd pq-macos && zip -r ../pq-macos.zip * && cd ..
           cd pq-linux && zip -r ../pq-linux.zip * && cd ..
-
+      - name: Create SSC package zip
+        run: |
+          mkdir -p pq-ssc
+          
+          # Copy Stata files from any platform (they're identical)
+          cp pq-windows/pq.ado pq-ssc/
+          cp pq-windows/pq.sthlp pq-ssc/
+          cp pq-windows/pq.pkg pq-ssc/
+          
+          # Copy platform-specific binaries
+          cp pq-windows/pq.dll pq-ssc/
+          cp pq-macos/pq.dylib pq-ssc/
+          cp pq-linux/pq.so pq-ssc/
+          
+          # Verify contents
+          echo "SSC package contents:"
+          ls -la pq-ssc/
+          
+          # Create zip
+          cd pq-ssc && zip -r ../pq-ssc.zip * && cd ..
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v1
@@ -185,6 +233,7 @@ jobs:
             pq-windows.zip
             pq-macos.zip
             pq-linux.zip
+            pq-ssc.zip
           draft: false
           prerelease: false
           generate_release_notes: true
