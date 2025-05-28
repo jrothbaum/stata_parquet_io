@@ -81,3 +81,7 @@ pq use "`tparquet'_partitioned.parquet", clear
 sum
 pq use "`tparquet'_if.parquet", clear
 sum
+
+
+//	Save that should fail
+pq save "C:\Users\jonro\Downloads\non_hive.parquet", partition_by(year) replace

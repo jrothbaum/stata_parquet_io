@@ -245,10 +245,13 @@ fn delete_existing_files(
             if is_hive_style_parquet_directory(&path_obj) {
                 if let Err(e) = std::fs::remove_dir_all(path) {
                     if e.kind() != std::io::ErrorKind::NotFound {
-                        display(&format!("Failed to remove directory (will only delete hive partitions and parquet files) {}: {}", path, e));
+                        display(&format!("Failed to remove directory {}: {}", path, e));
                         return 198;
                     }
                 }
+            } else {
+                display(&format!("Error: {} is not a hive partition directory, not removed", path));
+                return 198
             }
         }
     }
