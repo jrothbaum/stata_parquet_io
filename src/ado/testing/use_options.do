@@ -1,3 +1,5 @@
+set varabbrev off
+
 capture program drop create_data
 program define create_data
 	version 16
@@ -47,6 +49,10 @@ timer off 2
 di "1:	Columns"
 di "2:	Rows"
 timer list
+
+pq use * using "`tparquet'.parquet", clear 
+pq use c_* using "`tparquet'.parquet", clear
+pq use c_1* using "`tparquet'.parquet", clear
 
 
 

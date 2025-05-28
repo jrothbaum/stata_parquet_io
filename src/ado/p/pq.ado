@@ -1,5 +1,5 @@
 *! pq - read/write parquet files with stata
-*! Version 1.0.0
+*! Version 1.1.0
 
 capture program drop pq
 program define pq
@@ -398,9 +398,51 @@ program pq_save
         // namelist is empty since no "using" separator
     }
 
-	syntax varlist using/ [, replace if(string asis) NOAUTORENAME]	//	in(string) 
+	syntax varlist using/ [, replace 						///
+						   if(string asis) 					///
+						   NOAUTORENAME						///
+						   partition_by(varlist)			///
+						   compression(string)				///
+						   compression_level(integer -1)	///
+						   NOPARTITIONOVERWRITE				///
+						   ]	//	in(string) 
         
+	//	if "`partition_by'" != "" {
+	//		di as error "Hive partitioning not implemented yet"
+	//		exit 198
+	//	}
+	if (!inlist("`compression'", "", "lz4", "uncompressed", "snappy", "gzip", "lzo", "brotli", "zstd")) {
+		display as error `"Acceptable options for compression are "lz4", "uncompressed", "snappy", "gzip", "lzo", "brotli", "zstd", and "" ("" will be zstd), passed "`compression'""'
+		exit 198
+	}
 	
+	if `compression_level' != -1 {
+		local check_compression_level = 0
+		if inlist("`compression'", "", "zstd") {
+			local check_compression_level = 1
+			local compression_level_min = 1
+			local compression_level_max = 22
+		}
+		else if "`compression'"== "brotli" {
+			local check_compression_level = 1
+			local compression_level_min = 0
+			local compression_level_max = 11
+		}
+		else if "`compression'"== "gzip" {
+			local check_compression_level = 1
+			local compression_level_min = 0
+			local compression_level_max = 9
+		}
+		
+		if `check_compression_level' {
+			if !inrange(`compression_level', `compression_level_min', `compression_level_max') {
+				display as error `"Acceptable compression_level range for compression = "`compression'" (zstd if blank) [`compression_level_min', `compression_level_max'], passed "`compression_level'""'
+				exit 198
+				
+			}
+		}
+	}
+		
 	//	Currently not available to have an in statement on write
 	local in
 	pq_register_plugin
@@ -493,9 +535,9 @@ program pq_save
 	
 	local offset = max(0,`offset' - 1)
 	
-	
-	//	di `"plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' "`sql_if'" "`StataColumnInfo'""'
-	plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' `"`sql_if'"' `"`StataColumnInfo'"'
+	local overwrite_partition = "`nopartitionoverwrite'" == ""
+	di `"plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' "`sql_if'" "`StataColumnInfo'" "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition'"'
+	plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' `"`sql_if'"' `"`StataColumnInfo'"' "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' 
 end
 
 

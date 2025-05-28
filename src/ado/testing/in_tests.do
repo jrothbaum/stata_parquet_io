@@ -1,6 +1,6 @@
 //  If you don't care about all the options, here's the simplest version 
 //      of how to work with parquet files
-
+set varabbrev off
 
 capture program drop in_test_parquet_io_data
 program define in_test_parquet_io_data

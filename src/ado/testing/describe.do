@@ -1,5 +1,5 @@
 //	Test against various packages test data
-
+set varabbrev off
 
 capture program drop test_file
 program define test_file

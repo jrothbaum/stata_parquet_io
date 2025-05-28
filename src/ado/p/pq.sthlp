@@ -12,19 +12,19 @@
 Import a Parquet file into Stata:
 
 {p 8 17 2}
-{cmd:pq use} [{varlist}] {cmd:using} {it:filename} [, {opt clear} {opt in(range)} {opt if(expression)}]
+{cmd:pq use} [{varlist}] {cmd:using} {it:filename} [, {opt clear} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)}]
 
 {phang}
 Save Stata data as a Parquet file:
 
 {p 8 17 2}
-{cmd:pq save} [{varlist}] {cmd:using} {it:filename} [, {opt replace} {opt in(range)} {opt if(expression)} {opt noautorename}]
+{cmd:pq save} [{varlist}] {cmd:using} {it:filename} [, {opt replace} {opt in(range)} {opt if(expression)} {opt noautorename} {opt partition_by(varlist)} {opt compression(string)} {opt compression_level(integer)} {opt nopartitionoverwrite}]
 
 {phang}
 Describe contents of a Parquet file:
 
 {p 8 17 2}
-{cmd:pq describe} {cmd:using} {it:filename} [, {opt quietly} {opt detailed}]
+{cmd:pq describe} {cmd:using} {it:filename} [, {opt quietly} {opt detailed} {opt asterisk_to_variable(string)}]
 
 {marker description}{...}
 {title:Description}
@@ -32,8 +32,8 @@ Describe contents of a Parquet file:
 {pstd}
 {cmd:pq} provides commands for working with Apache Parquet files in Stata. Parquet is a columnar storage file format 
 designed to efficiently store and process large datasets. This package allows Stata users to directly read from
-and write to Parquet files, facilitating data interchange with other data science tools and platforms that support
-this format, such as Python (pandas, polars), R, Spark, and many others.
+and write to Parquet files, making it easier to work with other data science tools and platforms that support
+this format, such as Python (pandas, polars), R, Spark, duckdb, and many others.
 
 {marker options}{...}
 {title:Options}
@@ -44,12 +44,27 @@ this format, such as Python (pandas, polars), R, Spark, and many others.
 {opt clear} specifies that it is okay to replace the data in memory, even though the current data have not been saved to disk.
 
 {phang}
-{opt in(range)} specifies a subset of rows to read. The format is {it:offset/rows} where {it:offset} is the starting row (1-based indexing) 
-and {it:rows} is the ending row. For example, {cmd:in(10/20)} would read rows 10 through 20.
+{opt in(range)} specifies a subset of rows to read. The format is {it:first/last} where {it:first} is the starting row (1-based indexing) 
+and {it:last} is the ending row. For example, {cmd:in(10/20)} would read rows 10 through 20.
 
 {phang}
 {opt if(expression)} imports only rows that satisfy the specified condition. This filter is applied directly during reading
-and can significantly improve performance compared to reading all data and then filtering in Stata.
+and can significantly improve performance compared to reading all data and then filtering in Stata. Note that {cmd:>} is interpreted
+as in SQL, which is different than Stata (it will not include missing values as greater than any value).
+
+{phang}
+{opt relaxed} enables vertical relaxed concatenation when reading multiple files, allowing files with different schemas 
+to be combined by converting columns to their supertype (e.g., if a column is int8 in one file and int16 in another, 
+it will be converted to int16 in the final result).
+
+{phang}
+{opt asterisk_to_variable(string)} when reading files with wildcard patterns (e.g., /file/*.parquet), creates a new variable 
+with the specified name containing the part of the filename that matched the asterisk. For example, reading /file/2019.parquet 
+and /file/2020.parquet would create a variable with values "2019" and "2020" for the respective records.
+
+{phang}
+{opt parallelize(string)} specifies the parallelization strategy. Options are {cmd:"columns"}, {cmd:"rows"}, or {cmd:""} (default).
+This can improve performance when reading tall (rows) vs. wide (columns) files.  In benchmarking, it honestly doesn't seem to matter much.
 
 {dlgtab:Options for pq save}
 
@@ -57,11 +72,29 @@ and can significantly improve performance compared to reading all data and then 
 {opt replace} permits {cmd:pq save} to overwrite an existing Parquet file.
 
 {phang}
-{opt if(expression)} saves only rows that satisfy the specified condition.
+{opt if(expression)} saves only rows that satisfy the specified condition. Note that {cmd:>} is interpreted
+as in SQL, which is different than Stata (it will not include missing values as greater than any value).
 
 {phang}
 {opt noautorename} prevents automatic renaming of variables based on Parquet metadata stored in variable labels.
 By default, variables that were renamed when imported will be restored to their original Parquet column names when saved.
+
+{phang}
+{opt partition_by(varlist)} creates a partitioned Parquet dataset, splitting the data into separate files based on 
+the unique values of the specified variables. This can improve query performance for large datasets.
+
+{phang}
+{opt compression(string)} specifies the compression algorithm to use. Options are {cmd:"lz4"}, {cmd:"uncompressed"}, 
+{cmd:"snappy"}, {cmd:"gzip"}, {cmd:"lzo"}, {cmd:"brotli"}, {cmd:"zstd"}, or {cmd:""} (default, which uses zstd).
+
+{phang}
+{opt compression_level(integer)} specifies the compression level for algorithms that support it. Valid ranges depend 
+on the compression algorithm: zstd (1-22), brotli (0-11), gzip (0-9). Default is -1 (use algorithm default).
+
+{phang}
+{opt nopartitionoverwrite} prevents overwriting existing partitions when saving partitioned datasets. 
+By default, existing partitions will be overwritten.  Not overwriting a partition can be useful to add an
+additional file to a partition (like a new year of data) without overwriting the existing data
 
 {dlgtab:Options for pq describe}
 
@@ -70,6 +103,10 @@ By default, variables that were renamed when imported will be restored to their 
 
 {phang}
 {opt detailed} provides more detailed information about each column, including string lengths for string columns.
+
+{phang}
+{opt asterisk_to_variable(string)} when describing files with wildcard patterns, shows information about the variable 
+that would be created from the asterisk pattern.
 
 {marker examples}{...}
 {title:Examples}
@@ -86,6 +123,15 @@ By default, variables that were renamed when imported will be restored to their 
 {pstd}Load a subset of rows:{p_end}
 {phang2}{cmd:. pq use using example.parquet, clear in(101/200)}{p_end}
 
+{pstd}Load multiple files with wildcard pattern:{p_end}
+{phang2}{cmd:. pq use using /data/sales_*.parquet, clear asterisk_to_variable(year)}{p_end}
+
+{pstd}Load with relaxed schema merging:{p_end}
+{phang2}{cmd:. pq use using /data/*.parquet, clear relaxed}{p_end}
+
+{pstd}Load with parallel processing:{p_end}
+{phang2}{cmd:. pq use using large_file.parquet, clear parallelize(columns)}{p_end}
+
 {pstd}Describe contents of a Parquet file:{p_end}
 {phang2}{cmd:. pq describe using example.parquet}{p_end}
 
@@ -100,6 +146,12 @@ By default, variables that were renamed when imported will be restored to their 
 
 {pstd}Save with a filter condition:{p_end}
 {phang2}{cmd:. pq save using filtered.parquet, replace if(age >= 18)}{p_end}
+
+{pstd}Save with compression:{p_end}
+{phang2}{cmd:. pq save using compressed.parquet, replace compression(zstd) compression_level(9)}{p_end}
+
+{pstd}Save as partitioned dataset:{p_end}
+{phang2}{cmd:. pq save using /output/partitioned_data, replace partition_by(year region)}{p_end}
 
 {marker remarks}{...}
 {title:Remarks}
@@ -117,6 +169,14 @@ to their original Parquet names unless you specify the {opt noautorename} option
 
 {pstd}
 Binary columns in Parquet files are not currently supported and will be automatically dropped when importing.
+
+{pstd}
+The {opt if()} condition syntax uses SQL-style comparisons, which differ from Stata in that missing values 
+are not considered greater than any value when using the {cmd:>} operator.
+
+{pstd}
+Partitioned datasets created with {opt partition_by()} organize data into separate files based on the unique 
+combinations of the partitioning variables, which can significantly improve query performance for large datasets.
 
 {marker returned}{...}
 {title:Returned values}
@@ -148,6 +208,9 @@ for the package to function. You can override the plugin location by setting the
 {pstd}
 The package works with Stata 16.0 and later versions.
 
+{pstd}
+String variables longer than 2045 characters are automatically converted to strL format during import.
+
 {marker acknowledgments}{...}
 {title:Acknowledgments}
 
@@ -165,7 +228,7 @@ excellent performance for large datasets.
 {it:U.S. Census Bureau}
 
 {pstd}
-polars_parquet package. Version 1.0.0.
+polars_parquet package. Version 1.1.0.
 
 {pstd}
 For bug reports, feature requests, or other issues, please see {it:https://github.com/jrothbaum/stata_parquet_io}.

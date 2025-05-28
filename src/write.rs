@@ -1,4 +1,3 @@
-use core::error;
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
 use polars::prelude::{NamedFrom, TimeUnit};
@@ -8,6 +7,7 @@ use rayon::prelude::*;
 use std::error::Error;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::Path;
 
 use crate::stata_interface;
 use crate::stata_interface::{
@@ -37,6 +37,10 @@ pub fn write_from_stata(
     sql_if:Option<&str>,
     mapping:&str,
     parallel_strategy:Option<ParallelizationStrategy>,
+    partition_by_str:&str,
+    compression:&str,
+    compression_level:Option<usize>,
+    overwrite_partition: bool,
 ) -> Result<i32,Box<dyn Error>> {
     let variables_as_str = if variables_as_str == "" || variables_as_str == "from_macro" {
         &get_macro("varlist", false,  Some(1024 * 1024 * 10))
@@ -56,6 +60,24 @@ pub fn write_from_stata(
     })
     .collect();
     
+
+    let partition_by: Vec<PlSmallStr> = if !partition_by_str.is_empty() {
+        partition_by_str.split_whitespace()
+            .map(|s| {
+                let s_small = PlSmallStr::from(s);
+
+                match rename_list.get(&s_small) {
+                    Some(renamed) => renamed.clone(),   // Clone the PlSmallStr we found
+                    None => s_small                                  // Use the original PlSmallStr
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    
+
+
     let column_info: Vec<StataColumnInfo>= if mapping == "" || mapping == "from_macros" {
         //  display("Reading column info from macros");
 
@@ -99,13 +121,191 @@ pub fn write_from_stata(
         a_scan_arc,
         ScanArgsAnonymous::default()
     );
-    let lf_unwrapped = lf.unwrap().with_new_streaming(true);
-    let sink_target = SinkTarget::Path(Arc::new(PathBuf::from(path)));
 
+
+    let lf_unwrapped = lf.unwrap().with_new_streaming(true);
+
+
+    let delete_error = delete_existing_files(
+        path,
+        overwrite_partition,
+    );
+
+    if delete_error > 0 {
+        return Ok(delete_error);
+    }
+    if partition_by.len() > 0 {
+        save_partitioned(
+            path, 
+            lf_unwrapped, 
+            compression,
+            compression_level,
+            &partition_by
+        )
+        // display("Error: hive partition not implemented yet");
+        // return Ok(198);
+    } else {
+        save_no_partition(
+            path, 
+            lf_unwrapped, 
+            compression,
+            compression_level
+        )
+    }
+}
+
+
+fn save_partitioned(
+    path:&str,
+    lf:LazyFrame,
+    compression:&str,
+    compression_level:Option<usize>,
+    partition_by:&Vec<PlSmallStr>,
+)  -> Result<i32,Box<dyn Error>> {
+    let pqo = parquet_options(compression, compression_level);
+
+    let mut df = match lf.collect() {
+        Err(e) => {
+            display(&format!("Parquet collect error: {}", e));
+            return Ok(198);
+        },
+        Ok(df_collected) => df_collected,
+    };
+
+    match write_partitioned_dataset(
+            &mut df, 
+            &PathBuf::from(path),
+            partition_by.clone(),
+            &pqo, 
+            None,
+            100_000_000_000
+        ) {
+        Err(e) => {
+            display(&format!("Parquet write error during write_partitioned_dataset: {}", e));
+            Ok(198)
+        },
+        Ok(_) => {
+            display(&format!("File saved to {}", path));
+            Ok(0)
+        }
+    }
+
+    // let partition_variant = PartitionVariant::ByKey {
+    //      key_exprs: partition_cols, 
+    //      include_key: false 
+    // };
+
+    
+    // let result_lf = match lf.sink_parquet_partitioned(
+    //     Arc::new(PathBuf::from(path)),
+    //     None,
+    //     partition_variant,
+    //     pqo,
+    //     None,
+    //     SinkOptions::default()) {
+    //         Err(e) => {
+    //             display(&format!("Parquet sink setup error: {}", e));
+    //             return Ok(198);
+    //         },
+    //         Ok(lf) => lf,
+    //     };
+
+    // // Then trigger execution with collect and handle those errors
+    // match result_lf.collect() {
+    //     Err(e) => {
+    //         display(&format!("Parquet write error during collection: {}", e));
+    //         Ok(198)
+    //     },
+    //     Ok(_) => {
+    //         display(&format!("File saved to {}", path));
+    //         Ok(0)
+    //     }
+    // }
+}
+
+fn delete_existing_files(
+    path:&str,
+    overwrite_partition: bool,
+) -> i32 {
+    if overwrite_partition {
+        let path_obj = std::path::Path::new(path);
+        
+        if path_obj.is_file() {
+            // If it's a .parquet file, delete it
+            if path.ends_with(".parquet") {
+                if let Err(e) = std::fs::remove_file(path) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        display(&format!("Failed to remove parquet file {}: {}", path, e));
+                        return 198;
+                    }
+                }
+            }
+        } else if path_obj.is_dir() {
+            // Only delete if all subdirectories are hive style and all files are .parquet
+            if is_hive_style_parquet_directory(&path_obj) {
+                if let Err(e) = std::fs::remove_dir_all(path) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        display(&format!("Failed to remove directory (will only delete hive partitions and parquet files) {}: {}", path, e));
+                        return 198;
+                    }
+                }
+            }
+        }
+    }
+
+    0
+}
+
+
+fn is_hive_style_parquet_directory(path: &Path) -> bool {
+    fn check_recursive(dir: &Path) -> Result<bool, std::io::Error> {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            
+            if path.is_dir() {
+                // Check if directory name follows hive style (contains "=")
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if !name.contains('=') {
+                        return Ok(false);
+                    }
+                }
+                
+                // Recursively check subdirectory
+                if !check_recursive(&path)? {
+                    return Ok(false);
+                }
+            } else if path.is_file() {
+                // Check if file ends with .parquet
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if !name.ends_with(".parquet") {
+                        return Ok(false);
+                    }
+                } else {
+                    // If we can't get the filename, assume it's not a parquet file
+                    return Ok(false);
+                }
+            }
+            // Skip other file types (symlinks, etc.)
+        }
+        Ok(true)
+    }
+    
+    check_recursive(path).unwrap_or(false)
+}
+fn save_no_partition(
+    path:&str,
+    lf:LazyFrame,
+    compression:&str,
+    compression_level:Option<usize>,
+) -> Result<i32,Box<dyn Error>> {
+    let sink_target = SinkTarget::Path(Arc::new(PathBuf::from(path)));
+    let pqo = parquet_options(compression, compression_level);
+    
     // First set up the sink and handle potential errors there
-    let result_lf = match lf_unwrapped.sink_parquet(
+    let result_lf = match lf.sink_parquet(
         sink_target, 
-        ParquetWriteOptions::default(),
+        pqo,
         None,
         SinkOptions::default()) {
             Err(e) => {
@@ -126,6 +326,45 @@ pub fn write_from_stata(
             Ok(0)
         }
     }
+}
+
+fn parquet_options(
+    compression:&str,
+    compression_level:Option<usize>,
+) -> ParquetWriteOptions {
+    let mut pqo = ParquetWriteOptions::default();
+    pqo.compression = match compression {
+        "lz4" => ParquetCompression::Lz4Raw,
+        "uncompressed" => ParquetCompression::Uncompressed,
+        "snappy" => ParquetCompression::Snappy,
+        "gzip" => {
+            let gzip_level = match compression_level {
+                None => None,
+                Some(level) => GzipLevel::try_new(level as u8).ok()
+            };
+
+            ParquetCompression::Gzip(gzip_level)
+        },
+        "lzo" => ParquetCompression::Lzo,
+        "brotli" => {
+            let brotli_level = match compression_level {
+                None => None,
+                Some(level) => BrotliLevel::try_new(level as u32).ok()
+            };
+
+            ParquetCompression::Brotli(brotli_level)
+        },
+        _  => {
+            let zstd_level = match compression_level {
+                None => None,
+                Some(level) => ZstdLevel::try_new(level as i32).ok()
+            };
+
+            ParquetCompression::Zstd(zstd_level)
+        }
+    };
+
+    pqo
 }
 
 fn get_rename_list() -> HashMap<PlSmallStr,PlSmallStr> {

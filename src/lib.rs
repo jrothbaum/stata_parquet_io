@@ -5,6 +5,7 @@
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::slice;
+use polars::io::partition;
 use polars::prelude::*;
 use utilities::ParallelizationStrategy;
 
@@ -173,7 +174,16 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 let offset =  subfunction_args[3];
                 let sql_if =  subfunction_args[4];
                 let mapping = subfunction_args[5];
+                let partition_by = subfunction_args[6];
+                let compression = subfunction_args[7];
+                let compression_level_passed = subfunction_args[8].parse::<i32>().unwrap();
+                let overwrite_partition = subfunction_args[9].parse::<i32>().unwrap() == 1;
                 
+                let compression_level = if compression_level_passed == -1 {
+                    None
+                } else {
+                    Some(compression_level_passed as usize)
+                };
                 let output = match write::write_from_stata(
                     path,
                     varlist,
@@ -182,6 +192,10 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     Some(sql_if),
                     mapping,
                     None,
+                    partition_by,
+                    compression,
+                    compression_level,
+                    overwrite_partition,
                 ) {
                     Ok(_) => 0 as i32,
                     Err(_e) => 198 as i32
