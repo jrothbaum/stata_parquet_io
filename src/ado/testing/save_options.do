@@ -61,6 +61,8 @@ pq save "`tparquet'_partitioned.parquet", replace
 //	Save another partition
 pq save "`tparquet'_partitioned.parquet", replace partition_by(year month)
 
+pq save "`tparquet'_if.parquet", replace if(c_1 <= 1000 | c_1 > 90000)
+
 clear
 
 //	Add new data to an existing partition
@@ -69,9 +71,13 @@ replace year = 2030
 pq save "`tparquet'_partitioned.parquet", replace partition_by(year month) nopartitionoverwrite
 
 
+
+
 pq use "`tparquet'_gzip.parquet", clear
 sum
 pq use "`tparquet'_gzip_2.parquet", clear
 sum
 pq use "`tparquet'_partitioned.parquet", clear
+sum
+pq use "`tparquet'_if.parquet", clear
 sum
