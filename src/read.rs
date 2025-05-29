@@ -22,8 +22,17 @@ use crate::stata_interface::{
 };
 
 use crate::utilities::{
-    determine_parallelization_strategy, get_thread_count, ParallelizationStrategy, DAY_SHIFT_SAS_STATA, SEC_MICROSECOND, SEC_MILLISECOND, SEC_NANOSECOND, SEC_SHIFT_SAS_STATA
+    determine_parallelization_strategy,
+    get_thread_count,
+    ParallelizationStrategy,
+    DAY_SHIFT_SAS_STATA,
+    SEC_MICROSECOND,
+    SEC_MILLISECOND,
+    SEC_NANOSECOND,
+    SEC_SHIFT_SAS_STATA
 };
+
+use crate::downcast::apply_cast;
 
 // Trait for converting Polars values to Stata values
 trait ToStataValue {
@@ -252,7 +261,7 @@ fn is_valid_glob_pattern(glob_path: &str) -> bool {
 pub fn scan_lazyframe(
     path: &str, 
     safe_relaxed: bool, 
-    asterisk_to_variable_name: Option<&str>
+    asterisk_to_variable_name: Option<&str>,
 ) -> Result<LazyFrame, PolarsError> {
     let path_obj = Path::new(path);
     
@@ -281,6 +290,8 @@ pub fn scan_lazyframe(
             LazyFrame::scan_parquet(&normalized_pattern, ScanArgsParquet::default())
         }
     }
+
+    
 }
 
 fn scan_hive_partitioned(dir_path: &str) -> Result<LazyFrame, PolarsError> {
@@ -488,7 +499,8 @@ pub fn read_to_stata(
     mapping: &str,
     parallel_strategy: Option<ParallelizationStrategy>,
     safe_relaxed: bool, 
-    asterisk_to_variable_name: Option<&str>
+    asterisk_to_variable_name: Option<&str>,
+    sort:&str,
 ) -> Result<i32, Box<dyn Error>> {
 
     // Handle empty variable list by getting from macros
@@ -538,6 +550,28 @@ pub fn read_to_stata(
         },
     };
 
+    //  Set cast macro to empty
+    let cast_json = get_macro(
+        &"cast_json",
+        false,
+        None,
+    );
+
+    //  display(&format!("Cast: {}", cast_json));
+    if !cast_json.is_empty() {
+        df = match apply_cast(
+            df,
+            &cast_json,
+        ) {
+            Ok(lf_cast) => lf_cast,
+            Err(e) => {
+                display(&format!("Cast failed with error: {}", e));
+                return Ok(198);
+            }
+        }
+    }
+
+    //  display(&format!("df: {:?}", df.explain(true)));
     // Cast categorical columns to string
     df = cast_catenum_to_string(&df).unwrap();
 
@@ -554,6 +588,33 @@ pub fn read_to_stata(
             }
         };
     }
+
+
+    df = if sort.is_empty() {
+            df
+        } else {
+            
+            let mut sort_options = SortMultipleOptions::default();
+            let mut sort_cols: Vec<PlSmallStr> = Vec::new();
+            let mut descending: Vec<bool> = Vec::new();
+
+            for token in sort.split_whitespace() {
+                if token.starts_with('-') && token.len() > 1 {
+                    // Remove the '-' prefix and mark as descending
+                    sort_cols.push(PlSmallStr::from(&token[1..]));
+                    descending.push(true);
+                } else {
+                    // Use as-is and mark as ascending
+                    sort_cols.push(PlSmallStr::from(token));
+                    descending.push(false);
+                }
+            }
+            sort_options.descending = descending;
+            df.sort(
+                sort_cols,
+                sort_options
+            )
+        };
 
     // Create column expressions from the provided variable list
     let columns: Vec<Expr> = selected_column_names

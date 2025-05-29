@@ -22,6 +22,16 @@ program define create_data
 	
 	if `n_cols' > `cols_created' {
 		local cols_created = `cols_created' + 1
+		quietly gen c_`cols_created' = rnormal()
+		quietly tostring c_`cols_created', replace force
+	}
+	if `n_cols' > `cols_created' {
+		local cols_created = `cols_created' + 1
+		quietly gen c_`cols_created' = floor(runiform()*100)
+	}
+	
+	if `n_cols' > `cols_created' {
+		local cols_created = `cols_created' + 1
 		forvalues ci = `cols_created'/`n_cols' {
 			quietly gen c_`ci' = rnormal()
 		}
@@ -30,11 +40,10 @@ end
 
 
 di "Parallelization"
-create_data, n_rows(100000) n_cols(100) 
+create_data, n_rows(100000) n_cols(10) 
 tempfile tparquet
 
 pq save "`tparquet'.parquet", replace
-
 clear
 timer clear
 timer on 1
@@ -51,11 +60,28 @@ di "2:	Rows"
 timer list
 
 pq use * using "`tparquet'.parquet", clear 
+sum
 pq use c_* using "`tparquet'.parquet", clear
 pq use c_1* using "`tparquet'.parquet", clear
 
+pq use "`tparquet'.parquet", clear sort(c_2 c_1)
+forvalues i=1/10 {
+	di c_1[`i']
+	di c_2[`i']
+}
+
+pq use "`tparquet'.parquet", clear sort(-c_2 -c_1)
+forvalues i=1/10 {
+	di c_1[`i']
+	di c_2[`i']
+}
 
 
+
+pq use * using "`tparquet'.parquet", clear compress
+describe
+sum
+;
 capture erase `tparquet'.parquet
 
 

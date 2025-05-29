@@ -5,8 +5,6 @@
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::slice;
-use polars::io::partition;
-use polars::prelude::*;
 use utilities::ParallelizationStrategy;
 
 
@@ -17,6 +15,7 @@ pub mod stata_interface;
 pub mod describe;
 pub mod sql_from_if;
 pub mod utilities;
+pub mod downcast;
 
 use std::ptr;
 
@@ -134,6 +133,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     parallel_strategy,
                     safe_relaxed,
                     asterisk_to_variable_name,
+                    subfunction_args[9]
                 );
         
                 // Use match to handle the Result
@@ -165,6 +165,8 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                         Some(subfunction_args[3].as_ref()),
                         true,
                         asterisk_to_variable_name,
+                        subfunction_args[5].parse::<u8>().unwrap() != 0,
+                        subfunction_args[6].parse::<u8>().unwrap() != 0,
                     ) as ST_retcode;
             },
             "save" => {

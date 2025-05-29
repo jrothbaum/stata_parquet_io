@@ -10,8 +10,13 @@ use crate::stata_interface:: {
 };
 
 use crate::read::{
-    cast_catenum_to_string, scan_lazyframe
-    
+    cast_catenum_to_string, 
+    scan_lazyframe    
+};
+
+use crate::downcast::{
+    intelligent_downcast,
+    DowncastConfig
 };
 
 pub fn file_summary(
@@ -20,7 +25,9 @@ pub fn file_summary(
     detailed:bool,
     sql_if:Option<&str>,
     safe_relaxed: bool, 
-    asterisk_to_variable_name: Option<&str>
+    asterisk_to_variable_name: Option<&str>,
+    compress: bool,
+    compress_string_to_numeric: bool,
 ) -> i32 {
     let mut df = match scan_lazyframe(
         &path,
@@ -34,6 +41,30 @@ pub fn file_summary(
         },
     };
 
+    //  Set cast macro to empty
+    set_macro(
+        &"cast_json",
+        &"",
+        false
+    );
+    
+    if compress | compress_string_to_numeric {
+        let mut downcast_config = DowncastConfig::default();
+        downcast_config.check_strings = compress_string_to_numeric;
+        downcast_config.prefer_int_over_float = compress;
+        
+        df = match intelligent_downcast(
+            df,
+            None,
+            downcast_config
+        ) {
+            Ok(lf) => lf,
+            Err(e) => {
+                display("Error on compress");
+                return 198;
+            }
+        }
+    }
     let schema = match df.collect_schema() {
         Ok(schema) => schema,
         Err(e) => {
@@ -66,7 +97,6 @@ pub fn file_summary(
         quietly,
         detailed
     );
-
 
     
     let n_vars = schema.len();

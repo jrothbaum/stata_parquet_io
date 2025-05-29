@@ -14,7 +14,7 @@ pub mod describe;
 pub mod mapping;
 pub mod stata_interface;
 pub mod utilities;
-
+pub mod downcast;
 
 #[cfg(debug_assertions)]
 mod sql_from_if;
