@@ -501,6 +501,7 @@ pub fn read_to_stata(
     safe_relaxed: bool, 
     asterisk_to_variable_name: Option<&str>,
     sort:&str,
+    stata_offset:usize,
 ) -> Result<i32, Box<dyn Error>> {
 
     // Handle empty variable list by getting from macros
@@ -686,8 +687,10 @@ pub fn read_to_stata(
 
         // Process the batch with the selected parallelization strategy
         match process_batch_with_strategy(
-            &batch_df, 
-            batch_offseti - offset, //  The index to assign to ignores the offset in the original data
+            &batch_df,
+            //  The index to assign to ignores the offset in the original data
+            //      But it is offset by the stata_offset (for appends) 
+            batch_offseti - offset + stata_offset, 
             &all_columns,
             strategy,
             n_threads,

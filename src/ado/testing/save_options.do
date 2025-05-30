@@ -85,3 +85,15 @@ sum
 
 //	Save that should fail
 pq save "C:\Users\jonro\Downloads\non_hive.parquet", partition_by(year) replace
+
+
+
+recast double c_1
+tostring c_10, replace force
+describe
+sum
+pq save "C:\Users\jonro\Downloads\compress.parquet", replace compress compress_string_to_numeric
+
+pq use "C:\Users\jonro\Downloads\compress.parquet", clear
+describe
+sum

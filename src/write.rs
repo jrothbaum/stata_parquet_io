@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::Path;
 
-use crate::stata_interface;
+use crate::{downcast, stata_interface};
 use crate::stata_interface::{
     display,
     get_macro
@@ -41,6 +41,8 @@ pub fn write_from_stata(
     compression:&str,
     compression_level:Option<usize>,
     overwrite_partition: bool,
+    compress:bool,
+    compress_string: bool,
 ) -> Result<i32,Box<dyn Error>> {
     let variables_as_str = if variables_as_str == "" || variables_as_str == "from_macro" {
         &get_macro("varlist", false,  Some(1024 * 1024 * 10))
@@ -117,13 +119,12 @@ pub fn write_from_stata(
     
     let a_scan_arc = Arc::new(a_scan);
 
-    let lf = LazyFrame::anonymous_scan(
+    let mut lf = LazyFrame::anonymous_scan(
         a_scan_arc,
         ScanArgsAnonymous::default()
     );
-
-
-    let lf_unwrapped = lf.unwrap().with_new_streaming(true);
+    
+    let mut lf_unwrapped = lf.unwrap().with_new_streaming(true);
 
 
     let delete_error = delete_existing_files(
@@ -140,7 +141,9 @@ pub fn write_from_stata(
             lf_unwrapped, 
             compression,
             compression_level,
-            &partition_by
+            &partition_by,
+            compress,
+            compress_string,
         )
         // display("Error: hive partition not implemented yet");
         // return Ok(198);
@@ -149,7 +152,9 @@ pub fn write_from_stata(
             path, 
             lf_unwrapped, 
             compression,
-            compression_level
+            compression_level,
+            compress,
+            compress_string,
         )
     }
 }
@@ -161,6 +166,8 @@ fn save_partitioned(
     compression:&str,
     compression_level:Option<usize>,
     partition_by:&Vec<PlSmallStr>,
+    compress:bool,
+    compress_string: bool,
 )  -> Result<i32,Box<dyn Error>> {
     let pqo = parquet_options(compression, compression_level);
 
@@ -171,6 +178,23 @@ fn save_partitioned(
         },
         Ok(df_collected) => df_collected,
     };
+
+    if compress | compress_string {
+        let mut down_config = downcast::DowncastConfig::default();
+        down_config.check_strings = compress_string;
+        down_config.prefer_int_over_float = compress;
+        df = match downcast::intelligent_downcast_df(
+            df,
+            None,
+            down_config
+        ) {
+            Ok(df_ok) => df_ok,
+            Err(e) => {
+                display(&format!("Parquet downcast/compress error: {}", e));
+                return Ok(198);
+            }
+        }
+    }
 
     match write_partitioned_dataset(
             &mut df, 
@@ -298,10 +322,41 @@ fn is_hive_style_parquet_directory(path: &Path) -> bool {
 }
 fn save_no_partition(
     path:&str,
-    lf:LazyFrame,
+    mut lf:LazyFrame,
     compression:&str,
     compression_level:Option<usize>,
+    compress:bool,
+    compress_string: bool,
 ) -> Result<i32,Box<dyn Error>> {
+
+    if compress | compress_string {
+        let mut df = match lf.collect() {
+            Ok(df_ok) => df_ok,
+            Err(e) => {
+                display(&format!("Parquet collect error: {}", e));
+                return Ok(198);
+            }
+        };
+
+        let mut down_config = downcast::DowncastConfig::default();
+        down_config.check_strings = compress_string;
+        down_config.prefer_int_over_float = compress;
+        let df = match downcast::intelligent_downcast_df(
+            df,
+            None,
+            down_config
+        ) {
+            Ok(df_ok) => df_ok,
+            Err(e) => {
+                display(&format!("Parquet downcast/compress error: {}", e));
+                return Ok(198);
+            }
+        };
+
+        lf = df.lazy();
+    }
+
+
     let sink_target = SinkTarget::Path(Arc::new(PathBuf::from(path)));
     let pqo = parquet_options(compression, compression_level);
     

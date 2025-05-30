@@ -10,6 +10,14 @@ program define pq
 		//	di `"pq_use `0'"'
 		pq_use `0'
     }
+	else if ("`todo'" == "append") {
+		//	di `"pq_append `0'"'
+		pq_append `0'
+    }
+	else if ("`todo'" == "merge") {
+		//	di `"pq_merge `0'"'
+		pq_merge `0'
+    }
     else if ("`todo'" == "save") {
 		//	di `"pq_save `0'"'
         pq_save `0'
@@ -52,7 +60,10 @@ program pq_use
 						if(string asis) 		///
 						relaxed 				///
 						asterisk_to_variable(string)	///
-						parallelize(string)]
+						parallelize(string)		///
+						sort(string)			///
+						compress				///
+						compress_string_to_numeric]
 
     pq_register_plugin
 	`clear'
@@ -97,8 +108,10 @@ program pq_use
 	local mapping from_macros
 	local b_quiet = 1
 	local b_detailed = 1
-	//	di `"plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "`sql_if'" "`asterisk_to_variable'""'
-	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'"
+	local b_compress = "`compress'" != ""
+	local b_compress_string_to_numeric = "`compress_string_to_numeric'" != ""
+	//	di `"plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "`sql_if'" "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric'"'
+	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric'
 	
 	local vars_in_file
 	local n_renamed = 0
@@ -201,6 +214,15 @@ program pq_use
 			local strl_var_indexes `strl_var_indexes' `var_number'
 			quietly gen strL `name_to_create' = ""
 		}
+		else if ("`type'" == "float") {
+			quietly gen float `type' `name_to_create' = .
+		}
+		else if ("`type'" == "long") {
+			quietly gen long `type' `name_to_create' = .
+		}
+		else if ("`type'" == "int") {
+			quietly gen int `type' `name_to_create' = .
+		}
 		else {
 			quietly gen double `type' `name_to_create' = .
 		}
@@ -234,8 +256,8 @@ program pq_use
 	//		* to a variable, so /file/2019.parquet, file/2020.parquet
 	//		will have the item in asterisk_to_variable as 2019 and 2020
 	//		for the records on the file
-	//	di `"plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' "`sql_if'" "`mapping'" "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'""'
-	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'"
+	//	di `"plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' "`sql_if'" "`mapping'" "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" 0"'
+	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" 0
 
 	
 	if ("`strl_var_indexes'" != "") {
@@ -247,6 +269,458 @@ program pq_use
 				local namei `strl_name_`lookup_number'_`batchi''
 				local starti `strl_start_`lookup_number'_`batchi''
 				local endi `strl_end_`lookup_number'_`batchi''
+
+				if `batchi' == 1 {
+					di "	`namei'"
+				}
+				
+				//	di "strl_position_`var_indexi' = `strl_position_`var_indexi''"
+				//	di `"pq_process_strl, path(`pathi') name(`namei') var_index(`strl_position_`var_indexi'') first(`starti') last(`endi')"'
+				pq_process_strl, path(`pathi') name(`namei') var_index(`strl_position_`var_indexi'') first(`starti') last(`endi')
+			}
+		}
+	}
+
+end
+
+
+
+capture program drop pq_merge
+program pq_merge
+    version 16.0
+    
+    gettoken mtype 0 : 0, parse(" ,")
+	local origmtype `"`mtype'"'
+	//	di "mtype: `mtype'"
+	local varlist_n
+	/* ------------------------------------------------------------ */
+				/* parsing				*/
+				/* we have pulled off <mtype> from 0	*/
+	gettoken token : 0, parse(" ,")
+	if ("`token'"=="_n") {
+		if ("`mtype'"!="1:1") {
+			error_seq_not11 "`mtype'" "`origmtype'"
+			/*NOTREACHED*/
+		}
+		gettoken token 0 : 0, parse(" ,")
+		local varlist_n _n
+	}
+
+	syntax [varlist(default=none)] using/ [,	///
+		  ASSERT(string)			///
+		  DEBUG					///
+		  GENerate(name)			///
+		  FORCE					///
+		  KEEP(string)				///
+		  KEEPUSing(string)			///
+		noLabels				///
+		  NOGENerate			        ///
+		noNOTEs					///
+		  REPLACE				///
+		noREPort				///	
+		  SORTED				///
+		  UPDATE       				///
+		  in(string) 				///
+		if(string asis) 		///
+		relaxed 				///
+		asterisk_to_variable(string)	///
+		parallelize(string)		///
+		sort(string)			///
+		compress				///
+		compress_string_to_numeric	///
+		]
+
+	if "`keepusing'" != "" {
+		if ("`varlist_n'" == "_n")	local using_vars `keepusing'
+		else 						local using_vars `varlist' `keepusing' 
+	}
+	else {
+		local using_vars
+	}
+
+	tempfile t_save
+	tempname f_pq
+	frame create `f_pq'
+	frame `f_pq' {
+		di "Loading parquet file and saving to temporary dta"
+		pq use `using_vars' using `"`using'"', 	clear in(`in') 					///
+												if(`if') 						///
+												`relaxed' 						///
+												asterisk_to_variable(`asterisk_to_variable')	///
+												parallelize(`parallelize')		///
+												sort(`varlist')					///
+												`compress'						///
+												`compress_string_to_numeric'
+		quietly save `t_save'
+	}
+	/*
+	di `"merge `origmtype' `varlist_n'`varlist' using "`t_save'",	gen(`generate') 	///"'
+	di `"												`nogenerate'			///"'
+	di `"												`nolabel'				///"'
+	di `"												`nonotes'				///"'
+	di `"												`update'				///"'
+	di `"												`replace'				///"'
+	di `"												`noreport'				///"'
+	di `"												`force'					///"'
+	di `"												assert(`assert')		///"'
+	di `"												keep(`keep')"'
+	*/
+
+	
+	di "Merging to data"
+	merge `origmtype' `varlist_n'`varlist' using "`t_save'",	gen(`generate') 	///
+													`nogenerate'			///
+													`nolabel'				///
+													`nonotes'				///
+													`update'				///
+													`replace'				///
+													`noreport'				///
+													`force'					///
+													assert(`assert')		///
+													keep(`keep')
+
+
+
+	frame drop `f_pq'
+
+end
+
+
+capture program drop pq_append
+program pq_append
+    version 16.0
+    
+    local input_args = `"`0'"'
+
+	// Check if "using" is present in arguments
+    local using_pos = strpos(`" `input_args' "', " using ")
+    
+    if `using_pos' > 0{
+        // 	Extract everything before "using"
+        local namelist = substr(`"`input_args'"', 1, `using_pos'-1)
+        local rest = substr(`"`input_args'"', `using_pos'+6, .)
+		local 0 = `"using `rest'"'
+	}
+    else {
+        // No "using" - parse everything as filename and options
+        local 0 = `"using `input_args'"'
+    
+        // namelist is empty since no "using" separator
+        local namelist ""
+    }
+
+	syntax using/ [, 	in(string) 				///
+						if(string asis) 		///
+						relaxed 				///
+						asterisk_to_variable(string)	///
+						parallelize(string)		///
+						sort(string)			///
+						compress				///
+						compress_string_to_numeric]
+
+    pq_register_plugin
+	
+
+	if (!inlist("`parallelize'", "", "columns", "rows")) {
+		display as error `"Acceptable options for parallelize are "columns", "rows", and "", passed "`parallelize'""'
+		exit 198
+	}
+	
+	if ("`in'" != "") {
+		local offset = substr("`in'", 1, strpos("`in'", "/") -1)
+		local offset = max(`offset',0)
+		local last_n = substr("`in'", strpos("`in'", "/") + 1, .)
+	}
+	else {
+		local offset = 0
+		local last_n = 0
+	}
+	
+	
+	//	Process the if statement, if passed
+	if (`"`if'"' != "") {
+		local greater_than = strpos(`"`if'"', ">") > 0
+		if (`greater_than') {
+			di as error "pq will interpret > as in SQL, which is different than Stata."
+			di as error "	It will not include . as > any value."
+		}
+		//	di `"plugin call polars_parquet_plugin, if "`if'""'
+		plugin call polars_parquet_plugin, if `"`if'"'
+	}
+	else {
+		local sql_if
+	}
+	
+	//	di `"if: `sql_if'"'
+	//	Initialize "mapping" to tell plugin to read from macro variables
+	local mapping from_macros
+	local b_quiet = 1
+	local b_detailed = 1
+	local b_compress = "`compress'" != ""
+	local b_compress_string_to_numeric = "`compress_string_to_numeric'" != ""
+	//	di `"plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "`sql_if'" "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric'"'
+	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric'
+	
+	local vars_in_file
+	local n_renamed = 0
+	forvalues i = 1/`n_columns' {
+		local vars_in_file `vars_in_file' `name_`i''
+
+		local renamei `rename_`i''
+		if ("`renamei'" != "") {
+			local n_renamed = `n_renamed' + 1 
+			local rename_from_`n_renamed' `name_`i''
+			local rename_to_`n_renamed' `renamei'
+		}
+	}
+	
+	
+
+	// If namelist is empty or blank, return the full varlist
+    if "`namelist'" == "" | "`namelist'" == "*" {
+        local matched_vars `vars_in_file'
+		local match_all = 1
+    }
+    else {
+        // Use function to match the variables from name list to the ones on the file
+        pq_match_variables `namelist', against(`vars_in_file')
+
+		local matched_vars = r(matched_vars)
+		local match_all = 0
+    }
+	
+	//	Create the empty data
+	if (`last_n' == 0)	local last_n = `n_rows'
+	local row_to_read = max(0,min(`n_rows',`last_n') - `offset' + (`offset' > 0))
+	
+	
+	tempfile temp_strl
+	local temp_strl_stub `temp_strl'
+	
+	local n_obs_already = _N
+	local n_obs_after = `n_obs_already' + `row_to_read'
+	quietly set obs `n_obs_after'
+
+	local match_vars_non_binary
+
+	local dropped_vars = 0
+	local strl_var_indexes
+
+	foreach vari in `matched_vars' {
+		local var_number: list posof "`vari'" in vars_in_file
+		local type `type_`var_number''
+		local string_length `string_length_`var_number''
+		//	di "var_number: `var_number'"
+		//	di "vari: `vari'"
+		//	di "string_length_`var_number': `string_length'"
+		
+		//	Set rename_to to nothing
+		local rename_to
+		
+		//	Does it need to be renamed?
+		local name_to_create `vari'
+		forvalues i = 1/`n_renamed' {
+			local rename_from `rename_from_`i''
+
+			if ("`vari'" == "`rename_from'") {
+				local rename_to `rename_to_`i''
+				local name_to_create `rename_to'
+				continue, break
+			}
+		}
+		
+
+		//	di "name: 			`name_to_create'"
+		//	di "type: 			`type'"
+		//	di "string_length: 	`string_length'"
+	
+		local keep = 1
+		local strl_limit = 2045
+
+		if ("`type'" == "string") {
+			local string_length = max(1,`string_length')
+
+			capture confirm variable `name_to_create'
+			if _rc {
+				quietly gen str`string_length' `name_to_create' = ""
+			}
+			else {
+				local vartype: type `name_to_create'
+				// Check if it's a fixed-length string type (str1, str2, etc.)
+				di "vartype: `vartype'"
+				if regexm("`vartype'", "^str([0-9]+)$") {
+					local current_length = regexs(1)
+					if `string_length' > `current_length' {
+						recast str`string_length' `name_to_create'
+					}
+				}
+				else if inlist("`vartype'", "byte", "int", "long", "float", "double") {
+					tostring `name_to_create', replace force
+				}
+			}
+		}
+		else if ("`type'" == "datetime") {
+			capture confirm variable `name_to_create'
+			if _rc {
+				quietly gen double `name_to_create' = .
+			}
+			else {
+				local vartype: type `name_to_create'
+				if inlist("`vartype'", "byte", "int", "long", "float") {
+					recast double `name_to_create'
+				}
+			}
+			format `name_to_create' %tc
+		}
+		else if ("`type'" == "date") {
+			capture confirm variable `name_to_create'
+			if _rc {
+				quietly gen long `name_to_create' = .
+			}
+			else {
+				local vartype: type `name_to_create'
+				if inlist("`vartype'", "byte", "int") {
+					recast long `name_to_create'
+				}
+				else if inlist("`vartype'", "float") {
+					recast double `name_to_create'
+				}
+			}
+			format `name_to_create' %td
+		}
+		else if ("`type'" == "time") {
+			capture confirm variable `name_to_create'
+			if _rc {
+				quietly gen double `name_to_create' = .
+			}
+			else {
+				local vartype: type `name_to_create'
+				if inlist("`vartype'", "byte", "int", "long", "float") {
+					recast double `name_to_create'
+				}
+			}
+			format `name_to_create' %tchh:mm:ss
+		}
+		else if ("`type'" == "binary") {
+			di "Dropping `name_to_create' as cannot process binary columns"
+			local keep = 0
+		}
+		else if ("`type'" == "strl") {
+			local strl_position_`var_number' = `var_number' - `dropped_vars'
+			local strl_var_indexes `strl_var_indexes' `var_number'
+
+			capture confirm variable `name_to_create'
+			if _rc {
+				quietly gen strL `name_to_create' = ""
+			}
+			else {
+				local vartype: type `name_to_create'
+				// Check if it's a fixed-length string type (str1, str2, etc.)
+				if regexm("`vartype'", "^str([0-9]+)$") {
+					recast strL `name_to_create'
+				}
+				else if inlist("`vartype'", "byte", "int", "long", "float", "double") {
+					tostring `name_to_create', replace force
+					recast strL `name_to_create'
+				}
+			}
+		}
+		else if ("`type'" == "float") {
+			capture confirm variable `name_to_create'
+			if _rc {
+				quietly gen float `type' `name_to_create' = .
+			}
+			else {
+				local vartype: type `name_to_create'
+				if inlist("`vartype'", "long") {
+					recast double `name_to_create'
+				}
+			}
+		}
+		else if ("`type'" == "long") {
+			capture confirm variable `name_to_create'
+			if _rc {
+				quietly gen long `name_to_create' = .
+			}
+			else {
+				local vartype: type `name_to_create'
+				if inlist("`vartype'", "byte", "int") {
+					recast long `name_to_create'
+				}
+				else if inlist("`vartype'", "float") {
+					recast double `name_to_create'
+				}
+			}
+		}
+		else if ("`type'" == "int") {
+			capture confirm variable `name_to_create'
+			if _rc {
+				quietly gen int `name_to_create' = .
+			}
+			else {
+				local vartype: type `name_to_create'
+				if inlist("`vartype'", "byte") {
+					recast int `name_to_create'
+				}
+			}
+		}
+		else {
+			capture confirm variable `name_to_create'
+			if _rc {
+				quietly gen double `name_to_create' = .
+			}
+			else {
+				local vartype: type `name_to_create'
+				if inlist("`vartype'", "byte", "int", "long", "float") {
+					recast double `name_to_create'
+				}
+			}
+		}
+
+		if ("`rename_to'" != "") {
+			label variable `name_to_create' "{parquet_name:`vari'}"
+		}
+
+		if (`keep') {
+			//	di "keeping `vari'"
+			local match_vars_non_binary `match_vars_non_binary' `vari'
+		}
+		else {
+			local dropped_vars = `dropped_vars' + 1
+		}
+	}
+
+	local matched_vars `match_vars_non_binary'
+
+	local offset = max(0,`offset' - 1)
+	//	local n_rows = `offset' + `row_to_read'
+
+	//	Tell polars to concatenate file list with "vertical_relaxed"
+	//		so that it can combine different schema types
+	//		to their supertype 
+	//		i.e. if a is an int8 in file 1 and an int16 in file 2,
+	//			it won't throw an error, but make it an int16 in the final file
+	local vertical_relaxed = "`relaxed'" != ""
+
+	//	asterisk_to_variable - for files /file/*.parquet, convert
+	//		* to a variable, so /file/2019.parquet, file/2020.parquet
+	//		will have the item in asterisk_to_variable as 2019 and 2020
+	//		for the records on the file
+	//	di `"plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' "`sql_if'" "`mapping'" "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already'"'
+	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already'
+
+	
+	if ("`strl_var_indexes'" != "") {
+		di "Slowly processing strL variables"
+		foreach var_indexi in `strl_var_indexes' {
+			local lookup_number `strl_position_`var_indexi''
+			forvalues batchi = 1/`n_batches' {
+				local pathi `strl_path_`lookup_number'_`batchi''
+				local namei `strl_name_`lookup_number'_`batchi''
+				local starti `strl_start_`lookup_number'_`batchi''
+				local endi `strl_end_`lookup_number'_`batchi''
+
+				local starti = `starti' + `n_obs_already'
 
 				if `batchi' == 1 {
 					di "	`namei'"
@@ -300,7 +774,8 @@ program pq_describe, rclass
 	local b_quiet = ("`quietly'" != "")
 	local b_detailed = ("`detailed'" != "")
 	
-	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "" "`asterisk_to_variable'"
+	//	Trailing zeros are compress indicators
+	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "" "`asterisk_to_variable'" 0 0
 
 	
 	local macros_to_return n_rows n_columns //	mapping
@@ -405,6 +880,8 @@ program pq_save
 						   compression(string)				///
 						   compression_level(integer -1)	///
 						   NOPARTITIONOVERWRITE				///
+						   compress							///
+						   compress_string_to_numeric		///	
 						   ]	//	in(string) 
         
 	//	if "`partition_by'" != "" {
@@ -536,8 +1013,11 @@ program pq_save
 	local offset = max(0,`offset' - 1)
 	
 	local overwrite_partition = "`nopartitionoverwrite'" == ""
-	di `"plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' "`sql_if'" "`StataColumnInfo'" "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition'"'
-	plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' `"`sql_if'"' `"`StataColumnInfo'"' "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' 
+	local b_compress = "`compress'" != ""
+	local b_compress_string_to_numeric = "`compress_string_to_numeric'" != ""
+
+	di `"plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' "`sql_if'" "`StataColumnInfo'" "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric'"'
+	plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' `"`sql_if'"' `"`StataColumnInfo'"' "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric'
 end
 
 

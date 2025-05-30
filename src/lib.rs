@@ -122,7 +122,6 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     Some(subfunction_args[8])
                 };
 
-
                 let read_result = read_to_stata(
                     subfunction_args[0],
                     subfunction_args[1],
@@ -133,7 +132,8 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     parallel_strategy,
                     safe_relaxed,
                     asterisk_to_variable_name,
-                    subfunction_args[9]
+                    subfunction_args[9],
+                    subfunction_args[10].parse::<usize>().unwrap(),
                 );
         
                 // Use match to handle the Result
@@ -180,12 +180,18 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 let compression = subfunction_args[7];
                 let compression_level_passed = subfunction_args[8].parse::<i32>().unwrap();
                 let overwrite_partition = subfunction_args[9].parse::<i32>().unwrap() == 1;
+
                 
                 let compression_level = if compression_level_passed == -1 {
                     None
                 } else {
                     Some(compression_level_passed as usize)
                 };
+
+
+                let compress = subfunction_args[10].parse::<u8>().unwrap() != 0;
+                let compress_string = subfunction_args[11].parse::<u8>().unwrap() != 0;
+                
                 let output = match write::write_from_stata(
                     path,
                     varlist,
@@ -198,6 +204,8 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     compression,
                     compression_level,
                     overwrite_partition,
+                    compress,
+                    compress_string
                 ) {
                     Ok(_) => 0 as i32,
                     Err(_e) => 198 as i32

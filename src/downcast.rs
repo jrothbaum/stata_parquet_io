@@ -112,8 +112,8 @@ fn safe_shrink_integers(
         .iter()
         .flat_map(|col_name| {
             vec![
-                col(col_name).min().alias(&format!("{}_min", col_name)),
-                col(col_name).max().alias(&format!("{}_max", col_name)),
+                col(col_name).min().cast(DataType::Int64).alias(&format!("{}_min", col_name)),
+                col(col_name).max().cast(DataType::Int64).alias(&format!("{}_max", col_name)),
             ]
         })
         .collect();
