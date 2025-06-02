@@ -119,6 +119,7 @@ pub fn map_stata_to_polars(
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ColumnInfo {
+    pub index: usize,
     pub name: String,
     pub dtype: String,
     pub stata_type: String,
@@ -250,6 +251,7 @@ pub fn schema_with_stata_types(
         let stata_type = map_polars_to_stata(dtype,*char_length);
 
         let column_info = ColumnInfo {
+            index: i,
             name: name.to_string(),
             dtype: format!("{:?}", dtype),
             stata_type: stata_type.to_string().to_owned(),

@@ -256,12 +256,12 @@ program pq_use
 	//		* to a variable, so /file/2019.parquet, file/2020.parquet
 	//		will have the item in asterisk_to_variable as 2019 and 2020
 	//		for the records on the file
-	//	di `"plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' "`sql_if'" "`mapping'" "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" 0"'
+	di `"plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' "`sql_if'" "`mapping'" "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" 0"'
 	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" 0
 
-	
 	if ("`strl_var_indexes'" != "") {
 		di "Slowly processing strL variables"
+	
 		foreach var_indexi in `strl_var_indexes' {
 			local lookup_number `strl_position_`var_indexi''
 			forvalues batchi = 1/`n_batches' {
@@ -280,7 +280,6 @@ program pq_use
 			}
 		}
 	}
-
 end
 
 
@@ -416,7 +415,9 @@ program pq_append
 						parallelize(string)		///
 						sort(string)			///
 						compress				///
-						compress_string_to_numeric]
+						compress_string_to_numeric	///
+						clear					///
+						append]
 
     pq_register_plugin
 	
@@ -489,15 +490,20 @@ program pq_append
 		local match_all = 0
     }
 	
-	//	Create the empty data
+	//	Get the list of already existing variables
+	unab all_vars: *
+	local n_vars_already : word count `all_vars'
+
+	//	Create the empty data, if needed, or add rows, if needed
 	if (`last_n' == 0)	local last_n = `n_rows'
 	local row_to_read = max(0,min(`n_rows',`last_n') - `offset' + (`offset' > 0))
-	
+	//	di "local row_to_read = max(0,min(`n_rows',`last_n') - `offset' + (`offset' > 0))"
 	
 	tempfile temp_strl
 	local temp_strl_stub `temp_strl'
 	
 	local n_obs_already = _N
+	//	di "local n_obs_after = `n_obs_already' + `row_to_read'"
 	local n_obs_after = `n_obs_already' + `row_to_read'
 	quietly set obs `n_obs_after'
 
@@ -533,148 +539,30 @@ program pq_append
 		//	di "name: 			`name_to_create'"
 		//	di "type: 			`type'"
 		//	di "string_length: 	`string_length'"
-	
+		//	di "pq_gen_or_recast,	name(`name_to_create')			///"
+		//	di "					type_new(`type')				///"
+		//	di "					str_length(`string_length')"
+		pq_gen_or_recast,	name(`name_to_create')			///
+							type_new(`type')				///
+							str_length(`string_length')
 		local keep = 1
-		local strl_limit = 2045
 
-		if ("`type'" == "string") {
-			local string_length = max(1,`string_length')
-
-			capture confirm variable `name_to_create'
-			if _rc {
-				quietly gen str`string_length' `name_to_create' = ""
-			}
-			else {
-				local vartype: type `name_to_create'
-				// Check if it's a fixed-length string type (str1, str2, etc.)
-				di "vartype: `vartype'"
-				if regexm("`vartype'", "^str([0-9]+)$") {
-					local current_length = regexs(1)
-					if `string_length' > `current_length' {
-						recast str`string_length' `name_to_create'
-					}
-				}
-				else if inlist("`vartype'", "byte", "int", "long", "float", "double") {
-					tostring `name_to_create', replace force
-				}
-			}
+		if ("`type'" == "strl") {
+			local strl_position_`var_number' = `var_number' - `dropped_vars'
+			local strl_var_indexes `strl_var_indexes' `var_number'
 		}
 		else if ("`type'" == "datetime") {
-			capture confirm variable `name_to_create'
-			if _rc {
-				quietly gen double `name_to_create' = .
-			}
-			else {
-				local vartype: type `name_to_create'
-				if inlist("`vartype'", "byte", "int", "long", "float") {
-					recast double `name_to_create'
-				}
-			}
 			format `name_to_create' %tc
 		}
 		else if ("`type'" == "date") {
-			capture confirm variable `name_to_create'
-			if _rc {
-				quietly gen long `name_to_create' = .
-			}
-			else {
-				local vartype: type `name_to_create'
-				if inlist("`vartype'", "byte", "int") {
-					recast long `name_to_create'
-				}
-				else if inlist("`vartype'", "float") {
-					recast double `name_to_create'
-				}
-			}
 			format `name_to_create' %td
 		}
 		else if ("`type'" == "time") {
-			capture confirm variable `name_to_create'
-			if _rc {
-				quietly gen double `name_to_create' = .
-			}
-			else {
-				local vartype: type `name_to_create'
-				if inlist("`vartype'", "byte", "int", "long", "float") {
-					recast double `name_to_create'
-				}
-			}
 			format `name_to_create' %tchh:mm:ss
 		}
 		else if ("`type'" == "binary") {
 			di "Dropping `name_to_create' as cannot process binary columns"
 			local keep = 0
-		}
-		else if ("`type'" == "strl") {
-			local strl_position_`var_number' = `var_number' - `dropped_vars'
-			local strl_var_indexes `strl_var_indexes' `var_number'
-
-			capture confirm variable `name_to_create'
-			if _rc {
-				quietly gen strL `name_to_create' = ""
-			}
-			else {
-				local vartype: type `name_to_create'
-				// Check if it's a fixed-length string type (str1, str2, etc.)
-				if regexm("`vartype'", "^str([0-9]+)$") {
-					recast strL `name_to_create'
-				}
-				else if inlist("`vartype'", "byte", "int", "long", "float", "double") {
-					tostring `name_to_create', replace force
-					recast strL `name_to_create'
-				}
-			}
-		}
-		else if ("`type'" == "float") {
-			capture confirm variable `name_to_create'
-			if _rc {
-				quietly gen float `type' `name_to_create' = .
-			}
-			else {
-				local vartype: type `name_to_create'
-				if inlist("`vartype'", "long") {
-					recast double `name_to_create'
-				}
-			}
-		}
-		else if ("`type'" == "long") {
-			capture confirm variable `name_to_create'
-			if _rc {
-				quietly gen long `name_to_create' = .
-			}
-			else {
-				local vartype: type `name_to_create'
-				if inlist("`vartype'", "byte", "int") {
-					recast long `name_to_create'
-				}
-				else if inlist("`vartype'", "float") {
-					recast double `name_to_create'
-				}
-			}
-		}
-		else if ("`type'" == "int") {
-			capture confirm variable `name_to_create'
-			if _rc {
-				quietly gen int `name_to_create' = .
-			}
-			else {
-				local vartype: type `name_to_create'
-				if inlist("`vartype'", "byte") {
-					recast int `name_to_create'
-				}
-			}
-		}
-		else {
-			capture confirm variable `name_to_create'
-			if _rc {
-				quietly gen double `name_to_create' = .
-			}
-			else {
-				local vartype: type `name_to_create'
-				if inlist("`vartype'", "byte", "int", "long", "float") {
-					recast double `name_to_create'
-				}
-			}
 		}
 
 		if ("`rename_to'" != "") {
@@ -691,7 +579,55 @@ program pq_append
 	}
 
 	local matched_vars `match_vars_non_binary'
+	local n_matched_vars: word count `match_vars_non_binary'
+	
+	//	Some work to get the proper variable indices for the ones to append
+	//		This is a little wasteful on use, but it's easier to have one way
+	//		for the code to run
 
+	tempname f_var_list
+	frame create `f_var_list'
+	frame `f_var_list' {
+		quietly gen index = .
+		quietly gen name = ""
+		quietly gen byte to_edit = .
+		quietly set obs `n_vars_already'
+
+		forvalues i = 1/`n_vars_already' {
+			local vari = word("`all_vars'", `i')
+			quietly replace name = "`vari'" if _n == `i'
+		}
+		quietly replace to_edit = 0
+		quietly set obs `=`n_vars' + `n_vars_already''
+		forvalues i = 1/`n_vars' {
+			local vari = word("`matched_vars'", `i')
+			
+			quietly replace name = "`vari'" if _n == (`i' + `n_vars_already')
+			quietly replace to_edit = 1 if _n == (`i' + `n_vars_already')
+		}
+		quietly replace index = _n
+		
+		sort name index
+		
+		quietly by name: replace to_edit = to_edit[_N]
+		quietly by name: gen new_index = index[_N]
+		quietly by name: keep if _n == 1
+		sort new_index
+		forvalues i = 1/`=_N' {
+			local index_`i' = index[`i']
+		}
+	}
+	frame drop `f_var_list'
+
+	//	Reassign the strL indices
+	if ("`strl_var_indexes'" != "") {
+		local strl_var_indexes_old `strl_var_indexes'
+		local strl_var_indexes
+		foreach indexi in `strl_var_indexes_old' {
+			local strl_var_indexes `strl_var_indexes' `index_`indexi''
+		}
+	}
+	
 	local offset = max(0,`offset' - 1)
 	//	local n_rows = `offset' + `row_to_read'
 
@@ -706,35 +642,153 @@ program pq_append
 	//		* to a variable, so /file/2019.parquet, file/2020.parquet
 	//		will have the item in asterisk_to_variable as 2019 and 2020
 	//		for the records on the file
-	//	di `"plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' "`sql_if'" "`mapping'" "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already'"'
-	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already'
+	//	di `"plugin call polars_parquet_plugin, read "`using'" "`matched_vars'" `row_to_read' `offset' "`sql_if'" "`mapping'" "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already'"'
 
+
+	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already'
 	
 	if ("`strl_var_indexes'" != "") {
 		di "Slowly processing strL variables"
 		foreach var_indexi in `strl_var_indexes' {
-			local lookup_number `strl_position_`var_indexi''
+			local lookup_number `var_indexi'
 			forvalues batchi = 1/`n_batches' {
 				local pathi `strl_path_`lookup_number'_`batchi''
 				local namei `strl_name_`lookup_number'_`batchi''
 				local starti `strl_start_`lookup_number'_`batchi''
 				local endi `strl_end_`lookup_number'_`batchi''
 
-				local starti = `starti' + `n_obs_already'
+				//	local starti = `starti' + `n_obs_already'
 
 				if `batchi' == 1 {
 					di "	`namei'"
 				}
 				
-				//	di "strl_position_`var_indexi' = `strl_position_`var_indexi''"
-				//	di `"pq_process_strl, path(`pathi') name(`namei') var_index(`strl_position_`var_indexi'') first(`starti') last(`endi')"'
-				pq_process_strl, path(`pathi') name(`namei') var_index(`strl_position_`var_indexi'') first(`starti') last(`endi')
+				//	di `"pq_process_strl, path(`pathi') name(`namei') var_index(`lookup_number') first(`starti') last(`endi')"'
+				pq_process_strl, path(`pathi') name(`namei') var_index(`lookup_number') first(`starti') last(`endi')
 			}
 		}
 	}
-
 end
 
+capture program drop pq_gen_or_recast
+program pq_gen_or_recast
+	version 16
+	syntax  ,	name(string)				///
+			 	type_new(string)			///
+				str_length(integer)
+	
+	local string_length = max(1,`str_length')
+	if ("`type_new'" == "datetime")			local type_new double
+	else if ("`type_new'" == "time")		local type_new double
+	else if ("`type_new'" == "date")		local type_new long
+	else if ("`type_new'" == "string")		local type_str str`str_length'
+	
+	capture confirm variable `name'
+	local b_gen = _rc > 0
+
+	local vartype
+	if (!`b_gen')	local vartype: type `name'
+
+	//	di _newline(2)
+	//	di "name: 		`name'"
+	//	di "type_new: 		`type_new'"
+	//	di "string_length:	`string_length'"
+	//	di "vartype: 		`vartype'"
+	
+
+	if ("`type_new'" == "string") {
+		if `b_gen' {
+			quietly gen `type_str' `name' = ""
+		}
+		else {
+			// Check if it's a fixed-length string type (str1, str2, etc.)
+			if regexm("`vartype'", "^str([0-9]+)$") {
+				local current_length = regexs(1)
+				
+				if `string_length' > `current_length' {
+					recast str`string_length' `name'
+				}
+			}
+			else if inlist("`vartype'", "byte", "int", "long", "float", "double") {
+				tostring `name', replace force
+			}
+		}
+	}
+	else if ("`type'" == "strl") {
+		local strl_position_`var_number' = `var_number' - `dropped_vars'
+		local strl_var_indexes `strl_var_indexes' `var_number'
+
+		if `b_gen' {
+			quietly gen strL `name' = ""
+		}
+		else {
+			// Check if it's a fixed-length string type (str1, str2, etc.)
+			if regexm("`vartype'", "^str([0-9]+)$") {
+				recast strL `name'
+			}
+			else if inlist("`vartype'", "byte", "int", "long", "float", "double") {
+				tostring `name', replace force
+				recast strL `name'
+			}
+		}
+	}
+	else if ("`type'" == "float") {
+		if `b_gen' {
+			quietly gen float `type' `name' = .
+		}
+		else {
+			if inlist("`vartype'", "long","double") {
+				recast double `name'
+			}
+			else if inlist("`vartype'", "byte", "int") {
+				recast float `name'
+			}
+		}
+	}
+	else if ("`type'" == "long") {
+		if `b_gen' {
+			quietly gen long `name' = .
+		}
+		else {
+			if inlist("`vartype'", "byte", "int") {
+				recast long `name'
+			}
+			else if inlist("`vartype'", "float") {
+				recast double `name'
+			}
+		}
+	}
+	else if ("`type'" == "int") {
+		if `b_gen' {
+			quietly gen int `name' = .
+		}
+		else {
+			if inlist("`vartype'", "byte") {
+				recast int `name'
+			}
+		}
+	}
+	else if ("`type'" == "byte") {
+		if `b_gen' {
+			quietly gen byte `name' = .
+		}
+		else {
+			if inlist("`vartype'", "int","long","float","double") {
+				recast `vartype' `name'
+			}
+		}
+	}
+	else {
+		if `b_gen' {
+			quietly gen double `name' = .
+		}
+		else {
+			if inlist("`vartype'", "byte", "int", "long", "float") {
+				recast double `name'
+			}
+		}
+	}
+end
 
 capture program drop pq_describe
 program pq_describe, rclass
@@ -1065,6 +1119,7 @@ program pq_process_strl
 
 	local first = max(`first',1)
 	//	di `"mata: read_strl_block("`path'", `var_index', `first', `last')"'
+
 	mata: read_strl_block("`path'", `var_index', `first', `last')
 	capture erase "`pathi'"
 end
@@ -1075,7 +1130,6 @@ mata:
 						 real scalar first,
 						 real scalar last) {
 		strl_values = cat(path)
-		
 		st_sstore(first::last,var_index,strl_values)		
 	}
 

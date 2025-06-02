@@ -690,11 +690,12 @@ pub fn read_to_stata(
             &batch_df,
             //  The index to assign to ignores the offset in the original data
             //      But it is offset by the stata_offset (for appends) 
-            batch_offseti - offset + stata_offset, 
+            batch_offseti - offset, 
             &all_columns,
             strategy,
             n_threads,
             batchi,
+            stata_offset
         ) {
             Ok(_) => {
                 // Do nothing on success
@@ -742,11 +743,13 @@ fn column_info_from_macros(n_vars: usize) -> Vec<ColumnInfo> {
     let mut column_infos = Vec::with_capacity(n_vars);
     
     for i in 0..n_vars {
+        let index = get_macro(&format!("index_{}", i+1), false, None).parse::<usize>().unwrap_or(i+1) - 1;
         let name = get_macro(&format!("name_{}", i+1), false, None);
         let dtype = get_macro(&format!("polars_type_{}", i+1), false, None);
         let stata_type = get_macro(&format!("type_{}", i+1), false, None);
         
         column_infos.push(ColumnInfo {
+            index,
             name,
             dtype,
             stata_type,
@@ -764,6 +767,7 @@ fn process_batch_with_strategy(
     strategy: ParallelizationStrategy,
     n_threads: usize,
     n_batch:usize,
+    stata_offset:usize,
 ) -> PolarsResult<()> {
 
     // If only 1 thread requested or batch is too small, use single-threaded version
@@ -771,11 +775,12 @@ fn process_batch_with_strategy(
     let min_multithreaded = 10000;
     
     if n_threads <= 1 || row_count < min_multithreaded {
-        return process_batch_single_thread(batch, start_index, all_columns);
+        return process_batch_single_thread(batch, start_index, all_columns, stata_offset);
     }
 
     // Partition columns into special (strl/binary) and regular columns
-    let (special_columns, regular_columns): (Vec<_>, Vec<_>) = all_columns.iter().enumerate()
+    let (special_columns, 
+         regular_columns): (Vec<_>, Vec<_>) = all_columns.iter().enumerate()
         .partition(|(_, col_info)| {
             col_info.stata_type == "strl" || col_info.stata_type == "binary"
         });
@@ -800,11 +805,11 @@ fn process_batch_with_strategy(
             match strategy {
                 ParallelizationStrategy::ByRow => {
                     // Process regular columns by row
-                    process_regular_by_row(batch, start_index, &regular_column_infos)?;
+                    process_regular_by_row(batch, start_index, &regular_column_infos, stata_offset)?;
                 },
                 ParallelizationStrategy::ByColumn => {
                     // Process regular columns by column
-                    process_regular_by_column(batch, start_index, &regular_column_infos)?;
+                    process_regular_by_column(batch, start_index, &regular_column_infos, stata_offset)?;
                 }
             }
         }
@@ -828,7 +833,8 @@ fn process_batch_with_strategy(
                                 batch.height(),
                                 start_index,
                                 n_batch + 1,
-                                col_idx+1,
+                                col_info.index+1,
+                                stata_offset,
                             )
                         },
                         // "binary" => {
@@ -851,7 +857,8 @@ fn process_batch_with_strategy(
 fn process_regular_by_row(
     batch: &DataFrame,
     start_index: usize,
-    columns: &Vec<ColumnInfo>
+    columns: &Vec<ColumnInfo>,
+    stata_offset: usize,
 ) -> PolarsResult<()> {
     let row_count = batch.height();
     
@@ -867,7 +874,7 @@ fn process_regular_by_row(
             let end_row = chunk[chunk.len() - 1] + 1;
             
             // Process this range of rows for regular columns
-            process_row_range(batch, start_index, start_row, end_row, columns)
+            process_row_range(batch, start_index, start_row, end_row, columns, stata_offset)
         })
 }
 
@@ -875,7 +882,8 @@ fn process_regular_by_row(
 fn process_regular_by_column(
     batch: &DataFrame,
     start_index: usize,
-    columns: &Vec<ColumnInfo>
+    columns: &Vec<ColumnInfo>,
+    stata_offset: usize,
 ) -> PolarsResult<()> {
     // Process columns in parallel
     columns.par_iter().enumerate()
@@ -902,8 +910,8 @@ fn process_regular_by_column(
                             
                             replace_string(
                                 opt_val, 
-                                global_row_idx + 1, // +1 because replace_string expects 1-indexed
-                                col_idx + 1        // +1 because replace functions expect 1-indexed
+                                global_row_idx + 1 + stata_offset, // +1 because replace_string expects 1-indexed
+                                col_info.index + 1        // +1 because replace functions expect 1-indexed
                             );
                         }
                     }
@@ -911,11 +919,11 @@ fn process_regular_by_column(
                 },
                 "datetime" => {
                     // Process datetime with appropriate time unit
-                    process_datetime_column(col, 0, batch.height(), start_index, col_idx + 1)
+                    process_datetime_column(col, 0, batch.height(), start_index, col_info.index + 1, stata_offset)
                 },
                 _ => {
                     // Handle numeric types
-                    process_numeric_column(col, col_info, 0, batch.height(), start_index, col_idx + 1)
+                    process_numeric_column(col, col_info, 0, batch.height(), start_index, col_info.index + 1, stata_offset)
                 }
             }
         })
@@ -926,7 +934,8 @@ fn process_regular_by_column(
 fn process_batch_single_thread(
     batch: &DataFrame,
     start_index: usize,
-    all_columns: &Vec<ColumnInfo>
+    all_columns: &Vec<ColumnInfo>,
+    stata_offset: usize,
 ) -> PolarsResult<()> {
     // Process all rows for all columns in a single thread
     set_macro("n_batches", "1", false);
@@ -939,7 +948,7 @@ fn process_batch_single_thread(
     let regular_column_infos: Vec<ColumnInfo> = regular_columns.iter()
                 .map(|(_, col_info)| (*col_info).clone())
                 .collect();
-    let regular_process_out = process_row_range(batch, start_index, 0, batch.height(), &regular_column_infos);
+    let regular_process_out = process_row_range(batch, start_index, 0, batch.height(), &regular_column_infos, stata_offset);
 
 
 
@@ -959,7 +968,8 @@ fn process_batch_single_thread(
                             batch.height(),
                             start_index,
                             1 as usize,
-                            col_idx + 1,
+                            col_info.index + 1,
+                            stata_offset,
                         )
                     },
                     // "binary" => {
@@ -982,7 +992,8 @@ fn process_row_range(
     start_index: usize,
     start_row: usize,
     end_row: usize,
-    all_columns: &Vec<ColumnInfo>
+    all_columns: &Vec<ColumnInfo>,
+    stata_offset: usize,
 ) -> PolarsResult<()> {
     // Iterate through each column
     for (col_idx, col_info) in all_columns.iter().enumerate() {
@@ -1018,19 +1029,19 @@ fn process_row_range(
                         
                         replace_string(
                             opt_val, 
-                            global_row_idx + 1, // +1 because replace_string expects 1-indexed
-                            col_idx + 1        // +1 because replace functions expect 1-indexed
+                            global_row_idx + 1 + stata_offset, // +1 because replace_string expects 1-indexed
+                            col_info.index + 1        // +1 because replace functions expect 1-indexed
                         );
                     }
                 }
             },
             "datetime" => {
                 // Process datetime with appropriate time unit
-                process_datetime_column(col, start_row, end_row, start_index, col_idx + 1)?;
+                process_datetime_column(col, start_row, end_row, start_index, col_info.index + 1, stata_offset)?;
             },
             _ => {
                 // Handle numeric types (including date/time which get converted to numeric)
-                process_numeric_column(col, col_info, start_row, end_row, start_index, col_idx + 1)?;
+                process_numeric_column(col, col_info, start_row, end_row, start_index, col_info.index + 1, stata_offset)?;
             }
         }
     }
@@ -1044,7 +1055,8 @@ fn process_datetime_column(
     start_row: usize,
     end_row: usize,
     start_index: usize,
-    col_idx: usize
+    col_idx: usize,
+    stata_offset: usize
 ) -> PolarsResult<()> {
     // Get the time_unit from the schema if it's a datetime column
     let time_unit = if col.dtype().is_temporal() {
@@ -1078,7 +1090,7 @@ fn process_datetime_column(
 
         replace_number(
             value, 
-            global_row_idx + 1,  // +1 because replace functions expect 1-indexed
+            global_row_idx + 1 + stata_offset,  // +1 because replace functions expect 1-indexed
             col_idx              // col_idx is already 1-indexed
         );
     }
@@ -1093,7 +1105,8 @@ fn process_numeric_column(
     start_row: usize,
     end_row: usize,
     start_index: usize,
-    col_idx: usize
+    col_idx: usize,
+    stata_offset: usize,
 ) -> PolarsResult<()> {
         // Get the column's data type from the stored string representation
     let dtype_str = col_info.dtype.as_str();
@@ -1123,7 +1136,7 @@ fn process_numeric_column(
         
         replace_number(
             value, 
-            global_row_idx + 1,  // +1 because replace functions expect 1-indexed
+            global_row_idx + 1 + stata_offset,  // +1 because replace functions expect 1-indexed
             col_idx              // col_idx is already 1-indexed
         );
     }
@@ -1141,8 +1154,9 @@ fn process_strl_column(
     start_index: usize,
     n_batch:usize,
     col_idx:usize,
+    stata_offset:usize,
 ) -> PolarsResult<()> {
-    
+    let start_row = std::cmp::max(start_row,1);
     let path_stub = get_macro(
         &"temp_strl_stub",
         false,
@@ -1174,13 +1188,14 @@ fn process_strl_column(
         &column_name,
         false,
     );
+
     set_macro(
         &format!(
             "strl_start_{}_{}",
             col_idx,
             n_batch
         ),
-        &(start_row + start_index).to_string(),
+        &(start_row + start_index + stata_offset).to_string(),
         false,
     );
 
@@ -1190,7 +1205,7 @@ fn process_strl_column(
             col_idx,
             n_batch
         ),
-        &(end_row + start_index).to_string(),
+        &(end_row + start_index + stata_offset).to_string(),
         false,
     );
     let sink_target = SinkTarget::Path(Arc::new(PathBuf::from(path)));
@@ -1210,15 +1225,14 @@ fn process_strl_column(
         .collect()
         .unwrap();
 
-    match processed.lazy()
-                                                  .sink_csv(
-                                                    sink_target,
-                                                    csv_options,
-                                                    None,
-                                                    SinkOptions::default()
-                                                  )
-                                                  .unwrap()
-                                                  .collect() {
+    match processed.lazy().sink_csv(
+                                sink_target,
+                                csv_options,
+                                None,
+                                SinkOptions::default()
+                            )
+                            .unwrap()
+                            .collect() {
             Err(e) => {
                 display(&format!("Strl csv write error for {}: {}", column_name, e));
                 Err(e)
