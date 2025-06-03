@@ -4,24 +4,53 @@
 
 ## Features
 
-- Read Parquet files into Stata datasets
-- Write Stata datasets to Parquet files
-- Describe Parquet file structure without loading the data
-- Support for variable selection and filtering
+- **Read** Parquet files into Stata datasets
+- **Write** Stata datasets to Parquet files  
+- **Append** Parquet files to existing data in memory
+- **Merge** Parquet files with existing data using standard Stata merge syntax
+- **Describe** Parquet file structure without loading the data
+- Support for variable selection and filtering during read operations
 - Automatic handling of data types between Stata and Parquet
-- Preserves original Parquet column names
+- Preserves original Parquet column names via variable labels
+- Performance optimizations including compression and parallel processing
+- Support for partitioned datasets and wildcard file patterns
 
 ## Installation
-- Current status - github actions create the proper files for Windows, Linux, and Mac.  I have successfully tested that the Linux and Windows github build files work.  I will soon submit them for download via SSC.
+- Current status - github actions create the proper files for Windows, Linux, and Mac.  The plugins have been tested on Linux, Windows, and Mac (Intel and ARM - see note below for ARM use).
+
+### Option 1: Install from SSC
+```stata
+ssc install pq
+```
+[SSC listing](https://ideas.repec.org/c/boc/bocode/s459458.html)
+
+### Option 2: Manual installation
+1. Download the package files from the [latest release](https://github.com/jrothbaum/stata_parquet_io/releases)
+2. Place all files in your PLUS directory (find location with `sysdir`)
+3. The plugin files (`.dll`, `.so`, or `.dylib`) should be placed in the 'p' folder within your PLUS directory
+
+### Important Note for Mac ARM Users
+
+You may encounter an error related to Mac Gatekeeper restrictions on unsigned binaries. To resolve this:
+
+1. Go to **System Preferences/Settings → Privacy & Security**
+2. Look for a message about the blocked dylib near the bottom
+3. Click **"Allow Anyway"** next to the blocked file
+4. Authenticate with your password if prompted
+5. Try using the plugin again in Stata
+
+
+## Quick Start
 
 ```stata
-* Option 1: Install from SSC
-ssc install pq
-(https://ideas.repec.org/c/boc/bocode/s459458.html)
+* Load a Parquet file
+pq use using mydata.parquet, clear
 
-* Option 2: Manual installation
-* Download the package files from the latest build at releases (https://github.com/jrothbaum/stata_parquet_io/releases) and place them in your PLUS directory
-* The plugin files should be placed in the 'p' folder within your PLUS directory
+* Save current data as Parquet
+pq save using mydata.parquet, replace
+
+* Describe a Parquet file without loading
+pq describe using mydata.parquet
 ```
 
 ## Usage
@@ -35,12 +64,35 @@ pq use using filename.parquet, clear
 * Read specific variables
 pq use var1 var2 var3 using filename.parquet, clear
 
-* Read with observation filtering
-pq use using filename.parquet, clear in(1/1000)
+* Read with observation filtering (using Stata syntax that will be converted to SQL)
 pq use using filename.parquet, clear if(value > 100)
+
+* Read subset of rows
+pq use using filename.parquet, clear in(1/1000)
 
 * Use wildcards to select variables
 pq use x* using filename.parquet, clear
+
+* Performance optimizations
+pq use using large_file.parquet, clear compress compress_string_to_numeric sort(id)
+```
+
+### Appending Data
+
+```stata
+* Append Parquet file to existing data
+pq append using additional_data.parquet
+
+* Append with filtering
+pq append using new_data.parquet, if(year == 2024)
+```
+
+### Merging Data
+
+```stata
+* Standard Stata merge syntax with Parquet files
+pq merge 1:1 id using lookup_table.parquet, generate(_merge)
+pq merge m:1 category_id using categories.parquet, keep(match) nogenerate
 ```
 
 ### Writing Parquet Files
@@ -52,37 +104,109 @@ pq save using filename.parquet, replace
 * Save specific variables
 pq save var1 var2 var3 using filename.parquet, replace
 
-* Save a subset of observations
+* Save with filtering
 pq save using filename.parquet, replace if(value > 100)
 
-* Disable automatic variable renaming.  Renaming by default restores original Parquet names from labels if a rename was needed (reserved words like int or variables longer than 32 characters, etc.)
+* Save with compression options
+pq save using compressed.parquet, replace compression(zstd) compression_level(9)
+
+* Create partitioned dataset
+pq save using /output/partitioned_data, replace partition_by(year region)
+
+* Preserve original Parquet variable names (default behavior)
+pq save using filename.parquet, replace
+* OR disable automatic renaming
 pq save using filename.parquet, replace noautorename
 ```
 
 ### Examining Parquet Files
 
 ```stata
-* Basic structure information (detailed and quietly are really for getting slightly more information before calling pq use, but you can use it)
-pq describe using filename.parquet, [detailed quietly]
+* Basic structure information
+pq describe using filename.parquet
+
+* Detailed information including string lengths
+pq describe using filename.parquet, detailed
+
+* Quiet mode for programmatic use
+pq describe using filename.parquet, quietly
+return list  // View returned values
 ```
+
 
 ## Advanced Features
 
-### Thread management
+### Working with Multiple Files
 
-By default, stata_parquet_io will use all the threads available on the computer.  If that is not desirable, set the environment variable POLARS_MAX_THREADS to the number of threads you want to use (for example on a shared system).  This will limit the number of threads used in the parquet read/write operations (from polars in Rust) and in serializing the data to Stata.
+```stata
+* Load multiple files with wildcard patterns
+pq use using /data/sales_*.parquet, clear asterisk_to_variable(year)
+
+* Combine files with different schemas
+pq use using /data/*.parquet, clear relaxed
+```
+
+### Performance Optimization
+
+```stata
+* Thread management - set environment variable to limit threads
+* (useful on shared systems)
+* Example: set POLARS_MAX_THREADS=4 before starting Stata
+
+* Parallel processing strategies
+pq use using large_file.parquet, clear parallelize(columns)  // for wide files
+pq use using large_file.parquet, clear parallelize(rows)     // for tall files
+
+* Compression and optimization
+pq use using large_file.parquet, clear compress compress_string_to_numeric
+```
 
 ### Variable Name Handling
 
-Parquet files can have much more flexible variable names than Stata, including spaces, dashes, pretty much anything.  They also isn't really a limit to the length of a variable name for a parquet file.  Stata variable names are limited to 32 alphanumeric characters. 
- When reading Parquet files, the original column names are preserved in variable labels. When saving back to Parquet, the package automatically restores the original Parquet column names unless the `noautorename` option is specified.
+Parquet files support more flexible variable names than Stata (spaces, special characters, unlimited length). When reading Parquet files:
+
+- Original column names are preserved in variable labels as `{parquet_name:original_name}`
+- Variables are renamed if they contain reserved words or exceed 32 characters
+- When saving, original Parquet names are automatically restored unless `noautorename` is specified
+
+### Partitioned Datasets
+
+```stata
+* Save as partitioned dataset (creates directory structure)
+pq save using /output/partitioned_data, replace partition_by(year region)
+
+* Control partition overwrite behavior
+pq save using /output/data, replace partition_by(year) nopartitionoverwrite
+```
+
+## Data Type Support
+
+| Parquet Type | Stata Type | Notes |
+|--------------|------------|-------|
+| String | str# or strL | Automatically sized; >2045 chars become strL |
+| Integer | byte/int/long | Automatically sized based on range |
+| Float | float/double | Preserves precision |
+| Boolean | byte | 0/1 values |
+| Date | long | Formatted as %td |
+| DateTime | double | Formatted as %tc |
+| Time | double | Formatted as %tchh:mm:ss |
+| Binary | *dropped* | Not currently supported by Stata for C plugins |
 
 ## Technical Details
 
-This package uses a plugin based on the *blazingly-fast* (as required for all Rust packages, but also true in at least this case) [Polars](https://github.com/pola-rs/polars) library to handle Parquet files efficiently.  Polars is being developed by [Ritchie Vink](https://www.ritchievink.com/) and many others.
+- Built on the [Polars](https://github.com/pola-rs/polars) library for blazing-fast performance (as all Rust libraries require you note)
+- Requires Stata 16.0 or later
+- Cross-platform support (Windows, Linux, macOS)
+- Efficient memory usage with optional compression
+- Plugin-based architecture for optimal performance
 
 ## Limitations
-Binary data is not supported, and I'm not sure I will implement parquet<->stata support for Binary<->strL binary.  Reads of strL string columns will be slow as there is no support for setting strL values in the C plugin and I needed to use I/O to implement a hacky workaround.
+
+- **Binary data**: Not supported (columns are dropped with warning)
+- **strL performance**: Reading strL columns is slower due to Stata plugin limitations  
+- **SQL vs. Stata syntax**: The `if()` condition converts Stata if conditions to SQL-style comparisons where missing values are not treated as greater than any value (unlike Stata)
+
+
 
 ## Benchmarks
 This was run on my computer, with the following specs:<br>
