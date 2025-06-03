@@ -126,7 +126,7 @@ pq merge 1:1 c_1 using "`tparquet'_merge.parquet"
 pq use "`tparquet'_2018.parquet", clear
 pq merge 1:1 _n using "`tparquet'_merge.parquet", compress
 
-;
+
 
 capture erase `tparquet'_2018.parquet
 capture erase `tparquet'_2019.parquet

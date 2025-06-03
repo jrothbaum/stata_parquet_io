@@ -145,20 +145,19 @@ pq use "`t_save'.parquet", clear
 count
 pq append "`t_save'_append.parquet"
 count
-;
-//	sum
-//	describe
+
+sum
+describe
 
 
 
-/*
 foreach typei in `var_types_str' {
 	foreach typej in `var_types_str' {
 		di "`typei'_`typej'[1]: 			" `typei'_`typej'[1]
 		di "`typei'_`typej'[`=`n_rows' + 1']: 	" `typei'_`typej'[`=`n_rows' + 1']
 	}
 }
-*/
+
 
 capture erase "`t_save'.parquet"
 capture erase "`t_save'_append.parquet"

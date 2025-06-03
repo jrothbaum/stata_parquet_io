@@ -7,12 +7,20 @@ program define pq
     local todo `todo'
 
     if ("`todo'" == "use") {
-		//	di `"pq_use `0'"'
-		pq_use `0'
+		//	di `"pq_use_append `0'"'
+		//	pq_use_append `0'
+		pq_use_append `0'
     }
 	else if ("`todo'" == "append") {
-		//	di `"pq_append `0'"'
-		pq_append `0'
+		//	di `"pq_use_append `0' append"'
+		if strpos(`"`0'"', ",") > 0 {
+			// Already has options, just add append
+			pq_use_append `0' append
+		}
+		else {
+			// No options yet, need to add comma before append
+			pq_use_append `0', append
+		}
     }
 	else if ("`todo'" == "merge") {
 		//	di `"pq_merge `0'"'
@@ -30,256 +38,6 @@ program define pq
         disp as err `"Unknown sub-comand `todo'"'
         exit 198
     }
-end
-
-capture program drop pq_use
-program pq_use
-    version 16.0
-    
-    local input_args = `"`0'"'
-
-	// Check if "using" is present in arguments
-    local using_pos = strpos(`" `input_args' "', " using ")
-    
-    if `using_pos' > 0{
-        // 	Extract everything before "using"
-        local namelist = substr(`"`input_args'"', 1, `using_pos'-1)
-        local rest = substr(`"`input_args'"', `using_pos'+6, .)
-		local 0 = `"using `rest'"'
-	}
-    else {
-        // No "using" - parse everything as filename and options
-        local 0 = `"using `input_args'"'
-    
-        // namelist is empty since no "using" separator
-        local namelist ""
-    }
-
-	syntax using/ [, 	clear 					///
-						in(string) 				///
-						if(string asis) 		///
-						relaxed 				///
-						asterisk_to_variable(string)	///
-						parallelize(string)		///
-						sort(string)			///
-						compress				///
-						compress_string_to_numeric]
-
-    pq_register_plugin
-	`clear'
-	
-	if `=_N' > 0 {
-		display as error "There is already data loaded, pass clear if you want to load a parquet file"
-		exit 2000
-	}
-
-	if (!inlist("`parallelize'", "", "columns", "rows")) {
-		display as error `"Acceptable options for parallelize are "columns", "rows", and "", passed "`parallelize'""'
-		exit 198
-	}
-	
-	if ("`in'" != "") {
-		local offset = substr("`in'", 1, strpos("`in'", "/") -1)
-		local offset = max(`offset',0)
-		local last_n = substr("`in'", strpos("`in'", "/") + 1, .)
-	}
-	else {
-		local offset = 0
-		local last_n = 0
-	}
-	
-	
-	//	Process the if statement, if passed
-	if (`"`if'"' != "") {
-		local greater_than = strpos(`"`if'"', ">") > 0
-		if (`greater_than') {
-			di as error "pq will interpret > as in SQL, which is different than Stata."
-			di as error "	It will not include . as > any value."
-		}
-		//	di `"plugin call polars_parquet_plugin, if "`if'""'
-		plugin call polars_parquet_plugin, if `"`if'"'
-	}
-	else {
-		local sql_if
-	}
-	
-	//	di `"if: `sql_if'"'
-	//	Initialize "mapping" to tell plugin to read from macro variables
-	local mapping from_macros
-	local b_quiet = 1
-	local b_detailed = 1
-	local b_compress = "`compress'" != ""
-	local b_compress_string_to_numeric = "`compress_string_to_numeric'" != ""
-	//	di `"plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "`sql_if'" "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric'"'
-	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric'
-	
-	local vars_in_file
-	local n_renamed = 0
-	forvalues i = 1/`n_columns' {
-		local vars_in_file `vars_in_file' `name_`i''
-
-		local renamei `rename_`i''
-		if ("`renamei'" != "") {
-			local n_renamed = `n_renamed' + 1 
-			local rename_from_`n_renamed' `name_`i''
-			local rename_to_`n_renamed' `renamei'
-		}
-	}
-	
-	
-
-	// If namelist is empty or blank, return the full varlist
-    if "`namelist'" == "" | "`namelist'" == "*" {
-        local matched_vars `vars_in_file'
-		local match_all = 1
-    }
-    else {
-        // Use function to match the variables from name list to the ones on the file
-        pq_match_variables `namelist', against(`vars_in_file')
-
-		local matched_vars = r(matched_vars)
-		local match_all = 0
-    }
-	
-	//	Create the empty data
-	if (`last_n' == 0)	local last_n = `n_rows'
-	local row_to_read = max(0,min(`n_rows',`last_n') - `offset' + (`offset' > 0))
-	
-	
-	tempfile temp_strl
-	//	local temp_strl C:\Users\jonro\Downloads\temp_strl
-	local temp_strl_stub `temp_strl'
-	
-	
-	quietly set obs `row_to_read'
-
-	local match_vars_non_binary
-
-	local dropped_vars = 0
-	local strl_var_indexes
-
-	foreach vari in `matched_vars' {
-		local var_number: list posof "`vari'" in vars_in_file
-		local type `type_`var_number''
-		local string_length `string_length_`var_number''
-		//	di "var_number: `var_number'"
-		//	di "vari: `vari'"
-		//	di "string_length_`var_number': `string_length'"
-		
-		//	Set rename_to to nothing
-		local rename_to
-		
-		//	Does it need to be renamed?
-		local name_to_create `vari'
-		forvalues i = 1/`n_renamed' {
-			local rename_from `rename_from_`i''
-
-			if ("`vari'" == "`rename_from'") {
-				local rename_to `rename_to_`i''
-				local name_to_create `rename_to'
-				continue, break
-			}
-		}
-		
-
-		//	di "name: 			`name_to_create'"
-		//	di "type: 			`type'"
-		//	di "string_length: 	`string_length'"
-	
-		local keep = 1
-		local strl_limit = 2045
-
-		if ("`type'" == "string") {
-			local string_length = max(1,`string_length')
-			quietly gen str`string_length' `name_to_create' = ""
-		}
-		else if ("`type'" == "datetime") {
-			quietly gen double `name_to_create' = .
-			format `name_to_create' %tc
-		}
-		else if ("`type'" == "date") {
-			quietly gen long `name_to_create' = .
-			format `name_to_create' %td
-		}
-		else if ("`type'" == "time") {
-			quietly gen double `name_to_create' = .
-			format `name_to_create' %tchh:mm:ss
-		}
-		else if ("`type'" == "binary") {
-			di "Dropping `name_to_create' as cannot process binary columns"
-			local keep = 0
-		}
-		else if ("`type'" == "strl") {
-			local strl_position_`var_number' = `var_number' - `dropped_vars'
-			local strl_var_indexes `strl_var_indexes' `var_number'
-			quietly gen strL `name_to_create' = ""
-		}
-		else if ("`type'" == "float") {
-			quietly gen float `type' `name_to_create' = .
-		}
-		else if ("`type'" == "long") {
-			quietly gen long `type' `name_to_create' = .
-		}
-		else if ("`type'" == "int") {
-			quietly gen int `type' `name_to_create' = .
-		}
-		else {
-			quietly gen double `type' `name_to_create' = .
-		}
-
-		if ("`rename_to'" != "") {
-			label variable `name_to_create' "{parquet_name:`vari'}"
-		}
-
-		if (`keep') {
-			//	di "keeping `vari'"
-			local match_vars_non_binary `match_vars_non_binary' `vari'
-		}
-		else {
-			local dropped_vars = `dropped_vars' + 1
-		}
-	}
-
-	local matched_vars `match_vars_non_binary'
-
-	local offset = max(0,`offset' - 1)
-	//	local n_rows = `offset' + `row_to_read'
-
-	//	Tell polars to concatenate file list with "vertical_relaxed"
-	//		so that it can combine different schema types
-	//		to their supertype 
-	//		i.e. if a is an int8 in file 1 and an int16 in file 2,
-	//			it won't throw an error, but make it an int16 in the final file
-	local vertical_relaxed = "`relaxed'" != ""
-
-	//	asterisk_to_variable - for files /file/*.parquet, convert
-	//		* to a variable, so /file/2019.parquet, file/2020.parquet
-	//		will have the item in asterisk_to_variable as 2019 and 2020
-	//		for the records on the file
-	di `"plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' "`sql_if'" "`mapping'" "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" 0"'
-	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" 0
-
-	if ("`strl_var_indexes'" != "") {
-		di "Slowly processing strL variables"
-	
-		foreach var_indexi in `strl_var_indexes' {
-			local lookup_number `strl_position_`var_indexi''
-			forvalues batchi = 1/`n_batches' {
-				local pathi `strl_path_`lookup_number'_`batchi''
-				local namei `strl_name_`lookup_number'_`batchi''
-				local starti `strl_start_`lookup_number'_`batchi''
-				local endi `strl_end_`lookup_number'_`batchi''
-
-				if `batchi' == 1 {
-					di "	`namei'"
-				}
-				
-				//	di "strl_position_`var_indexi' = `strl_position_`var_indexi''"
-				//	di `"pq_process_strl, path(`pathi') name(`namei') var_index(`strl_position_`var_indexi'') first(`starti') last(`endi')"'
-				pq_process_strl, path(`pathi') name(`namei') var_index(`strl_position_`var_indexi'') first(`starti') last(`endi')
-			}
-		}
-	}
 end
 
 
@@ -385,8 +143,8 @@ program pq_merge
 end
 
 
-capture program drop pq_append
-program pq_append
+capture program drop pq_use_append
+program pq_use_append
     version 16.0
     
     local input_args = `"`0'"'
@@ -407,7 +165,7 @@ program pq_append
         // namelist is empty since no "using" separator
         local namelist ""
     }
-
+	
 	syntax using/ [, 	in(string) 				///
 						if(string asis) 		///
 						relaxed 				///
@@ -418,9 +176,17 @@ program pq_append
 						compress_string_to_numeric	///
 						clear					///
 						append]
-
-    pq_register_plugin
 	
+	pq_register_plugin
+	
+
+	local b_append = "`append'" != ""
+	if (!`b_append' & "`clear'" != "")	clear
+	
+	if (`=_N' > 0 & !`b_append') {
+		display as error "There is already data loaded, pass clear if you want to load a parquet file"
+		exit 2000
+	}
 
 	if (!inlist("`parallelize'", "", "columns", "rows")) {
 		display as error `"Acceptable options for parallelize are "columns", "rows", and "", passed "`parallelize'""'
@@ -437,7 +203,6 @@ program pq_append
 		local last_n = 0
 	}
 	
-	
 	//	Process the if statement, if passed
 	if (`"`if'"' != "") {
 		local greater_than = strpos(`"`if'"', ">") > 0
@@ -445,7 +210,7 @@ program pq_append
 			di as error "pq will interpret > as in SQL, which is different than Stata."
 			di as error "	It will not include . as > any value."
 		}
-		//	di `"plugin call polars_parquet_plugin, if "`if'""'
+		di `"plugin call polars_parquet_plugin, if "`if'""'
 		plugin call polars_parquet_plugin, if `"`if'"'
 	}
 	else {
@@ -460,13 +225,14 @@ program pq_append
 	local b_compress = "`compress'" != ""
 	local b_compress_string_to_numeric = "`compress_string_to_numeric'" != ""
 	//	di `"plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "`sql_if'" "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric'"'
+	
 	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric'
 	
 	local vars_in_file
 	local n_renamed = 0
 	forvalues i = 1/`n_columns' {
 		local vars_in_file `vars_in_file' `name_`i''
-
+		
 		local renamei `rename_`i''
 		if ("`renamei'" != "") {
 			local n_renamed = `n_renamed' + 1 
@@ -476,9 +242,8 @@ program pq_append
 	}
 	
 	
-
 	// If namelist is empty or blank, return the full varlist
-    if "`namelist'" == "" | "`namelist'" == "*" {
+	if "`namelist'" == "" | "`namelist'" == "*" {
         local matched_vars `vars_in_file'
 		local match_all = 1
     }
@@ -491,9 +256,9 @@ program pq_append
     }
 	
 	//	Get the list of already existing variables
-	unab all_vars: *
+	capture unab all_vars: *
 	local n_vars_already : word count `all_vars'
-
+	
 	//	Create the empty data, if needed, or add rows, if needed
 	if (`last_n' == 0)	local last_n = `n_rows'
 	local row_to_read = max(0,min(`n_rows',`last_n') - `offset' + (`offset' > 0))
@@ -549,7 +314,7 @@ program pq_append
 
 		if ("`type'" == "strl") {
 			local strl_position_`var_number' = `var_number' - `dropped_vars'
-			local strl_var_indexes `strl_var_indexes' `var_number'
+			local strl_var_indexes `strl_var_indexes' `strl_position_`var_number''
 		}
 		else if ("`type'" == "datetime") {
 			format `name_to_create' %tc
@@ -576,58 +341,62 @@ program pq_append
 		else {
 			local dropped_vars = `dropped_vars' + 1
 		}
+
+		local index_`var_number' = `var_number' - `dropped_vars'
 	}
 
 	local matched_vars `match_vars_non_binary'
 	local n_matched_vars: word count `match_vars_non_binary'
 	
-	//	Some work to get the proper variable indices for the ones to append
-	//		This is a little wasteful on use, but it's easier to have one way
-	//		for the code to run
+	if ("`all_vars'" != "") {
+		//	Some work to get the proper variable indices for the ones to append
+		//		This is a little wasteful on use, but it's easier to have one way
+		//		for the code to run
 
-	tempname f_var_list
-	frame create `f_var_list'
-	frame `f_var_list' {
-		quietly gen index = .
-		quietly gen name = ""
-		quietly gen byte to_edit = .
-		quietly set obs `n_vars_already'
+		tempname f_var_list
+		frame create `f_var_list'
+		frame `f_var_list' {
+			quietly gen index = .
+			quietly gen name = ""
+			quietly gen byte to_edit = .
+			quietly set obs `n_vars_already'
 
-		forvalues i = 1/`n_vars_already' {
-			local vari = word("`all_vars'", `i')
-			quietly replace name = "`vari'" if _n == `i'
-		}
-		quietly replace to_edit = 0
-		quietly set obs `=`n_vars' + `n_vars_already''
-		forvalues i = 1/`n_vars' {
-			local vari = word("`matched_vars'", `i')
+			forvalues i = 1/`n_vars_already' {
+				local vari = word("`all_vars'", `i')
+				quietly replace name = "`vari'" if _n == `i'
+			}
+			quietly replace to_edit = 0
+			quietly set obs `=`n_vars' + `n_vars_already''
+			forvalues i = 1/`n_vars' {
+				local vari = word("`matched_vars'", `i')
+				
+				quietly replace name = "`vari'" if _n == (`i' + `n_vars_already')
+				quietly replace to_edit = 1 if _n == (`i' + `n_vars_already')
+			}
+			quietly replace index = _n
 			
-			quietly replace name = "`vari'" if _n == (`i' + `n_vars_already')
-			quietly replace to_edit = 1 if _n == (`i' + `n_vars_already')
+			sort name index
+			
+			quietly by name: replace to_edit = to_edit[_N]
+			quietly by name: gen new_index = index[_N]
+			quietly by name: keep if _n == 1
+			sort new_index
+			forvalues i = 1/`=_N' {
+				local index_`i' = index[`i']
+			}
 		}
-		quietly replace index = _n
-		
-		sort name index
-		
-		quietly by name: replace to_edit = to_edit[_N]
-		quietly by name: gen new_index = index[_N]
-		quietly by name: keep if _n == 1
-		sort new_index
-		forvalues i = 1/`=_N' {
-			local index_`i' = index[`i']
-		}
-	}
-	frame drop `f_var_list'
+		frame drop `f_var_list'
 
-	//	Reassign the strL indices
-	if ("`strl_var_indexes'" != "") {
-		local strl_var_indexes_old `strl_var_indexes'
-		local strl_var_indexes
-		foreach indexi in `strl_var_indexes_old' {
-			local strl_var_indexes `strl_var_indexes' `index_`indexi''
+		//	Reassign the strL indices
+		if ("`strl_var_indexes'" != "") {
+			local strl_var_indexes_old `strl_var_indexes'
+			local strl_var_indexes
+			foreach indexi in `strl_var_indexes_old' {
+				local strl_var_indexes `strl_var_indexes' `index_`indexi''
+			}
 		}
 	}
-	
+
 	local offset = max(0,`offset' - 1)
 	//	local n_rows = `offset' + `row_to_read'
 
@@ -681,7 +450,7 @@ program pq_gen_or_recast
 	if ("`type_new'" == "datetime")			local type_new double
 	else if ("`type_new'" == "time")		local type_new double
 	else if ("`type_new'" == "date")		local type_new long
-	else if ("`type_new'" == "string")		local type_str str`str_length'
+	else if ("`type_new'" == "string")		local type_str str`string_length'
 	
 	capture confirm variable `name'
 	local b_gen = _rc > 0
@@ -689,13 +458,12 @@ program pq_gen_or_recast
 	local vartype
 	if (!`b_gen')	local vartype: type `name'
 
-	//	di _newline(2)
-	//	di "name: 		`name'"
-	//	di "type_new: 		`type_new'"
-	//	di "string_length:	`string_length'"
-	//	di "vartype: 		`vartype'"
+	di _newline(2)
+	di "name: 		`name'"
+	di "type_new: 		`type_new'"
+	di "string_length:	`string_length'"
+	di "vartype: 		`vartype'"
 	
-
 	if ("`type_new'" == "string") {
 		if `b_gen' {
 			quietly gen `type_str' `name' = ""
@@ -714,10 +482,7 @@ program pq_gen_or_recast
 			}
 		}
 	}
-	else if ("`type'" == "strl") {
-		local strl_position_`var_number' = `var_number' - `dropped_vars'
-		local strl_var_indexes `strl_var_indexes' `var_number'
-
+	else if ("`type_new'" == "strl") {
 		if `b_gen' {
 			quietly gen strL `name' = ""
 		}
@@ -732,7 +497,7 @@ program pq_gen_or_recast
 			}
 		}
 	}
-	else if ("`type'" == "float") {
+	else if ("`type_new'" == "float") {
 		if `b_gen' {
 			quietly gen float `type' `name' = .
 		}
@@ -745,7 +510,7 @@ program pq_gen_or_recast
 			}
 		}
 	}
-	else if ("`type'" == "long") {
+	else if ("`type_new'" == "long") {
 		if `b_gen' {
 			quietly gen long `name' = .
 		}
@@ -758,7 +523,7 @@ program pq_gen_or_recast
 			}
 		}
 	}
-	else if ("`type'" == "int") {
+	else if ("`type_new'" == "int") {
 		if `b_gen' {
 			quietly gen int `name' = .
 		}
@@ -768,7 +533,7 @@ program pq_gen_or_recast
 			}
 		}
 	}
-	else if ("`type'" == "byte") {
+	else if ("`type_new'" == "byte") {
 		if `b_gen' {
 			quietly gen byte `name' = .
 		}
@@ -777,6 +542,10 @@ program pq_gen_or_recast
 				recast `vartype' `name'
 			}
 		}
+	}
+	else if ("`type_new'" == "binary") {
+		di "Dropping `name' as cannot process binary columns"
+		di "HELLO"
 	}
 	else {
 		if `b_gen' {
@@ -1070,7 +839,7 @@ program pq_save
 	local b_compress = "`compress'" != ""
 	local b_compress_string_to_numeric = "`compress_string_to_numeric'" != ""
 
-	di `"plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' "`sql_if'" "`StataColumnInfo'" "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric'"'
+	//	di `"plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' "`sql_if'" "`StataColumnInfo'" "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric'"'
 	plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' `"`sql_if'"' `"`StataColumnInfo'"' "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric'
 end
 

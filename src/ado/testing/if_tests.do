@@ -71,6 +71,7 @@ program define in_test_parquet_io_data
 	
 	
 	forvalues i = 1/`n_if' {
+		di "`i'"
 		pq use "`path_save_root'.parquet", clear 
 		count
 		di `"keep if `if_set`i''"'
