@@ -1,5 +1,5 @@
 *! pq - read/write parquet files with stata
-*! Version 1.1.0
+*! Version 1.2.0
 
 capture program drop pq
 program define pq
@@ -34,6 +34,10 @@ program define pq
 		//	di `"pq_describe `0'"'
         pq_describe `0'
     }
+	else if ("`todo'" == "path") {
+		di `"pq_convert_path `0'"'
+		pq_convert_path `0'
+	}
     else {
         disp as err `"Unknown sub-comand `todo'"'
         exit 198
@@ -87,6 +91,10 @@ program pq_merge
 		compress_string_to_numeric	///
 		]
 
+
+
+	pq_convert_path `"`using'"'
+	local using = r(fullpath)
 	if "`keepusing'" != "" {
 		if ("`varlist_n'" == "_n")	local using_vars `keepusing'
 		else 						local using_vars `varlist' `keepusing' 
@@ -179,7 +187,9 @@ program pq_use_append
 	
 	pq_register_plugin
 	
-
+	pq_convert_path `"`using'"'
+	local using = r(fullpath)
+	
 	local b_append = "`append'" != ""
 	if (!`b_append' & "`clear'" != "")	clear
 	
@@ -458,11 +468,11 @@ program pq_gen_or_recast
 	local vartype
 	if (!`b_gen')	local vartype: type `name'
 
-	di _newline(2)
-	di "name: 		`name'"
-	di "type_new: 		`type_new'"
-	di "string_length:	`string_length'"
-	di "vartype: 		`vartype'"
+	//	di _newline(2)
+	//	di "name: 		`name'"
+	//	di "type_new: 		`type_new'"
+	//	di "string_length:	`string_length'"
+	//	di "vartype: 		`vartype'"
 	
 	if ("`type_new'" == "string") {
 		if `b_gen' {
@@ -597,6 +607,9 @@ program pq_describe, rclass
 	local b_quiet = ("`quietly'" != "")
 	local b_detailed = ("`detailed'" != "")
 	
+	pq_convert_path `"`using'"'
+	local using = r(fullpath)
+
 	//	Trailing zeros are compress indicators
 	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "" "`asterisk_to_variable'" 0 0
 
@@ -747,6 +760,9 @@ program pq_save
 	local in
 	pq_register_plugin
 	
+	pq_convert_path `"`using'"'
+	local using = r(fullpath)
+
 	if "`replace'" == "" {
 		//	Check if file exists as file or path
 		quietly local is_file = fileexists("`using'")
@@ -902,4 +918,151 @@ mata:
 		st_sstore(first::last,var_index,strl_values)		
 	}
 
+end
+
+
+program define pq_convert_path, rclass
+	version 16
+    syntax anything
+    
+	local filepath `anything'
+    
+    // Handle the case where filepath might be in quotes
+    if `"`filepath'"' == "" {
+        local filepath `"`0'"'
+    }
+    
+    // Get current working directory
+    local cwd = c(pwd)
+    
+    // Check operating system
+    local os = c(os)
+    local is_windows = ("`os'" == "Windows")
+    
+    // Clean up the input path
+    local filepath = trim("`filepath'")
+    
+    // Debug: show what we're working with
+    //	di "Input filepath: [`filepath']"
+    //	di "Current directory: [`cwd']"
+    //	di "OS: [`os']"
+    
+    // Check if path is already absolute
+    local is_absolute = 0
+    
+    if `is_windows' {
+        // Windows: Check for drive letter (C:) or UNC path (\\)
+        if regexm("`filepath'", "^[A-Za-z]:") | regexm("`filepath'", "^\\\\") {
+            local is_absolute = 1
+        }
+    }
+    else {
+        // Unix: Check if starts with /
+        if regexm("`filepath'", "^/") {
+            local is_absolute = 1
+        }
+    }
+    
+    //	di "Is absolute: `is_absolute'"
+    
+    // If already absolute, return as-is
+    if `is_absolute' {
+        local fullpath "`filepath'"
+    }
+    else {
+        // Handle relative paths
+        if substr("`filepath'", 1, 2) == "./" {
+            // Remove leading "./"
+            local filepath = substr("`filepath'", 3, .)
+            //	di "After removing ./: [`filepath']"
+        }
+        else if substr("`filepath'", 1, 2) == ".\" {
+            // Remove leading ".\"
+            local filepath = substr("`filepath'", 3, .)
+            //	di "After removing .\: [`filepath']"
+        }
+        else if substr("`filepath'", 1, 3) == "../" {
+            // Handle parent directory with forward slash
+            local filepath = substr("`filepath'", 4, .)
+            // Get parent directory manually
+            if `is_windows' {
+                local lastslash = strpos(reverse("`cwd'"), "\")
+                if `lastslash' > 0 {
+                    local cwd = substr("`cwd'", 1, length("`cwd'") - `lastslash')
+                }
+            }
+            else {
+                local lastslash = strpos(reverse("`cwd'"), "/")
+                if `lastslash' > 0 {
+                    local cwd = substr("`cwd'", 1, length("`cwd'") - `lastslash')
+                }
+            }
+            //	di "After removing ../: [`filepath'], parent dir: [`cwd']"
+        }
+        else if substr("`filepath'", 1, 3) == "..\" {
+            // Handle parent directory with backslash
+            local filepath = substr("`filepath'", 4, .)
+            // Get parent directory manually
+            local lastslash = strpos(reverse("`cwd'"), "\")
+            if `lastslash' > 0 {
+                local cwd = substr("`cwd'", 1, length("`cwd'") - `lastslash')
+            }
+            //	di "After removing ..\: [`filepath'], parent dir: [`cwd']"
+        }
+        
+        // Handle multiple parent directory references
+        while substr("`filepath'", 1, 3) == "../" | substr("`filepath'", 1, 3) == "..\" {
+            if substr("`filepath'", 1, 3) == "../" {
+                local filepath = substr("`filepath'", 4, .)
+                // Get parent directory manually
+                if `is_windows' {
+                    local lastslash = strpos(reverse("`cwd'"), "\")
+                    if `lastslash' > 0 {
+                        local cwd = substr("`cwd'", 1, length("`cwd'") - `lastslash')
+                    }
+                }
+                else {
+                    local lastslash = strpos(reverse("`cwd'"), "/")
+                    if `lastslash' > 0 {
+                        local cwd = substr("`cwd'", 1, length("`cwd'") - `lastslash')
+                    }
+                }
+                //	di "Additional ../: [`filepath'], new parent: [`cwd']"
+            }
+            else if substr("`filepath'", 1, 3) == "..\" {
+                local filepath = substr("`filepath'", 4, .)
+                // Get parent directory manually
+                local lastslash = strpos(reverse("`cwd'"), "\")
+                if `lastslash' > 0 {
+                    local cwd = substr("`cwd'", 1, length("`cwd'") - `lastslash')
+                }
+                //	di "Additional ..\: [`filepath'], new parent: [`cwd']"
+            }
+        }
+        
+        // Combine current directory with relative path
+        if `is_windows' {
+            local fullpath "`cwd'\\`filepath'"
+        }
+        else {
+            local fullpath "`cwd'/`filepath'"
+        }
+        
+        //	di "After combination: [`fullpath']"
+    }
+    
+    // Clean up any double separators
+    if `is_windows' {
+        while regexm("`fullpath'", "\\\\\\\\") {
+            local fullpath = regexr("`fullpath'", "\\\\\\\\", "\\\\")
+        }
+    }
+    else {
+        while regexm("`fullpath'", "//") {
+            local fullpath = regexr("`fullpath'", "//", "/")
+        }
+    }
+    
+    // Return the full path
+    return local fullpath "`fullpath'"
 end
