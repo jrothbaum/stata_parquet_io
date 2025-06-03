@@ -169,7 +169,8 @@ By default, variables that were renamed when imported will be restored to their 
 the unique values of the specified variables. This can improve query performance for large datasets.
 
 {phang}
-{opt compression(string)} specifies the compression algorithm to use. Options are {cmd:"lz4"}, {cmd:"uncompressed"}, 
+{opt compression(string)} specifies the compression algorithm to use in the saved parquet file.
+Options are {cmd:"lz4"}, {cmd:"uncompressed"}, 
 {cmd:"snappy"}, {cmd:"gzip"}, {cmd:"lzo"}, {cmd:"brotli"}, {cmd:"zstd"}, or {cmd:""} (default, which uses zstd).
 
 {phang}
@@ -190,7 +191,8 @@ additional file to a partition (like a new year of data) without overwriting the
 {dlgtab:Options for pq describe}
 
 {phang}
-{opt quietly} suppresses display of column information, but still stores results in return values.
+{opt quietly} suppresses display of column information, but stores results in return values
+for programmatic use.
 
 {phang}
 {opt detailed} provides more detailed information about each column, including string lengths for string columns.
