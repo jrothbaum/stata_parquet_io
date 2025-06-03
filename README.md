@@ -86,11 +86,11 @@ Binary data is not supported, and I'm not sure I will implement parquet<->stata 
 
 ## Benchmarks
 This was run on my computer, with the following specs:<br>
-CPU: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics<br>
-Cores: 16<br>
-RAM: 14Gi<br>
-OS: Windows 11<br>
-
+CPU: 	AMD Ryzen 7 8845HS w/ Radeon 780M Graphics<br>
+Cores: 	16<br>
+RAM: 	14Gi<br>
+OS: 	Windows 11<br>
+Run:	June 2, 2025<br>
 This is not intended to be a scientific benchmark, see the code below.
 
 Basically, it just draws a bunch of random normally distributed float variables (and an integer index stored as a float and a string variable) of various sizes (n_rows, n_columns) and save/use them as parquet and dta files and compares the time.  For each, I report the time for the save/use and next to the parquet time, I report the parquet time/dta time.
@@ -102,13 +102,13 @@ Basically, it just draws a bunch of random normally distributed float variables 
 Number of observations (_N) was 0, now 1,000.
 (          1,000,              10)
     1: Stata:       save:        0.00
-    2: Parquet:     save:        0.01             8.00
+    2: Parquet:     save:        0.00             4.00
     3: Stata:       use:         0.01
-    4: Parquet:     use:         0.01             0.90
+    4: Parquet:     use:         0.01             0.91
 
     Loading only 5 variables of 10
     5: Stata:       use:         0.00
-    6: Parquet:     use:         0.01              .
+    6: Parquet:     use:         0.01          15.00
 
 .                                 
 . 
@@ -117,13 +117,13 @@ Number of observations (_N) was 0, now 1,000.
 Number of observations (_N) was 0, now 10,000.
 (         10,000,              10)
     1: Stata:       save:        0.00
-    2: Parquet:     save:        0.01            11.00
+    2: Parquet:     save:        0.01             9.00
     3: Stata:       use:         0.01
-    4: Parquet:     use:         0.02             3.29
+    4: Parquet:     use:         0.02             2.88
 
     Loading only 5 variables of 10
     5: Stata:       use:         0.00
-    6: Parquet:     use:         0.01           8.00
+    6: Parquet:     use:         0.01          10.00
 
 . 
 . benchmark_parquet_io_data,      n_cols(10)      ///
@@ -131,13 +131,13 @@ Number of observations (_N) was 0, now 10,000.
 Number of observations (_N) was 0, now 100,000.
 (        100,000,              10)
     1: Stata:       save:        0.01
-    2: Parquet:     save:        0.04             5.13
-    3: Stata:       use:         0.01
-    4: Parquet:     use:         0.09            17.60
+    2: Parquet:     save:        0.03             5.50
+    3: Stata:       use:         0.00
+    4: Parquet:     use:         0.07            17.00
 
     Loading only 5 variables of 10
     5: Stata:       use:         0.01
-    6: Parquet:     use:         0.07           7.22
+    6: Parquet:     use:         0.04           5.43
 
 .                                 
 .                                 
@@ -146,13 +146,13 @@ Number of observations (_N) was 0, now 100,000.
 Number of observations (_N) was 0, now 1,000,000.
 (      1,000,000,              10)
     1: Stata:       save:        0.03
-    2: Parquet:     save:        0.26             9.07
+    2: Parquet:     save:        0.26            10.24
     3: Stata:       use:         0.02
-    4: Parquet:     use:         0.28            16.24
+    4: Parquet:     use:         0.24            11.80
 
     Loading only 5 variables of 10
     5: Stata:       use:         0.04
-    6: Parquet:     use:         0.15           3.48
+    6: Parquet:     use:         0.13           3.47
 
 .                                 
 .                                 
@@ -160,42 +160,42 @@ Number of observations (_N) was 0, now 1,000,000.
 >                                 n_rows(10000000)
 Number of observations (_N) was 0, now 10,000,000.
 (     10,000,000,              10)
-    1: Stata:       save:        0.19
-    2: Parquet:     save:        1.76             9.43
-    3: Stata:       use:         0.13
-    4: Parquet:     use:         2.28            18.21
+    1: Stata:       save:        0.15
+    2: Parquet:     save:        1.56            10.34
+    3: Stata:       use:         0.11
+    4: Parquet:     use:         1.83            16.79
 
     Loading only 5 variables of 10
-    5: Stata:       use:         0.37
-    6: Parquet:     use:         2.01           5.38
+    5: Stata:       use:         0.31
+    6: Parquet:     use:         0.99           3.16
 
 . 
 . benchmark_parquet_io_data,      n_cols(100)     ///
 >                                 n_rows(1000000)
 Number of observations (_N) was 0, now 1,000,000.
 (      1,000,000,             100)
-    1: Stata:       save:        0.17
-    2: Parquet:     save:        1.64             9.42
+    1: Stata:       save:        0.15
+    2: Parquet:     save:        1.43             9.72
     3: Stata:       use:         0.10
-    4: Parquet:     use:         2.92            27.82
+    4: Parquet:     use:         2.47            24.95
 
     Loading only 5 variables of 100
     5: Stata:       use:         0.14
-    6: Parquet:     use:         0.17           1.20
+    6: Parquet:     use:         0.14           0.99
 
 . 
 . benchmark_parquet_io_data,      n_cols(1000)    ///
 >                                 n_rows(100000)
 Number of observations (_N) was 0, now 100,000.
 (        100,000,           1,000)
-    1: Stata:       save:        0.17
-    2: Parquet:     save:        1.65             9.98
-    3: Stata:       use:         0.12
-    4: Parquet:     use:         2.27            19.72
+    1: Stata:       save:        0.14
+    2: Parquet:     save:        1.58            11.35
+    3: Stata:       use:         0.10
+    4: Parquet:     use:         1.92            18.31
 
     Loading only 5 variables of 1000
     5: Stata:       use:         0.08
-    6: Parquet:     use:         0.06           0.75
+    6: Parquet:     use:         0.06           0.71
 
 ```
 
