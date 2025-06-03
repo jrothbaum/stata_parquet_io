@@ -56,6 +56,24 @@ this format, such as Python (pandas, polars), R, Spark, duckdb, and many others.
 The package supports five main operations: {cmd:use} (load data), {cmd:append} (add to existing data), 
 {cmd:merge} (join with existing data), {cmd:save} (write data), and {cmd:describe} (examine file structure).
 
+{pstd}
+{bf:IMPORTANT NOTE FOR MAC ARM USERS}:
+
+{pstd}
+You may get an error message that is related to Mac Gatekeeper and restrictions on unsigned binaries. Unfortunately, preventing this 
+requires a developer account that costs $99/year and I am not getting  the subscription.  If you want to use the plugin (pq.dylib),
+you can do the following:
+
+{p 4 8 2}1. Go to System Preferences/Settings → Privacy & Security
+
+{p 4 8 2}2. Look for a message about the blocked dylib near the bottom
+
+{p 4 8 2}3. Click "Allow Anyway" next to the blocked file
+
+{p 4 8 2}4. You may need to authenticate with your password
+
+{p 4 8 2}5. Try using the plugin again in Stata
+
 {marker options}{...}
 {title:Options}
 
