@@ -79,10 +79,8 @@ pq use using large_file.parquet, clear compress compress_string_to_numeric sort(
 * Random sampling a specific number of rows
 pq use using large_file.parquet, clear random_n(1000)
 
-
 * Random sampling a specific number of rows, with a seed for replicability
 pq use using large_file.parquet, clear random_n(1000) random_seed(12345)
-
 
 * Random sampling a specific share of rows, with a seed for replicability
 pq use using large_file.parquet, clear random_share(0.1) random_seed(12345)
