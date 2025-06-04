@@ -35,7 +35,7 @@ program define pq
         pq_describe `0'
     }
 	else if ("`todo'" == "path") {
-		di `"pq_convert_path `0'"'
+		//	di `"pq_convert_path `0'"'
 		pq_convert_path `0'
 	}
     else {
@@ -89,6 +89,9 @@ program pq_merge
 		sort(string)			///
 		compress				///
 		compress_string_to_numeric	///
+		random_n(integer 0)		///
+		random_share(real 0.0)	///
+		random_seed(integer 0)	///
 		]
 
 
@@ -115,7 +118,10 @@ program pq_merge
 												parallelize(`parallelize')		///
 												sort(`varlist')					///
 												`compress'						///
-												`compress_string_to_numeric'
+												`compress_string_to_numeric'	///
+												random_n(`random_n`)			///
+												random_share(`random_share')	///
+												random_seed(`random_seed')
 		quietly save `t_save'
 	}
 	/*
@@ -183,6 +189,9 @@ program pq_use_append
 						compress				///
 						compress_string_to_numeric	///
 						clear					///
+						random_n(integer 0)		///
+						random_share(real 0.0)	///
+						random_seed(integer 0)	///
 						append]
 	
 	pq_register_plugin
@@ -196,6 +205,11 @@ program pq_use_append
 	if (`=_N' > 0 & !`b_append') {
 		display as error "There is already data loaded, pass clear if you want to load a parquet file"
 		exit 2000
+	}
+
+	if (`random_share' > 1) {
+		display as error `"Cannot set random_share > 1 (`random_share')"'
+		exit 198
 	}
 
 	if (!inlist("`parallelize'", "", "columns", "rows")) {
@@ -272,6 +286,14 @@ program pq_use_append
 	//	Create the empty data, if needed, or add rows, if needed
 	if (`last_n' == 0)	local last_n = `n_rows'
 	local row_to_read = max(0,min(`n_rows',`last_n') - `offset' + (`offset' > 0))
+
+	if (`random_n' > `row_to_read') {
+		di "random_n (`random_n') > number of rows to read (`row_to_read')"
+	}
+
+	if (`random_n' > 0 & `random_n' < `row_to_read')	local row_to_read = `random_n'
+	else if (`random_share' > 0)						local row_to_read = floor(`random_share'*`row_to_read')
+
 	//	di "local row_to_read = max(0,min(`n_rows',`last_n') - `offset' + (`offset' > 0))"
 	
 	tempfile temp_strl
@@ -365,15 +387,27 @@ program pq_use_append
 
 		tempname f_var_list
 		frame create `f_var_list'
+
+
+		forvalues i = 1/`n_vars_already' {
+			local vari = word("`all_vars'", `i')
+			local type_already_`i': type `vari'
+		}
+
+		//	_string_length_5:
+		describe
 		frame `f_var_list' {
 			quietly gen index = .
 			quietly gen name = ""
+			quietly gen type = ""
 			quietly gen byte to_edit = .
 			quietly set obs `n_vars_already'
 
 			forvalues i = 1/`n_vars_already' {
 				local vari = word("`all_vars'", `i')
+
 				quietly replace name = "`vari'" if _n == `i'
+				quietly replace type = "`type_already_`i''" if _n == `i'				
 			}
 			quietly replace to_edit = 0
 			quietly set obs `=`n_vars' + `n_vars_already''
@@ -381,30 +415,33 @@ program pq_use_append
 				local vari = word("`matched_vars'", `i')
 				
 				quietly replace name = "`vari'" if _n == (`i' + `n_vars_already')
+				quietly replace type = "`type_`i''" if _n == (`i' + `n_vars_already')
 				quietly replace to_edit = 1 if _n == (`i' + `n_vars_already')
 			}
 			quietly replace index = _n
 			
 			sort name index
 			
+			
 			quietly by name: replace to_edit = to_edit[_N]
 			quietly by name: gen new_index = index[_N]
+			quietly gen is_strl = inlist(type,"strl","strL")
+			quietly by name: egen has_strl = max(is_strl)
+			quietly by name: replace type = "strl" if has_strl
 			quietly by name: keep if _n == 1
 			sort new_index
+
+			local strl_var_indexes
 			forvalues i = 1/`=_N' {
 				local index_`i' = index[`i']
+
+				if (type[`i'] == "strl") {
+					local type_`i' = "strl"
+					local strl_var_indexes `strl_var_indexes' `index_`i''
+				}
 			}
 		}
 		frame drop `f_var_list'
-
-		//	Reassign the strL indices
-		if ("`strl_var_indexes'" != "") {
-			local strl_var_indexes_old `strl_var_indexes'
-			local strl_var_indexes
-			foreach indexi in `strl_var_indexes_old' {
-				local strl_var_indexes `strl_var_indexes' `index_`indexi''
-			}
-		}
 	}
 
 	local offset = max(0,`offset' - 1)
@@ -421,10 +458,10 @@ program pq_use_append
 	//		* to a variable, so /file/2019.parquet, file/2020.parquet
 	//		will have the item in asterisk_to_variable as 2019 and 2020
 	//		for the records on the file
-	//	di `"plugin call polars_parquet_plugin, read "`using'" "`matched_vars'" `row_to_read' `offset' "`sql_if'" "`mapping'" "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already'"'
+	//	di `"plugin call polars_parquet_plugin, read "`using'" "`matched_vars'" `row_to_read' `offset' "`sql_if'" "`mapping'" "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already'  `random_n' `random_share' `random_seed'"' 
 
 
-	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already'
+	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_n' `random_share' `random_seed'
 	
 	if ("`strl_var_indexes'" != "") {
 		di "Slowly processing strL variables"
