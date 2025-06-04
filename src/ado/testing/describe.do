@@ -78,7 +78,7 @@ program define test_file
 		// Display variable details using format specifiers
 		di as text "Name:" %`col1width's "`var_`i''" %`col2width's "`var_pq'"
 		di as text "Type:" %`col1width's "`type_`i'' (`format_`i'')" %`col2width's "`type_pq'"
-		di as text "Str#:" %`col1width's "`str_length_`i''" %`col2width's "`str_length_pq'"
+		if ("`type_pq'" == "String")	di as text "Str#:" %`col1width's "`str_length_`i''" %`col2width's "`str_length_pq'"
 		
 		di as text "{hline `total_width'}"
 

@@ -44,8 +44,8 @@ set seed 100
 create_data, n_rows(`n_rows') n_cols(`cols_created') 
 
 
-//	local var_types byte int long float double
-local var_types byte float 
+local var_types byte int long float double
+//	local var_types byte float 
 local gen_byte = "floor(runiform()*(2^3))"
 local gen_int = "floor(runiform()*(2^15-1))"
 local gen_long = "floor(runiform()*(2^31-1))"
@@ -60,37 +60,34 @@ foreach typei in `var_types' {
 }
 
 
-local var_types_str strL //	str1 str10 
+local var_types_str strL str1 str10 
 local gen_str1 = "length(1)"
 local gen_str10 = "length(10)"
 local gen_strL = "length(1500)"
 
-//	quietly  {
-{
-	foreach typei in `var_types_str' {
-		foreach typej in `var_types_str' {
-			local concat
-			set seed 100
-			if ("`typei'" == "strL") {
-					forvalues i = 1/2 {
-						tempvar v`i'
-						ralpha `v`i'', `gen_`typei''
-						
-						if ("`concat'" != "")	local concat `concat'+
-						local concat `concat'`v`i''
-					}
+foreach typei in `var_types_str' {
+	foreach typej in `var_types_str' {
+		local concat
+		set seed 100
+		if ("`typei'" == "strL") {
+				forvalues i = 1/2 {
+					tempvar v`i'
+					ralpha `v`i'', `gen_`typei''
 					
-					gen `typei'_`typej' = `concat'
-					
-					forvalues i = 1/2 {
-						quietly drop `v`i''
-					}
-			}
-			else {
-				ralpha `typei'_`typej', `gen_`typei''
-			}
-			if "`typei'" == "strL" recast strL `typei'_`typej'
+					if ("`concat'" != "")	local concat `concat'+
+					local concat `concat'`v`i''
+				}
+				
+				gen `typei'_`typej' = `concat'
+				
+				forvalues i = 1/2 {
+					quietly drop `v`i''
+				}
 		}
+		else {
+			ralpha `typei'_`typej', `gen_`typei''
+		}
+		if "`typei'" == "strL" recast strL `typei'_`typej'
 	}
 }
 
@@ -103,33 +100,31 @@ set seed 100
 create_data, n_rows(`n_rows') n_cols(`cols_created') 
 
 
-//	quietly  {
-{
-	foreach typei in `var_types_str' {
-		foreach typej in `var_types_str' {
-			set seed 100
-			if ("`typej'" == "strL") {
-					local concat
-					forvalues i = 1/2 {
-						tempvar v`i'
-						ralpha `v`i'', `gen_`typej''
-						
-						if ("`concat'" != "")	local concat `concat'+
-						local concat `concat'`v`i''
-					}
-					gen `typei'_`typej' = `concat'
+foreach typei in `var_types_str' {
+	foreach typej in `var_types_str' {
+		set seed 100
+		if ("`typej'" == "strL") {
+				local concat
+				forvalues i = 1/2 {
+					tempvar v`i'
+					ralpha `v`i'', `gen_`typej''
 					
-					forvalues i = 1/2 {
-						quietly drop `v`i''
-					}
-			}
-			else {
-				ralpha `typei'_`typej', `gen_`typej''
-			}
-			if "`typej'" == "strL" recast strL `typei'_`typej'
+					if ("`concat'" != "")	local concat `concat'+
+					local concat `concat'`v`i''
+				}
+				gen `typei'_`typej' = `concat'
+				
+				forvalues i = 1/2 {
+					quietly drop `v`i''
+				}
 		}
+		else {
+			ralpha `typei'_`typej', `gen_`typej''
+		}
+		if "`typej'" == "strL" recast strL `typei'_`typej'
 	}
 }
+
 
 foreach typei in `var_types' {
 	foreach typej in `var_types' {
@@ -150,11 +145,19 @@ sum
 describe
 
 
+foreach typei in `var_types' {
+	foreach typej in `var_types' {
+		quietly count if missing(`typei'_`typej')
+		di "`typei'_`typej': " r(N)
+		sum `typei'_`typej' if _n <= `n_rows'
+		sum `typei'_`typej' if _n > `n_rows'
+	}
+}
 
 foreach typei in `var_types_str' {
 	foreach typej in `var_types_str' {
-		di "`typei'_`typej'[1]: 			" `typei'_`typej'[1]
-		di "`typei'_`typej'[`=`n_rows' + 1']: 	" `typei'_`typej'[`=`n_rows' + 1']
+		quietly count if missing(`typei'_`typej')
+		di "`typei'_`typej': " r(N)
 	}
 }
 
