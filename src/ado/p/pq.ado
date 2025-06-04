@@ -119,7 +119,7 @@ program pq_merge
 												sort(`varlist')					///
 												`compress'						///
 												`compress_string_to_numeric'	///
-												random_n(`random_n`)			///
+												random_n(`random_n')			///
 												random_share(`random_share')	///
 												random_seed(`random_seed')
 		quietly save `t_save'
