@@ -123,6 +123,7 @@ program pq_merge
 												random_share(`random_share')	///
 												random_seed(`random_seed')
 		quietly save `t_save'
+		sum
 	}
 	/*
 	di `"merge `origmtype' `varlist_n'`varlist' using "`t_save'",	gen(`generate') 	///"'
@@ -291,7 +292,10 @@ program pq_use_append
 		di "random_n (`random_n') > number of rows to read (`row_to_read')"
 	}
 
-	if (`random_n' > 0 & `random_n' < `row_to_read')	local row_to_read = `random_n'
+	if (`random_n' > 0 & `random_n' < `row_to_read') {
+		local random_share = `random_n'/`row_to_read'
+		local row_to_read = `random_n'
+	}
 	else if (`random_share' > 0)						local row_to_read = floor(`random_share'*`row_to_read')
 
 	//	di "local row_to_read = max(0,min(`n_rows',`last_n') - `offset' + (`offset' > 0))"
@@ -458,10 +462,10 @@ program pq_use_append
 	//		* to a variable, so /file/2019.parquet, file/2020.parquet
 	//		will have the item in asterisk_to_variable as 2019 and 2020
 	//		for the records on the file
-	//	di `"plugin call polars_parquet_plugin, read "`using'" "`matched_vars'" `row_to_read' `offset' "`sql_if'" "`mapping'" "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already'  `random_n' `random_share' `random_seed'"' 
+	//	di `"plugin call polars_parquet_plugin, read "`using'" "`matched_vars'" `row_to_read' `offset' "`sql_if'" "`mapping'" "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed'"' 
 
 
-	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_n' `random_share' `random_seed'
+	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed'
 	
 	if ("`strl_var_indexes'" != "") {
 		di "Slowly processing strL variables"

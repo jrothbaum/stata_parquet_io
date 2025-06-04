@@ -502,7 +502,6 @@ pub fn read_to_stata(
     asterisk_to_variable_name: Option<&str>,
     sort:&str,
     stata_offset:usize,
-    random_n:usize,
     random_share:f64,
     random_seed:u64,
 ) -> Result<i32, Box<dyn Error>> {
@@ -593,9 +592,8 @@ pub fn read_to_stata(
         };
     }
 
-    let sample_n = (random_n > 0) & (random_n < n_rows);
     let sample_share = random_share > 0.0;
-    if sample_n || sample_share {
+    if sample_share {
         let random_seed_option = if random_seed == 0 {
             None
         } else {
@@ -604,21 +602,12 @@ pub fn read_to_stata(
 
         df = match df.collect() {
             Ok(df) => {
-                if sample_n {
-                    df.sample_n(
-                        &Series::new("".into(), vec![random_n as i64]),
-                        false,
-                        false,
-                        random_seed_option
-                    )?.lazy()
-                } else {
-                    df.sample_frac(
+                df.sample_frac(
                         &Series::new("frac".into(), vec![random_share as f64]),
                         false,
                         false,
                         random_seed_option
                     )?.lazy()
-                }
             },
             Err(e) => {
                 display(&format!("Error in SQL if statement: {}", e));
