@@ -13,21 +13,24 @@ Import a Parquet file into Stata:
 
 {p 8 17 2}
 {cmd:pq use} [{varlist}] {cmd:using} {it:filename} [, {opt clear} {opt append} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} 
-{opt compress} {opt compress_string_to_numeric}]
+{opt compress} {opt compress_string_to_numeric} {opt random_n(integer 0)}
+{opt random_share(float 0.0)} {opt random_seed(integer 0)}]
 
 {phang}
 Append a Parquet file to existing data:
 
 {p 8 17 2}
 {cmd:pq append} [{varlist}] {cmd:using} {it:filename} [, {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} {opt compress} 
-{opt compress_string_to_numeric}]
+{opt compress_string_to_numeric} {opt random_n(integer 0)}
+{opt random_share(float 0.0)} {opt random_seed(integer 0)}]
 
 {phang}
 Merge a Parquet file with existing data:
 
 {p 8 17 2}
 {cmd:pq merge} {it:merge_type} [{varlist}] {cmd:using} {it:filename} [, {merge_options} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} {opt compress} 
-{opt compress_string_to_numeric}]
+{opt compress_string_to_numeric} {opt random_n(integer 0)}
+{opt random_share(float 0.0)} {opt random_seed(integer 0)}]
 
 {phang}
 Save Stata data as a Parquet file:
@@ -121,6 +124,23 @@ This is the equivalent of Stata's compress, but should be much faster.
 {opt compress_string_to_numeric} automatically converts string variables to numeric when possible during the read operation
 (e.g. when all the string values are numeric).  This is equivalent to {cmd:"destring, replace"} but should be much faster.
 
+{phang}
+{opt random_n(integer 0)} specifies the number of random rows to sample from the Parquet file. When specified,
+only this many randomly selected rows will be loaded instead of all rows. Must be a positive integer.
+Overrides {opt random_share()} if both are set.
+
+{phang}
+{opt random_share(real 0.0)} specifies the proportion of rows to randomly sample from the Parquet file.
+The value should be between 0 and 1, where 0.1 would sample 10% of the rows. When specified,
+this proportion of randomly selected rows will be loaded. 
+Overridden by {opt random_n()} if both are set.
+
+{phang}
+{opt random_seed(integer 0)} sets the random seed for reproducible sampling when using {opt random_n()} or
+{opt random_share()}. If not specified (or set to 0), sampling will use a different random seed each time,
+resulting in different samples. Specify a positive integer to ensure the same random sample is selected
+across multiple runs.
+
 {dlgtab:Options for pq merge}
 
 {phang}
@@ -166,7 +186,8 @@ This is the equivalent of Stata's compress, but should be much faster.
 {opt update} specifies that missing values in the master dataset be replaced with values from the using dataset.
 
 {phang}
-All read options ({opt in()}, {opt if()}, {opt relaxed}, {opt asterisk_to_variable()}, {opt parallelize()}, {opt sort()}, {opt compress}, {opt compress_string_to_numeric}) are also available with {cmd:pq merge}.
+All read options ({opt in()}, {opt if()}, {opt relaxed}, {opt asterisk_to_variable()}, {opt parallelize()}, {opt sort()}, {opt compress}, {opt compress_string_to_numeric}, {opt random_n}, {opt random_share}, {opt random_seed}) 
+are also available with {cmd:pq merge}.
 This will load the data using {cmd:pq use} in a temporary frame, {cmd:save} it to a temporary dta file, and then run the specified {cmd:merge}.
 
 {dlgtab:Options for pq save}
@@ -242,6 +263,19 @@ that would be created from the asterisk pattern.
 {pstd}Load and sort data during read:{p_end}
 {phang2}{cmd:. pq use using unsorted.parquet, clear sort(id date)}{p_end}
 
+{dlgtab:Random sampling}
+{pstd}Load a random sample of 1000 rows:{p_end}
+{phang2}{cmd:. pq use using large_dataset.parquet, clear random_n(1000)}{p_end}
+{pstd}Load a random 10% sample of the data:{p_end}
+{phang2}{cmd:. pq use using large_dataset.parquet, clear random_share(0.1)}{p_end}
+{pstd}Load a reproducible random sample using a seed:{p_end}
+{phang2}{cmd:. pq use using large_dataset.parquet, clear random_n(500) random_seed(12345)}{p_end}
+{pstd}Load a reproducible random percentage with seed:{p_end}
+{phang2}{cmd:. pq use using large_dataset.parquet, clear random_share(0.05) random_seed(98765)}{p_end}
+{pstd}Note: If both random_n and random_share are specified, random_share will be ignored:{p_end}
+{phang2}{cmd:. pq use using large_dataset.parquet, clear random_n(800) random_share(0.2)}{p_end}
+{phang2}{cmd:// This will load exactly 800 random rows, ignoring the 20% specification}
+
 {dlgtab:Appending data}
 
 {pstd}Append a Parquet file to existing data:{p_end}
@@ -271,7 +305,7 @@ that would be created from the asterisk pattern.
 
 {dlgtab:Performance optimization}
 
-{pstd}Load with parallel processing:{p_end}
+{pstd}Load with parallel processing by column (override default which depends on the number of rows and columns):{p_end}
 {phang2}{cmd:. pq use using large_file.parquet, clear parallelize(columns)}{p_end}
 
 {dlgtab:Describing files}
@@ -363,8 +397,7 @@ String variables longer than 2045 characters are automatically converted to strL
 {pstd}
 The package requires a companion plugin that must be installed in Stata's PLUS directory.
 The plugin files (pq.dll for Windows, pq.so for Linux, pq.dylib for macOS) must be properly installed
-for the package to function. The plugin location can be overridden by setting the global macro
-{cmd:parquet_dll_override} to the desired path.
+for the package to function. 
 
 {pstd}
 The package works with Stata 16.0 and later versions.
