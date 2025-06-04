@@ -25,9 +25,8 @@ ssc install pq
 [SSC listing](https://ideas.repec.org/c/boc/bocode/s459458.html)
 
 ### Option 2: Manual installation
-1. Download the package files from the [latest release](https://github.com/jrothbaum/stata_parquet_io/releases)
-2. Place all files in your PLUS directory (find location with `sysdir`)
-3. The plugin files (`.dll`, `.so`, or `.dylib`) should be placed in the 'p' folder within your PLUS directory
+1. Download the package files for your archictecture (Linux, Mac, or Windows - or to be safe all three from the SSC zip)  from the [latest release](https://github.com/jrothbaum/stata_parquet_io/releases)
+2. Place the files in your PLUS/p directory (find location with `sysdir`)
 
 ### Important Note for Mac ARM Users
 
