@@ -87,7 +87,8 @@ you can do the following:
 
 {phang}
 {opt in(range)} specifies a subset of rows to read. The format is {it:first/last} where {it:first} is the starting row (1-based indexing) 
-and {it:last} is the ending row. For example, {cmd:in(10/20)} would read rows 10 through 20.
+and {it:last} is the ending row. For example, {cmd:in(10/20)} would read rows 10 through 20.   
+Note that {cmd:in} happens after any random (n, share).
 
 {phang}
 {opt if(expression)} imports only rows that satisfy the specified condition. This filter is applied directly during reading
@@ -346,7 +347,7 @@ string, numeric, datetime, date, time, and strL variables.
 
 {pstd}
 When you import a Parquet file with {cmd:pq use}, the original column names from the Parquet file
-are stored as variable labels with the format {cmd:{{}parquet_name:original_name{}}}.
+are stored as variable labels with the format {cmd:{parquet_name:original_name}}.
 When you later save the data with {cmd:pq save}, these columns will be automatically renamed back
 to their original Parquet names unless you specify the {opt noautorename} option.
 
