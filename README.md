@@ -16,11 +16,11 @@
 - Support for partitioned datasets and wildcard file patterns
 
 ## Installation
-### Option 1: Install from SSC
+### Option 1: Install from SSC - https://ideas.repec.org/c/boc/bocode/s459458.html
 ```stata
 ssc install pq
 ```
-[SSC listing](https://ideas.repec.org/c/boc/bocode/s459458.html)
+
 
 ### Option 2: Manual installation
 1. Download the package files for your archictecture (Linux, Mac, or Windows - or to be safe all three from the SSC zip)  from the [latest release](https://github.com/jrothbaum/stata_parquet_io/releases)
