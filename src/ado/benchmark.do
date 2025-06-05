@@ -33,7 +33,7 @@ program define benchmark_parquet_io_data
 	
 	
 	tempfile path_save_root
-	local path_save_root C:\Users\jonro\Downloads\test_benchmark
+	
 	quietly {
 		timer clear
 		di "save stata"
