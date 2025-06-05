@@ -911,24 +911,8 @@ program pq_register_plugin
 	
 	if (_rc > 0) {
 		// Plugin is not loaded, so initialize it
-		if "`c(os)'" == "MacOSX" {
-		  local plugin_extension = "dylib"
-		} 
-		else if "`c(os)'" == "Windows" {
-		  local plugin_extension = "dll"
-		} 
-		else {
-		  local plugin_extension = "so"
-		}
-
-		
-		if ("${parquet_dll_override}" != "") {
-			local parquet_path = "${parquet_dll_override}"
-		}
-		else {
-			local parquet_path = "`c(sysdir_plus)'p"
-		}
-		program polars_parquet_plugin, plugin using("`parquet_path'/pq.`plugin_extension'")
+		local plugin_path = "`c(sysdir_plus)'p"
+		program polars_parquet_plugin, plugin using("`plugin_path'/pq.plugin")
 	}
 end
 
