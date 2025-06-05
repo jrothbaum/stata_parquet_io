@@ -16,8 +16,6 @@
 - Support for partitioned datasets and wildcard file patterns
 
 ## Installation
-- Current status - github actions create the proper files for Windows, Linux, and Mac.  The plugins have been tested on Linux, Windows, and Mac (Intel and ARM - see note below for ARM use).
-
 ### Option 1: Install from SSC
 ```stata
 ssc install pq
