@@ -62,6 +62,8 @@ pub fn write_from_stata(
     })
     .collect();
     
+    //  Default batch size
+    let batch_size = Some(100_000 as usize);
 
     let partition_by: Vec<PlSmallStr> = if !partition_by_str.is_empty() {
         partition_by_str.split_whitespace()
@@ -74,6 +76,7 @@ pub fn write_from_stata(
                 }
             })
             .collect()
+
     } else {
         Vec::new()
     };
@@ -109,7 +112,7 @@ pub fn write_from_stata(
     let a_scan = StataDataScan::new(
         column_info,
         all_columns,
-        None,
+        batch_size,
         offset,
         n_rows,
         sql_if_owned,
@@ -137,14 +140,23 @@ pub fn write_from_stata(
     }
     if partition_by.len() > 0 {
         save_partitioned(
-            path, 
-            lf_unwrapped, 
+            path,
+            lf_unwrapped,
             compression,
             compression_level,
             &partition_by,
             compress,
-            compress_string,
+            compress_string
         )
+        // save_partitioned(
+        //     path, 
+        //     lf_unwrapped, 
+        //     compression,
+        //     compression_level,
+        //     &partition_by,
+        //     compress,
+        //     compress_string,
+        // )
         // display("Error: hive partition not implemented yet");
         // return Ok(198);
     } else {
@@ -246,6 +258,179 @@ fn save_partitioned(
     //     }
     // }
 }
+
+
+fn save_partitioned_sequential(
+    path: &str,
+    lf: LazyFrame,
+    compression: &str,
+    compression_level: Option<usize>,
+    partition_by: &Vec<PlSmallStr>,
+    compress: bool,
+    compress_string: bool,
+) -> Result<i32, Box<dyn Error>> {
+    let pqo = parquet_options(compression, compression_level);
+    
+    // First, get unique partition values by collecting only the partition columns
+    let partition_values_df = lf.clone()
+        .select(partition_by.iter().map(|col_name| col(col_name.clone())).collect::<Vec<_>>())
+        .unique(None, UniqueKeepStrategy::First)
+        .collect()
+        .map_err(|e| {
+            display(&format!("Error getting partition values: {}", e));
+            e
+        })?;
+    
+    let total_partitions = partition_values_df.height();
+    display(&format!("Processing {} partitions sequentially", total_partitions));
+    
+    // Process each partition sequentially
+    for partition_idx in 0..total_partitions {
+        // Get the partition values for this row
+        let mut partition_filters = Vec::new();
+        let mut partition_path_parts = Vec::new();
+        
+        for col_name in partition_by {
+            let series = partition_values_df.column(col_name.as_str())
+                .map_err(|e| {
+                    display(&format!("Error accessing partition column {}: {}", col_name, e));
+                    e
+                })?;
+            
+            let value = series.get(partition_idx)
+                .map_err(|e| {
+                    display(&format!("Error getting partition value: {}", e));
+                    e
+                })?;
+            
+            let filter_expr = match value {
+                AnyValue::String(s) => col(col_name.clone()).eq(lit(s)),
+                AnyValue::Boolean(i) => col(col_name.clone()).eq(lit(i)),
+                
+                AnyValue::UInt8(i) => col(col_name.clone()).eq(lit(i)),
+                AnyValue::UInt16(i) => col(col_name.clone()).eq(lit(i)),
+                AnyValue::UInt32(i) => col(col_name.clone()).eq(lit(i)),
+                AnyValue::UInt64(i) => col(col_name.clone()).eq(lit(i)),
+                
+                AnyValue::Int8(i) => col(col_name.clone()).eq(lit(i)),
+                AnyValue::Int16(i) => col(col_name.clone()).eq(lit(i)),
+                AnyValue::Int32(i) => col(col_name.clone()).eq(lit(i)),
+                AnyValue::Int64(i) => col(col_name.clone()).eq(lit(i)),
+                AnyValue::Float64(f) => col(col_name.clone()).eq(lit(f)),
+                AnyValue::Float32(f) => col(col_name.clone()).eq(lit(f)),
+                AnyValue::Boolean(b) => col(col_name.clone()).eq(lit(b)),
+                AnyValue::Date(d) => col(col_name.clone()).eq(lit(d)),
+                AnyValue::Datetime(dt, tu, tz) => col(col_name.clone()).eq(lit(dt)),
+                _ => {
+                    return Err(format!("Unsupported partition value type for column {}: {:?}", col_name, value).into());
+                }
+            };
+            partition_filters.push(filter_expr);
+            
+            // Create path component for this partition
+            let path_component = match value {
+                AnyValue::String(s) => format!("{}={}", col_name, s),
+                AnyValue::Boolean(i) => format!("{}={}", col_name, i),
+                AnyValue::Int8(i) => format!("{}={}", col_name, i),
+                AnyValue::Int16(i) => format!("{}={}", col_name, i),
+                AnyValue::Int32(i) => format!("{}={}", col_name, i),
+                AnyValue::Int64(i) => format!("{}={}", col_name, i),
+
+                AnyValue::UInt8(i) => format!("{}={}", col_name, i),
+                AnyValue::UInt16(i) => format!("{}={}", col_name, i),
+                AnyValue::UInt32(i) => format!("{}={}", col_name, i),
+                AnyValue::UInt64(i) => format!("{}={}", col_name, i),
+
+                AnyValue::Float64(f) => format!("{}={}", col_name, f),
+                AnyValue::Float32(f) => format!("{}={}", col_name, f),
+                AnyValue::Boolean(b) => format!("{}={}", col_name, b),
+                AnyValue::Date(d) => format!("{}={}", col_name, d),
+                AnyValue::Datetime(dt, _tu, _tz) => format!("{}={}", col_name, dt),
+                _ => format!("{}={:?}", col_name, value),
+            };
+            partition_path_parts.push(path_component);
+        }
+        
+        // Build the full partition path
+        let partition_dir = PathBuf::from(path).join(partition_path_parts.join("/"));
+        
+        // Delete existing partition directory if it exists
+        if partition_dir.exists() {
+            display(&format!("Removing existing partition: {}", partition_dir.display()));
+            std::fs::remove_dir_all(&partition_dir)
+                .map_err(|e| {
+                    display(&format!("Failed to remove partition directory {}: {}", partition_dir.display(), e));
+                    e
+                })?;
+        }
+        
+        // Create partition directory
+        std::fs::create_dir_all(&partition_dir)
+            .map_err(|e| {
+                display(&format!("Failed to create partition directory {}: {}", partition_dir.display(), e));
+                e
+            })?;
+        
+        // Filter data for this partition
+        let mut partition_lf = lf.clone();
+        for filter_expr in partition_filters {
+            partition_lf = partition_lf.filter(filter_expr);
+        }
+        
+        // Apply compression if requested
+        if compress || compress_string {
+            let mut partition_df = partition_lf.collect()
+                .map_err(|e| {
+                    display(&format!("Error collecting partition data: {}", e));
+                    e
+                })?;
+            
+            let mut down_config = downcast::DowncastConfig::default();
+            down_config.check_strings = compress_string;
+            down_config.prefer_int_over_float = compress;
+            
+            partition_df = downcast::intelligent_downcast_df(
+                partition_df,
+                None,
+                down_config
+            ).map_err(|e| {
+                display(&format!("Partition downcast/compress error: {}", e));
+                e
+            })?;
+            
+            partition_lf = partition_df.lazy();
+        }
+        
+        // Generate a unique filename for this partition
+        let partition_file = partition_dir.join("data_0.parquet");
+        let sink_target = SinkTarget::Path(Arc::new(partition_file.clone()));
+        
+        // Save this partition
+        let result_lf = partition_lf.sink_parquet(
+            sink_target,
+            pqo.clone(),
+            None,
+            SinkOptions::default()
+        ).map_err(|e| {
+            display(&format!("Partition sink setup error for {}: {}", partition_dir.display(), e));
+            e
+        })?;
+        
+        result_lf.collect().map_err(|e| {
+            display(&format!("Partition write error for {}: {}", partition_dir.display(), e));
+            e
+        })?;
+        
+        display(&format!("Saved partition {}/{}: {}", 
+                        partition_idx + 1, 
+                        total_partitions, 
+                        partition_dir.display()));
+    }
+    
+    display(&format!("All {} partitions saved to {}", total_partitions, path));
+    Ok(0)
+}
+
 
 fn delete_existing_files(
     path:&str,

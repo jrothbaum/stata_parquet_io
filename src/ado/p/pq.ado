@@ -911,8 +911,7 @@ program pq_register_plugin
 	
 	if (_rc > 0) {
 		// Plugin is not loaded, so initialize it
-		local plugin_path = "`c(sysdir_plus)'p"
-		program polars_parquet_plugin, plugin using("`plugin_path'/pq.plugin")
+		program polars_parquet_plugin, plugin using("pq.plugin")
 	}
 end
 
