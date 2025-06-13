@@ -200,11 +200,6 @@ jobs:
       - name: List artifacts
         run: ls -R
 
-      - name: Create platform zip files
-        run: |
-          cd pq-windows && zip -r ../pq-windows.zip * && cd ..
-          cd pq-macos && zip -r ../pq-macos.zip * && cd ..
-          cd pq-linux && zip -r ../pq-linux.zip * && cd ..
       - name: Create SSC package zip
         run: |
           mkdir -p pq-ssc
@@ -225,6 +220,14 @@ jobs:
           
           # Create zip
           cd pq-ssc && zip -r ../pq-ssc.zip * && cd ..
+          
+      - name: Create platform zip files
+        run: |
+          cd pq-windows && mv pq.dll pq.plugin && zip -r ../pq-windows.zip * && cd ..
+          cd pq-macos && mv pq.dylib pq.plugin && zip -r ../pq-macos.zip * && cd ..
+          cd pq-linux && mv pq.so pq.plugin && zip -r ../pq-linux.zip * && cd ..
+
+          
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v1
