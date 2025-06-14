@@ -44,8 +44,10 @@ tempfile tparquet
 create_data, n_rows(100) n_cols(10) 
 pq save "`tparquet'.parquet", replace
 
-
+sum
 recast str100 c_2 
+tostring c_4, replace
+sum
 forvalues i = 2/10 {
 	rename c_`i' c_`=`i'+10'
 }
@@ -55,7 +57,7 @@ pq use "`tparquet'.parquet", clear
 pq merge 1:1 c_1 using "`tparquet'_merge.parquet"
 
 pq use "`tparquet'.parquet", clear
-pq merge 1:1 _n using "`tparquet'_merge.parquet", compress
+pq merge 1:1 _n using "`tparquet'_merge.parquet", compress compress_string_to_numeric
 
 
 

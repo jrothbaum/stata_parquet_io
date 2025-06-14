@@ -201,8 +201,9 @@ program pq_use_append
 	local using = r(fullpath)
 	
 	local b_append = "`append'" != ""
-	if (!`b_append' & "`clear'" != "")	clear
+
 	
+	if (!`b_append' & "`clear'" != "")	clear
 	if (`=_N' > 0 & !`b_append') {
 		display as error "There is already data loaded, pass clear if you want to load a parquet file"
 		exit 2000
@@ -313,7 +314,9 @@ program pq_use_append
 	local dropped_vars = 0
 	local strl_var_indexes
 
+	local var_position = 0
 	foreach vari in `matched_vars' {
+		local var_position = `var_position' + 1
 		local var_number: list posof "`vari'" in vars_in_file
 		local type `type_`var_number''
 		local string_length `string_length_`var_number''
@@ -378,7 +381,7 @@ program pq_use_append
 			local dropped_vars = `dropped_vars' + 1
 		}
 
-		local index_`var_number' = `var_number' - `dropped_vars'
+		local index_`var_number' = `var_position' - `dropped_vars'
 	}
 
 	local matched_vars `match_vars_non_binary'
@@ -386,9 +389,6 @@ program pq_use_append
 	
 	if ("`all_vars'" != "") {
 		//	Some work to get the proper variable indices for the ones to append
-		//		This is a little wasteful on use, but it's easier to have one way
-		//		for the code to run
-
 		tempname f_var_list
 		frame create `f_var_list'
 
@@ -503,7 +503,7 @@ program pq_gen_or_recast
 	else if ("`type_new'" == "date")		local type_new long
 	else if ("`type_new'" == "string")		local type_str str`string_length'
 	
-	capture confirm variable `name'
+	capture confirm variable `name', exact
 	local b_gen = _rc > 0
 
 	local vartype

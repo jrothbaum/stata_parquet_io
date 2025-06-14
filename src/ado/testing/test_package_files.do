@@ -17,6 +17,8 @@ program define test_file
 	
 	
 	pq use "`path_save_root'.parquet", clear
+
+	
 	unab all_vars: *
 	rename * *_pq
 	quietly merge 1:1 _n using "`path'.dta", nogen
@@ -36,6 +38,8 @@ program define test_file
 	
 	di _newline(2)
 end
+
+
 
 local test_root C:\Users\jonro\OneDrive\Documents\Coding\stata_parquet_io
 test_file, path(`test_root'\test_data\pyreadstat\sample)

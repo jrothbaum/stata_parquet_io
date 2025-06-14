@@ -3,15 +3,34 @@ timer clear
 
 //	local path C:/Users/jonro/Downloads/pyreadstat/test_data/basic/sample
 //	local path C:\Users\jonro\Downloads\flights-1m
-local path C:\Users\jonro\Downloads\fhv_tripdata_2025-01
+//	local path C:\Users\jonro\Downloads\fhv_tripdata_2025-01
 //	local path C:\Users\jonro\Downloads\fhvhv_tripdata_2024-12
-pq describe using "`path'.parquet"
 
+//	local path C:\Users\jonro\Downloads\LLM_match_formulas_all
+local path C:\Users\jonro\OneDrive\Documents\Coding\stata_parquet_io\test_data\econ_data\tm_assignee
+
+
+capture log close
+log using "`path'.log", replace
+
+shell set POLARS_MAX_THREADS="1"
+
+tempfile tsave
+use using "`path'.dta", clear
+
+pq save "`tsave'.parquet", replace
+capture log close
+;
 timer on 1
 pq use using "`path'.parquet", clear
 timer off 1
 sum
 
+
+pq save using "`tsave'.parquet", replace
+
+
+;
 timer on 4
 save "`path'.dta", replace
 timer off 4

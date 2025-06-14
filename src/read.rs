@@ -35,72 +35,84 @@ use crate::utilities::{
 use crate::downcast::apply_cast;
 
 // Trait for converting Polars values to Stata values
+
 trait ToStataValue {
     fn to_stata_value(&self) -> Option<f64>;
 }
 
 // Implementations for different types
 impl ToStataValue for bool {
+    #[inline(always)]
     fn to_stata_value(&self) -> Option<f64> {
         Some(if *self { 1.0 } else { 0.0 })
     }
 }
 
 impl ToStataValue for i8 {
+    #[inline(always)]
     fn to_stata_value(&self) -> Option<f64> {
         Some(*self as f64)
     }
 }
 
 impl ToStataValue for i16 {
+    #[inline(always)]
     fn to_stata_value(&self) -> Option<f64> {
         Some(*self as f64)
     }
 }
 
 impl ToStataValue for i32 {
+    #[inline(always)]
     fn to_stata_value(&self) -> Option<f64> {
         Some(*self as f64)
     }
 }
 
 impl ToStataValue for i64 {
+    #[inline(always)]
     fn to_stata_value(&self) -> Option<f64> {
         Some(*self as f64)
     }
 }
 
 impl ToStataValue for u8 {
+    #[inline(always)]
     fn to_stata_value(&self) -> Option<f64> {
         Some(*self as f64)
     }
 }
 
 impl ToStataValue for u16 {
+    #[inline(always)]
     fn to_stata_value(&self) -> Option<f64> {
         Some(*self as f64)
     }
 }
 
 impl ToStataValue for u32 {
+    #[inline(always)]
     fn to_stata_value(&self) -> Option<f64> {
         Some(*self as f64)
     }
 }
 
 impl ToStataValue for u64 {
+    #[inline(always)]
     fn to_stata_value(&self) -> Option<f64> {
         Some(*self as f64)
     }
 }
 
 impl ToStataValue for f32 {
+    #[inline(always)]
     fn to_stata_value(&self) -> Option<f64> {
         Some(*self as f64)
     }
 }
 
 impl ToStataValue for f64 {
+    #[inline(always)]
     fn to_stata_value(&self) -> Option<f64> {
         Some(*self)
     }
@@ -108,8 +120,8 @@ impl ToStataValue for f64 {
 
 // Special type for handling dates
 struct DateValue(i32);
-
 impl ToStataValue for DateValue {
+    #[inline(always)]
     fn to_stata_value(&self) -> Option<f64> {
         Some((self.0 + DAY_SHIFT_SAS_STATA) as f64)
     }
@@ -119,6 +131,7 @@ impl ToStataValue for DateValue {
 struct TimeValue(i64);
 
 impl ToStataValue for TimeValue {
+    #[inline(always)]
     fn to_stata_value(&self) -> Option<f64> {
         Some((self.0 / SEC_MICROSECOND) as f64)
     }
@@ -129,6 +142,7 @@ impl ToStataValue for TimeValue {
 struct DatetimeValue(i64, TimeUnit);
 
 impl ToStataValue for DatetimeValue {
+    #[inline(always)]
     fn to_stata_value(&self) -> Option<f64> {
         let mills_factor = match self.1 {
             TimeUnit::Nanoseconds => (SEC_NANOSECOND/SEC_MILLISECOND) as f64,
@@ -917,7 +931,7 @@ fn process_regular_by_column(
                 Ok(c) => c,
                 Err(e) => return Err(e)
             };
-            
+            //  display(&format!("Index: {}", col_info.index));
             // Process regular column based on its type
             match col_info.stata_type.as_str() {
                 "string" => {
@@ -1100,14 +1114,20 @@ fn process_datetime_column(
     
     let time_unit_unwrapped = time_unit.unwrap();
     
+    let mills_factor = match time_unit_unwrapped {
+        TimeUnit::Nanoseconds => (SEC_NANOSECOND/SEC_MILLISECOND) as f64,
+        TimeUnit::Microseconds => (SEC_MICROSECOND/SEC_MILLISECOND) as f64,
+        TimeUnit::Milliseconds => 1.0,
+    };
+    
+    let sec_shift_scaled = (SEC_SHIFT_SAS_STATA as f64) * (SEC_MILLISECOND as f64);
+    
     // Process each row based on the schema's time unit
     for row_idx in start_row..end_row {
         let global_row_idx = row_idx + start_index;
         let value: Option<f64> = match col.get(row_idx) {
             Ok(AnyValue::Datetime(v, _, _)) => { 
-                // Convert to Stata datetime value using trait
-                let datetime = DatetimeValue(v, time_unit_unwrapped);
-                DatetimeValue::to_stata_value(&datetime)
+                Some(v as f64 / mills_factor + sec_shift_scaled)
             },
             _ => None
         };
@@ -1132,39 +1152,30 @@ fn process_numeric_column(
     col_idx: usize,
     stata_offset: usize,
 ) -> PolarsResult<()> {
-        // Get the column's data type from the stored string representation
-    let dtype_str = col_info.dtype.as_str();
-    
+    // Use function pointers for better performance
+    let converter: fn(&AnyValue) -> Option<f64> = match col_info.dtype.as_str() {
+        "Boolean" => |av| match av { AnyValue::Boolean(b) => Some(if *b { 1.0 } else { 0.0 }), _ => None },
+        "Int8" => |av| match av { AnyValue::Int8(v) => Some(*v as f64), _ => None },
+        "Int16" => |av| match av { AnyValue::Int16(v) => Some(*v as f64), _ => None },
+        "Int32" => |av| match av { AnyValue::Int32(v) => Some(*v as f64), _ => None },
+        "Int64" => |av| match av { AnyValue::Int64(v) => Some(*v as f64), _ => None },
+        "UInt8" => |av| match av { AnyValue::UInt8(v) => Some(*v as f64), _ => None },
+        "UInt16" => |av| match av { AnyValue::UInt16(v) => Some(*v as f64), _ => None },
+        "UInt32" => |av| match av { AnyValue::UInt32(v) => Some(*v as f64), _ => None },
+        "UInt64" => |av| match av { AnyValue::UInt64(v) => Some(*v as f64), _ => None },
+        "Float32" => |av| match av { AnyValue::Float32(v) => Some(*v as f64), _ => None },
+        "Float64" => |av| match av { AnyValue::Float64(v) => Some(*v), _ => None },
+        "Date" => |av| match av { AnyValue::Date(v) => Some((*v + DAY_SHIFT_SAS_STATA) as f64), _ => None },
+        "Time" => |av| match av { AnyValue::Time(v) => Some((*v / SEC_MICROSECOND) as f64), _ => None },
+        _ => return Ok(()) // Skip unknown types
+    };
+
+    // Get the column's data type from the stored string representation
     for row_idx in start_row..end_row {
         let global_row_idx = row_idx + start_index;
-        
-        let value: Option<f64> = match col.get(row_idx) {
-            Ok(any_value) => match (dtype_str, any_value) {
-                ("Boolean", AnyValue::Boolean(b)) => b.to_stata_value(),
-                ("Int8", AnyValue::Int8(v)) => v.to_stata_value(),
-                ("Int16", AnyValue::Int16(v)) => v.to_stata_value(),
-                ("Int32", AnyValue::Int32(v)) => v.to_stata_value(),
-                ("Int64", AnyValue::Int64(v)) => v.to_stata_value(),
-                ("UInt8", AnyValue::UInt8(v)) => v.to_stata_value(),
-                ("UInt16", AnyValue::UInt16(v)) => v.to_stata_value(),
-                ("UInt32", AnyValue::UInt32(v)) => v.to_stata_value(),
-                ("UInt64", AnyValue::UInt64(v)) => v.to_stata_value(),
-                ("Float32", AnyValue::Float32(v)) => v.to_stata_value(),
-                ("Float64", AnyValue::Float64(v)) => v.to_stata_value(),
-                ("Date", AnyValue::Date(v)) => DateValue(v).to_stata_value(),
-                ("Time", AnyValue::Time(v)) => TimeValue(v).to_stata_value(),
-                _ => None
-            },
-            Err(_) => None
-        };
-        
-        replace_number(
-            value, 
-            global_row_idx + 1 + stata_offset,  // +1 because replace functions expect 1-indexed
-            col_idx              // col_idx is already 1-indexed
-        );
+        let value = col.get(row_idx).ok().and_then(|av| converter(&av));
+        replace_number(value, global_row_idx + 1 + stata_offset, col_idx);
     }
-    
     Ok(())
 }
 

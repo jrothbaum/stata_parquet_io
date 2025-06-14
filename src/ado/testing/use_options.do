@@ -61,7 +61,10 @@ timer list
 pq use * using "`tparquet'.parquet", clear 
 sum
 pq use c_* using "`tparquet'.parquet", clear
-pq use c_1* using "`tparquet'.parquet", clear
+pq use c_1* c_4 using "`tparquet'.parquet", clear
+
+sum
+
 
 pq use "`tparquet'.parquet", clear sort(c_2 c_1)
 forvalues i=1/10 {
