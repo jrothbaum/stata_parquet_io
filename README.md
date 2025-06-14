@@ -23,7 +23,7 @@ ssc install pq
 
 
 ### Option 2: Manual installation
-1. Download the package files for your archictecture (Linux, Mac, or Windows - or to be safe all three from the SSC zip)  from the [latest release](https://github.com/jrothbaum/stata_parquet_io/releases)
+1. Download the package files for your archictecture (Linux, Mac, or Windows)  from the [latest release](https://github.com/jrothbaum/stata_parquet_io/releases)
 2. Place the files in your PLUS/p directory (find location with `sysdir`)
 
 ### Important Note for Mac ARM Users
