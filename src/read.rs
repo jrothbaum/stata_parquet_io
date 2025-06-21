@@ -301,7 +301,9 @@ pub fn scan_lazyframe(
                 normalized_pattern = normalized_pattern.replace("**.", "**/*.");
             }
             
-            LazyFrame::scan_parquet(&normalized_pattern, ScanArgsParquet::default())
+            let mut scan_args = ScanArgsParquet::default();
+            scan_args.allow_missing_columns = true;
+            LazyFrame::scan_parquet(&normalized_pattern, scan_args.clone())
         }
     }
 
@@ -334,7 +336,9 @@ fn scan_hive_partitioned(dir_path: &str) -> Result<LazyFrame, PolarsError> {
         if let Ok(paths) = glob(&pattern) {
             let files: Vec<_> = paths.filter_map(Result::ok).collect();
             if !files.is_empty() {
-                return LazyFrame::scan_parquet(&pattern, ScanArgsParquet::default());
+                let mut scan_args = ScanArgsParquet::default();
+                scan_args.allow_missing_columns = true;
+                return LazyFrame::scan_parquet(&pattern, scan_args.clone());
             }
         }
     }
@@ -368,12 +372,14 @@ fn scan_with_diagonal_relaxed(glob_path: &str) -> Result<LazyFrame, PolarsError>
     }
     
     // Create individual lazy frames for each file
+    let mut scan_args = ScanArgsParquet::default();
+    scan_args.allow_missing_columns = true;
     let lazy_frames: Result<Vec<LazyFrame>, PolarsError> = file_paths
         .iter()
         .map(|path| {
             LazyFrame::scan_parquet(
                 path.to_string_lossy().as_ref(), 
-                ScanArgsParquet::default()
+                scan_args.clone(),
             )
         })
         .collect();
@@ -457,9 +463,11 @@ fn scan_with_filename_extraction(
                 .unwrap_or("unknown");
             
             // Create lazy frame with extracted column
+            let mut scan_args = ScanArgsParquet::default();
+            scan_args.allow_missing_columns = true;
             LazyFrame::scan_parquet(
                 path_str.as_ref(), 
-                ScanArgsParquet::default()
+                scan_args.clone()
             )
             .map(|lf| {
                 //  display(&format!("Matched, {}: {}", variable_name, extracted_value));
