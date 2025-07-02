@@ -6,7 +6,7 @@ members = [
 
 [package]
 name = "stata_parquet_io"
-version = "0.1.0"
+version = "1.4.0"
 authors = ["Jon Rothbaum <jlrothbaum@gmail.com>"]
 edition = "2021"
 description = "Stata plugin to read/write parquet files using polars Rust"

@@ -1,5 +1,5 @@
 *! pq - read/write parquet files with stata
-*! Version 1.2.0
+*! Version 1.4.0
 
 capture program drop pq
 program define pq
