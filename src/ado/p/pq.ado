@@ -236,7 +236,7 @@ program pq_use_append
 			di as error "pq will interpret > as in SQL, which is different than Stata."
 			di as error "	It will not include . as > any value."
 		}
-		di `"plugin call polars_parquet_plugin, if "`if'""'
+		//	di `"plugin call polars_parquet_plugin, if "`if'""'
 		plugin call polars_parquet_plugin, if `"`if'"'
 	}
 	else {
