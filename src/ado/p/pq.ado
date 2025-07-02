@@ -911,7 +911,31 @@ program pq_register_plugin
 	
 	if (_rc > 0) {
 		// Plugin is not loaded, so initialize it
-		program polars_parquet_plugin, plugin using("pq.plugin")
+		capture program polars_parquet_plugin, plugin using("pq.plugin")
+
+
+		capture plugin call polars_parquet_plugin, setup_check ""
+		if (_rc > 0) {
+            // OS specific check here
+            local os = "`c(os)'"
+            
+            if ("`os'" == "Windows")		local plugin_file = "pq.dll"
+            else if ("`os'" == "MacOSX")	local plugin_file = "pq.dylib"
+            else if ("`os'" == "Unix")		local plugin_file = "pq.so"
+            else {
+                display as error "Unsupported operating system: `os'"
+                exit 198
+            }
+            
+            // Try loading the OS-specific plugin
+            capture program polars_parquet_plugin, plugin using("`plugin_file'")
+            
+            if (_rc > 0) {
+                display as error "Failed to load plugin `plugin_file' for `os'"
+                display as error "Make sure the plugin file exists in the current directory or ado path"
+                exit _rc
+            }
+		}
 	}
 end
 
