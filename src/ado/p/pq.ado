@@ -399,31 +399,43 @@ program pq_use_append
 		}
 
 		//	_string_length_5:
-		describe
+		
 		frame `f_var_list' {
 			quietly gen index = .
 			quietly gen name = ""
 			quietly gen type = ""
 			quietly gen byte to_edit = .
+			quietly gen duplicate = .
 			quietly set obs `n_vars_already'
 
 			forvalues i = 1/`n_vars_already' {
 				local vari = word("`all_vars'", `i')
 
 				quietly replace name = "`vari'" if _n == `i'
-				quietly replace type = "`type_already_`i''" if _n == `i'				
+				quietly replace type = "`type_already_`i''" if _n == `i'
 			}
 			quietly replace to_edit = 0
+			quietly replace duplicate = 0
 			quietly set obs `=`n_vars' + `n_vars_already''
+			
+			local duplicate_count = 0
 			forvalues i = 1/`n_vars' {
 				local vari = word("`matched_vars'", `i')
+				
+				
+				if (`n_vars_already' > 0) {
+					quietly count if name == "`vari'"
+					local duplicate = r(N)
+			
+					local duplicate_count = `duplicate_count' + (`duplicate' > 0)
+				}
 				
 				quietly replace name = "`vari'" if _n == (`i' + `n_vars_already')
 				quietly replace type = "`type_`i''" if _n == (`i' + `n_vars_already')
 				quietly replace to_edit = 1 if _n == (`i' + `n_vars_already')
+				quietly replace duplicate = `duplicate_count' if _n == (`i' + `n_vars_already')
 			}
 			quietly replace index = _n
-			
 			sort name index
 			
 			
@@ -432,13 +444,17 @@ program pq_use_append
 			quietly gen is_strl = inlist(type,"strl","strL")
 			quietly by name: egen has_strl = max(is_strl)
 			quietly by name: replace type = "strl" if has_strl
+			
 			quietly by name: keep if _n == 1
-			quietly keep if to_edit == 1
 			sort new_index
-
+			
+			keep if to_edit == 1
+			
 			local strl_var_indexes
 			forvalues i = 1/`=_N' {
-				local index_`i' = index[`i']
+				local index_`i' = index[`i'] - duplicate[`i']
+				//	di "name_`i': `name_`i''"
+				//	di "index_`i': `index_`i''"
 
 				if (type[`i'] == "strl") {
 					local type_`i' = "strl"
