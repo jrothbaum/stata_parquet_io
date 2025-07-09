@@ -433,6 +433,7 @@ program pq_use_append
 			quietly by name: egen has_strl = max(is_strl)
 			quietly by name: replace type = "strl" if has_strl
 			quietly by name: keep if _n == 1
+			quietly keep if to_edit == 1
 			sort new_index
 
 			local strl_var_indexes
