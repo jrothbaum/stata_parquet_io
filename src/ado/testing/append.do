@@ -134,9 +134,15 @@ foreach typei in `var_types' {
 }
 count
 
+gen beta_ = _n
+gen gamma_ = _N - _n
+order beta_
 pq save "`t_save'_append.parquet", replace
 
 pq use "`t_save'.parquet", clear
+gen alpha_ = _n
+gen omega_ = _N - _n
+order alpha_
 count
 pq append "`t_save'_append.parquet"
 count
