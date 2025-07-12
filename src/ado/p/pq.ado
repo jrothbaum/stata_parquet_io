@@ -1,5 +1,5 @@
 *! pq - read/write parquet files with stata
-*! Version 1.4.0
+*! Version 1.5.0 - fix append when columns don't fully overlap
 
 capture program drop pq
 program define pq
