@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.4.0 July 2025}{...}
+{* *! version 1.5.1 July 2025}{...}
 {title:Title}
 
 {phang}
@@ -429,7 +429,7 @@ excellent performance for large datasets.
 {it:U.S. Census Bureau}
 
 {pstd}
-stata_parquet_io package. Version 1.4.0.
+stata_parquet_io package. Version 1.5.1.
 
 {pstd}
 For bug reports, feature requests, or other issues, please see {it:https://github.com/jrothbaum/stata_parquet_io}.

@@ -119,15 +119,15 @@ fn test_stata_if_to_sql() {
 
     let test9 = sql_from_if::stata_to_sql("age > -30");
     
-    println!("test1 = {:?}",test1.unwrap());
-    println!("test2 = {:?}",test2.unwrap());
-    println!("test3 = {:?}",test3.unwrap());
-    println!("test4 = {:?}",test4.unwrap());
-    println!("test5 = {:?}",test5.unwrap());
-    println!("test6 = {:?}",test6.unwrap());
-    println!("test7 = {:?}",test7.unwrap());
-    println!("test8 = {:?}",test8.unwrap());
-    println!("test9 = {:?}",test9.unwrap());
+    println!("test1 = {:?}",test1);
+    println!("test2 = {:?}",test2);
+    println!("test3 = {:?}",test3);
+    println!("test4 = {:?}",test4);
+    println!("test5 = {:?}",test5);
+    println!("test6 = {:?}",test6);
+    println!("test7 = {:?}",test7);
+    println!("test8 = {:?}",test8);
+    println!("test9 = {:?}",test9);
 
 
 }

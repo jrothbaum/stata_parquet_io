@@ -29,6 +29,7 @@ pub fn file_summary(
     compress: bool,
     compress_string_to_numeric: bool,
 ) -> i32 {
+    
     let mut df = match scan_lazyframe(
         &path,
         safe_relaxed,
@@ -116,7 +117,10 @@ pub fn file_summary(
 } 
 
 pub fn get_schema(path:&str) -> PolarsResult<Schema> {
-    let mut df = LazyFrame::scan_parquet(path, ScanArgsParquet::default())?;
+    let mut scan_args = ScanArgsParquet::default();
+    scan_args.allow_missing_columns = true;
+    scan_args.cache = false;
+    let mut df = LazyFrame::scan_parquet(path, scan_args.clone())?;
 
     let schema = df.collect_schema()?;
     

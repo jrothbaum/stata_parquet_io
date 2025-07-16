@@ -13,6 +13,11 @@ local path C:\Users\jonro\OneDrive\Documents\Coding\stata_parquet_io\test_data\e
 capture log close
 log using "`path'.log", replace
 
+
+pq use "C:\Users\jonro\OneDrive\Documents\Coding\test\data\snap\*\*.parquet", clear relaxed
+
+
+;
 shell set POLARS_MAX_THREADS="1"
 
 tempfile tsave

@@ -303,6 +303,7 @@ pub fn scan_lazyframe(
             
             let mut scan_args = ScanArgsParquet::default();
             scan_args.allow_missing_columns = true;
+            scan_args.cache = false;
             LazyFrame::scan_parquet(&normalized_pattern, scan_args.clone())
         }
     }
@@ -338,6 +339,7 @@ fn scan_hive_partitioned(dir_path: &str) -> Result<LazyFrame, PolarsError> {
             if !files.is_empty() {
                 let mut scan_args = ScanArgsParquet::default();
                 scan_args.allow_missing_columns = true;
+                scan_args.cache = false;
                 return LazyFrame::scan_parquet(&pattern, scan_args.clone());
             }
         }
@@ -374,6 +376,7 @@ fn scan_with_diagonal_relaxed(glob_path: &str) -> Result<LazyFrame, PolarsError>
     // Create individual lazy frames for each file
     let mut scan_args = ScanArgsParquet::default();
     scan_args.allow_missing_columns = true;
+    scan_args.cache = false;
     let lazy_frames: Result<Vec<LazyFrame>, PolarsError> = file_paths
         .iter()
         .map(|path| {
@@ -465,6 +468,7 @@ fn scan_with_filename_extraction(
             // Create lazy frame with extracted column
             let mut scan_args = ScanArgsParquet::default();
             scan_args.allow_missing_columns = true;
+            scan_args.cache = false;
             LazyFrame::scan_parquet(
                 path_str.as_ref(), 
                 scan_args.clone()

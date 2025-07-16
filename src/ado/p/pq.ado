@@ -1,5 +1,5 @@
 *! pq - read/write parquet files with stata
-*! Version 1.5.0 - fix append when columns don't fully overlap
+*! Version 1.5.1 - simplify if statement handling and remove memory eating polars cache
 
 capture program drop pq
 program define pq
@@ -243,7 +243,6 @@ program pq_use_append
 		local sql_if
 	}
 	
-	//	di `"if: `sql_if'"'
 	//	Initialize "mapping" to tell plugin to read from macro variables
 	local mapping from_macros
 	local b_quiet = 1
@@ -613,7 +612,6 @@ program pq_gen_or_recast
 	}
 	else if ("`type_new'" == "binary") {
 		di "Dropping `name' as cannot process binary columns"
-		di "HELLO"
 	}
 	else {
 		if `b_gen' {

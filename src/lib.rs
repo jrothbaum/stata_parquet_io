@@ -216,16 +216,8 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
             },
             "if" => {
                 let sql_if = sql_from_if::stata_to_sql(subfunction_args[0] as &str);
-
-                match sql_if {
-                    Ok(sql) => {
-                        stata_interface::set_macro("sql_if", &sql, false);
-                    },
-                    Err(e) => {
-                        display(&format!("Error parsing if statement: {:?}", e));
-                        return 198 as ST_retcode;
-                    }
-                }
+                stata_interface::set_macro("sql_if", &sql_if, false);
+                
             },
             _ => {
                 stata_interface::display(&format!("Error: Unknown subfunction '{}'\n\0", subfunction_name));
