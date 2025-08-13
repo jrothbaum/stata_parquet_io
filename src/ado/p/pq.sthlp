@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.5.1 July 2025}{...}
+{* *! version 1.7.0 July 2025}{...}
 {title:Title}
 
 {phang}
@@ -37,7 +37,7 @@ Save Stata data as a Parquet file:
 
 {p 8 17 2}
 {cmd:pq save} [{varlist}] {cmd:using} {it:filename} [, {opt replace} {opt if(expression)} {opt noautorename} {opt partition_by(varlist)} {opt compression(string)} {opt compression_level(integer)} {opt nopartitionoverwrite} {opt compress} 
-{opt compress_string_to_numeric}]
+{opt compress_string_to_numeric} {opt label} ]
 
 {phang}
 Describe contents of a Parquet file:
@@ -227,6 +227,10 @@ additional file to a partition (like a new year of data) without overwriting the
 
 {phang}
 {opt compress_string_to_numeric} automatically converts string variables to numeric when possible during the write operation.
+
+{phang}
+{opt label} saves labeled variables as strings.
+
 
 {dlgtab:Options for pq describe}
 
