@@ -704,8 +704,8 @@ program pq_match_variables, rclass
             foreach v of local against {
                 if match("`v'", "`name'") {
                     // Avoid duplicates
-                    if strpos("`matched'", "`v'") == 0 {
-                        local matched `matched' `v'
+                    if strpos(" `matched '", " `v' ") == 0 {
+                        local matched = `" `matched' `v' "'
                     }
                     local found = 1
                 }
@@ -715,8 +715,8 @@ program pq_match_variables, rclass
             // Exact match
             foreach v of local against {
                 if "`v'" == "`name'" {
-                    if strpos("`matched'", "`v'") == 0 {
-                        local matched `matched' `v'
+                    if strpos(" `matched '", " `v' ") == 0 {
+                        local matched = `" `matched' `v' "'
                     }
                     local found = 1
                 }
