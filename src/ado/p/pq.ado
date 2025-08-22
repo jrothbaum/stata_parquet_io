@@ -1,4 +1,5 @@
 *! pq - read/write parquet files with stata
+*! Version 1.7.1 - fix bug where variables that contain another variable in them not loading with *
 *! Version 1.7.0 - upgrade to rust polars 0.49, add option to save labels rather than numeric value
 
 capture program drop pq
