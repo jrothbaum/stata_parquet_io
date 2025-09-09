@@ -169,40 +169,40 @@ fn find_optimal_integer_type(min_val: i64, max_val: i64) -> DataType {
         return DataType::Boolean;
     }
     
-    // UInt8 (0 to 255) 
-    if min_val >= 0 && max_val <= 255 {
-        return DataType::UInt8;
-    }
+    // // UInt8 (0 to 255) 
+    // if min_val >= 0 && max_val <= 255 {
+    //     return DataType::UInt8;
+    // }
     
-    // Int8 (-128 to 127)
-    if min_val >= -128 && max_val <= 127 {
+    // Int8 (-128 to 100) - truncated at the top for stata
+    if min_val >= -128 && max_val <= 100 {
         return DataType::Int8;
     }
     
-    // UInt16 (0 to 65,535)
-    if min_val >= 0 && max_val <= 65535 {
-        return DataType::UInt16;
-    }
+    // // UInt16 (0 to 65,535)
+    // if min_val >= 0 && max_val <= 65535 {
+    //     return DataType::UInt16;
+    // }
     
-    // Int16 (-32,768 to 32,767)
-    if min_val >= -32768 && max_val <= 32767 {
+    // Int16 (-32,768 to 32,740) - truncated at the top for stata
+    if min_val >= -32768 && max_val <= 32740 {
         return DataType::Int16;
     }
     
-    // UInt32 (0 to 4,294,967,295)
-    if min_val >= 0 && max_val <= 4294967295 {
-        return DataType::UInt32;
-    }
+    // // UInt32 (0 to 4,294,967,295)
+    // if min_val >= 0 && max_val <= 4294967295 {
+    //     return DataType::UInt32;
+    // }
     
-    // Int32 (-2,147,483,648 to 2,147,483,647)
-    if min_val >= -2147483648 && max_val <= 2147483647 {
+    // Int32 (-2,147,483,648 to 2,147,483,620) - truncated at the top for stata
+    if min_val >= -2147483648 && max_val <= 2147483620 {
         return DataType::Int32;
     }
     
-    // UInt64 (0 to 18,446,744,073,709,551,615)
-    if min_val >= 0 {
-        return DataType::UInt64;
-    }
+    // // UInt64 (0 to 18,446,744,073,709,551,615)
+    // if min_val >= 0 {
+    //     return DataType::UInt64;
+    // }
     
     // Fall back to Int64
     DataType::Int64
