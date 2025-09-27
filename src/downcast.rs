@@ -27,6 +27,7 @@ impl Default for DowncastConfig {
 pub fn intelligent_downcast(
     mut df: LazyFrame,
     cols: Option<Vec<String>>,
+    cols_not_boolean: Option<Vec<String>>,
     config: DowncastConfig,
 ) -> PolarsResult<LazyFrame> {
     
@@ -34,6 +35,8 @@ pub fn intelligent_downcast(
     let columns_to_process = cols.unwrap_or_else(|| {
         schema.iter().map(|(name, _)| name.to_string()).collect()
     });
+
+    let columns_not_boolean = cols_not_boolean.as_deref().unwrap_or(&[]);
 
     let mut df = df;
     
@@ -57,7 +60,11 @@ pub fn intelligent_downcast(
     }
     
     // Step 3: Let Polars handle integer downcasting efficiently
-    df = safe_shrink_integers(df, &columns_to_process)?;
+    df = safe_shrink_integers(
+        df, 
+        &columns_to_process,
+        &columns_not_boolean,
+    )?;
 
     let schema_new = df.collect_schema()?;
     let json_return = match build_type_mapping(
@@ -86,7 +93,8 @@ pub fn intelligent_downcast(
 /// Safely shrink integer columns by checking actual min/max values
 fn safe_shrink_integers(
     mut df: LazyFrame,
-    columns: &[String]
+    columns: &[String],
+    columns_not_boolean: &[String],
 ) -> PolarsResult<LazyFrame> {
     
     let schema = df.collect_schema()?;
@@ -131,7 +139,10 @@ fn safe_shrink_integers(
         let max_val = stats_df.column(&max_col)?.i64()?.get(0);
         
         if let (Some(min), Some(max)) = (min_val, max_val) {
-            let optimal_type = find_optimal_integer_type(min, max);
+            // Check if this column should NOT be compressed to a boolean
+            let not_boolean = columns_not_boolean.contains(col_name);
+            
+            let optimal_type = find_optimal_integer_type(min, max,not_boolean);
             let current_type = schema.get(col_name.as_str()).unwrap();
             
             // Only cast if it's actually a smaller/better type
@@ -161,11 +172,15 @@ fn safe_shrink_integers(
 
 
 /// Find the smallest integer type that can hold the given range
-fn find_optimal_integer_type(min_val: i64, max_val: i64) -> DataType {
+fn find_optimal_integer_type(
+    min_val: i64,
+    max_val: i64,
+    not_boolean: bool,
+) -> DataType {
     // Check if values fit in smaller types, considering both signed and unsigned
     
     // Boolean (0, 1)
-    if min_val >= 0 && max_val <= 1 {
+    if min_val >= 0 && max_val <= 1 && !not_boolean {
         return DataType::Boolean;
     }
     
@@ -399,9 +414,14 @@ fn convert_floats_to_integers(
 pub fn intelligent_downcast_df(
     df: DataFrame,
     cols: Option<Vec<String>>,
+    cols_not_boolean: Option<Vec<String>>,
     config: DowncastConfig,
 ) -> PolarsResult<DataFrame> {
-    intelligent_downcast(df.lazy(), cols, config)?.collect()
+    intelligent_downcast(
+        df.lazy(), 
+        cols, 
+        cols_not_boolean,
+        config)?.collect()
 }
 
 

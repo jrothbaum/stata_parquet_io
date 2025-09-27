@@ -57,6 +57,7 @@ pub fn file_summary(
         df = match intelligent_downcast(
             df,
             None,
+            None,
             downcast_config
         ) {
             Ok(lf) => lf,

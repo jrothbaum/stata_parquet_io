@@ -67,7 +67,10 @@ clear
 
 //	Add new data to an existing partition
 create_data, n_rows(100) n_cols(100) 
-replace year = 2030
+replace year = 1
+pq save "`tparquet'_partitioned.parquet", replace partition_by(year month) nopartitionoverwrite
+
+replace year = 0
 pq save "`tparquet'_partitioned.parquet", replace partition_by(year month) nopartitionoverwrite
 
 

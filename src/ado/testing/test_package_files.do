@@ -32,6 +32,8 @@ program define test_file
 		if `n_disagree' {
 			sum `vari' `vari'_pq
 		}
+		
+		//	assert `n_disagree' == 0
 	}
 	
 	capture erase `path_save_root'.parquet

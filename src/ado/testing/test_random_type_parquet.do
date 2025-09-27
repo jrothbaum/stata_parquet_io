@@ -48,6 +48,8 @@ program compare_files
 		if `n_disagree' {
 			sum `vari' `vari'_pq
 		}
+		
+		assert `n_disagree' == 0
 	}
 
 end

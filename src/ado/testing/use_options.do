@@ -32,6 +32,12 @@ program define create_data
 	
 	if `n_cols' > `cols_created' {
 		local cols_created = `cols_created' + 1
+		quietly gen c_`cols_created' = 100 + floor(runiform()*60)
+	}
+	
+	
+	if `n_cols' > `cols_created' {
+		local cols_created = `cols_created' + 1
 		forvalues ci = `cols_created'/`n_cols' {
 			quietly gen c_`ci' = rnormal()
 		}
@@ -42,13 +48,15 @@ end
 di "Parallelization"
 create_data, n_rows(100000) n_cols(10) 
 tempfile tparquet
-
+compress
 pq save "`tparquet'.parquet", replace
 clear
 timer clear
 timer on 1
-pq use "`tparquet'.parquet", clear parallelize(columns)
+pq use "`tparquet'.parquet", clear parallelize(columns) compress
+
 timer off 1
+
 clear
 timer on 2
 pq use "`tparquet'.parquet", clear parallelize(rows)

@@ -194,14 +194,19 @@ fn save_partitioned(
     if compress | compress_string {
         let cols_to_downcast: Vec<String> = df.get_column_names().iter()
             .map(|&name| name.to_string())
-            .filter(|col| !partition_by.iter().any(|p| p.as_str() == col))
             .collect();
+
+        let cols_not_boolean: Vec<String> = partition_by.iter()
+            .map(|p| p.as_str().to_string())
+            .collect();
+
         let mut down_config = downcast::DowncastConfig::default();
         down_config.check_strings = compress_string;
         down_config.prefer_int_over_float = compress;
         df = match downcast::intelligent_downcast_df(
             df,
             Some(cols_to_downcast),
+            Some(cols_not_boolean),
             down_config
         ) {
             Ok(df_ok) => df_ok,
@@ -396,6 +401,7 @@ fn save_partitioned_sequential(
             partition_df = downcast::intelligent_downcast_df(
                 partition_df,
                 None,
+                None,
                 down_config
             ).map_err(|e| {
                 display(&format!("Partition downcast/compress error: {}", e));
@@ -532,6 +538,7 @@ fn save_no_partition(
         down_config.prefer_int_over_float = compress;
         let df = match downcast::intelligent_downcast_df(
             df,
+            None,
             None,
             down_config
         ) {
