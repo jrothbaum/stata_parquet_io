@@ -192,12 +192,16 @@ fn save_partitioned(
     };
 
     if compress | compress_string {
+        let cols_to_downcast: Vec<String> = df.get_column_names().iter()
+            .map(|&name| name.to_string())
+            .filter(|col| !partition_by.iter().any(|p| p.as_str() == col))
+            .collect();
         let mut down_config = downcast::DowncastConfig::default();
         down_config.check_strings = compress_string;
         down_config.prefer_int_over_float = compress;
         df = match downcast::intelligent_downcast_df(
             df,
-            None,
+            Some(cols_to_downcast),
             down_config
         ) {
             Ok(df_ok) => df_ok,
