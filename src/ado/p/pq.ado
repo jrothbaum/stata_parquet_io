@@ -1,4 +1,5 @@
 *! pq - read/write parquet files with stata
+*! Version 1.7.4 - fix str length bug for special characters (str lengths is number of bytes not characters) *
 *! Version 1.7.3 - Minor change to saves with partition and compress - don't downcast to boolean to avoid a=true/a=false columns (so it's a=1/a=0)*
 *! Version 1.7.2 - Fix overzealous compress on parquet use (to respect stata's odd integer limits) *
 *! Version 1.7.1 - fix bug where variables that contain another variable in them not loading with *

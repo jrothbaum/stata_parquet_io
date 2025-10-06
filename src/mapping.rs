@@ -244,6 +244,8 @@ pub fn schema_with_stata_types(
             HashMap::<PlSmallStr, usize>::new()
         };
 
+    //  display(&format!("hash_strings = {:?}", hash_strings));
+
     let rename_map = generate_rename_map(&schema);
     let mut all_columns:Vec<ColumnInfo> = Vec::with_capacity(schema.len());
     for (i,(name, dtype)) in schema.iter().enumerate() {
@@ -511,14 +513,17 @@ fn get_string_column_lengths(
     let exprs: Vec<Expr> = string_columns
         .iter()
         .map(|col_name| {
-            col(col_name.as_str()).str().len_chars().max().alias(col_name.as_str())
+            col(col_name.as_str()).str().len_bytes().max().alias(col_name.as_str())
         })
         .collect();
-    
+
 
     // Execute the query and get the result DataFrame
     let result_df = df.clone().select(exprs).collect()?;
 
+    
+    //  display(&format!("df: {:?}", result_df));
+    
     // Convert the DataFrame to a HashMap
     let row = result_df.get_row(0)?;
 
