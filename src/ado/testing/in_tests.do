@@ -68,7 +68,7 @@ program define in_test_parquet_io_data
 		
 		di "N for `in_set`i'':	" _N
 		di "Disagreements in for `in_set`i'':"
-		compare_files `all_vars'
+		compare_files `all_vars', do_assert
 		di _newline(2)
 	
 	
@@ -100,13 +100,6 @@ program define in_test_parquet_io_data
 	
 	
 	
-	
-	
-	
-	
-	
-	
-	
 	capture erase `path_save_root'.parquet
 	//	capture erase `path_save_root'_subset.parquet
 	capture erase `path_save_root'.dta
@@ -115,14 +108,22 @@ end
 
 capture program drop compare_files
 program compare_files
-	syntax varlist
+	syntax varlist, [do_assert]
 	
 	
-	
+	local var_count = 0
 	foreach vari in `varlist' {
+		local var_count = `var_count' + 1
 		quietly count if (`vari' != `vari'_pq) | (missing(`vari'_pq) & !missing(`vari'))
 		local n_disagree = r(N)
+		
+		if ("`do_assert'" != "") {
+			if (`var_count' == 1)	di "Asserting no disagreements"
+			assert `n_disagree' == 0
+		}
+		
 		di as text "  " %-33s "`vari':" as result %8.0f r(N)
+		
 		
 		if `n_disagree' {
 			sum `vari' `vari'_pq

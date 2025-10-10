@@ -1,9 +1,10 @@
 *! pq - read/write parquet files with stata
-*! Version 1.7.4 - fix str length bug for special characters (str lengths is number of bytes not characters) *
-*! Version 1.7.3 - Minor change to saves with partition and compress - don't downcast to boolean to avoid a=true/a=false columns (so it's a=1/a=0)*
-*! Version 1.7.2 - Fix overzealous compress on parquet use (to respect stata's odd integer limits) *
-*! Version 1.7.1 - fix bug where variables that contain another variable in them not loading with *
-*! Version 1.7.0 - upgrade to rust polars 0.49, add option to save labels rather than numeric value
+*! Version 1.8.0 - Fix pq append for subsets of variables, add settable batch_size *
+*! 		   1.7.4 - fix str length bug for special characters (str lengths is number of bytes not characters) *
+*! 		   1.7.3 - Minor change to saves with partition and compress - don't downcast to boolean to avoid a=true/a=false columns (so it's a=1/a=0)*
+*! 	       1.7.2 - Fix overzealous compress on parquet use (to respect stata's odd integer limits) *
+*! 	       1.7.1 - fix bug where variables that contain another variable in them not loading with *
+*!  	   1.7.0 - upgrade to rust polars 0.49, add option to save labels rather than numeric value
 
 capture program drop pq
 program define pq
@@ -197,6 +198,7 @@ program pq_use_append
 						random_n(integer 0)		///
 						random_share(real 0.0)	///
 						random_seed(integer 0)	///
+						batch_size(integer 1000000)	///
 						append]
 	
 	pq_register_plugin
@@ -326,7 +328,7 @@ program pq_use_append
 		//	di "var_number: `var_number'"
 		//	di "vari: `vari'"
 		//	di "string_length_`var_number': `string_length'"
-		
+			
 		//	Set rename_to to nothing
 		local rename_to
 		
@@ -352,6 +354,7 @@ program pq_use_append
 		pq_gen_or_recast,	name(`name_to_create')			///
 							type_new(`type')				///
 							str_length(`string_length')
+		
 		local keep = 1
 
 		if ("`type'" == "strl") {
@@ -387,6 +390,7 @@ program pq_use_append
 		local index_`var_number' = `var_position' - `dropped_vars'
 	}
 
+	
 	local matched_vars `match_vars_non_binary'
 	local n_matched_vars: word count `match_vars_non_binary'
 	
@@ -401,8 +405,6 @@ program pq_use_append
 			local type_already_`i': type `vari'
 		}
 
-		//	_string_length_5:
-		
 		frame `f_var_list' {
 			quietly gen index = .
 			quietly gen name = ""
@@ -422,9 +424,9 @@ program pq_use_append
 			quietly set obs `=`n_vars' + `n_vars_already''
 			
 			local duplicate_count = 0
-			forvalues i = 1/`n_vars' {
-				local vari = word("`matched_vars'", `i')
-				
+			forvalues i_matched = 1/`n_matched_vars' {
+				local vari = word("`matched_vars'", `i_matched')
+				local i : list posof "`vari'" in all_vars
 				
 				if (`n_vars_already' > 0) {
 					quietly count if name == "`vari'"
@@ -451,23 +453,35 @@ program pq_use_append
 			quietly by name: keep if _n == 1
 			sort new_index
 			
-			keep if to_edit == 1
+			keep if to_edit == 1 & name != ""
 			
-			local strl_var_indexes
-			forvalues i = 1/`=_N' {
-				local index_`i' = index[`i'] - duplicate[`i']
+			forvalues i_matched = 1/`n_matched_vars' {
+				local vari = word("`matched_vars'", `i_matched')
+				local i : list posof "`vari'" in vars_in_file
+				
+				quietly sum index if name == "`vari'", meanonly
+				local index_pre_dup = r(mean)
+
+				quietly sum duplicate if name == "`vari'", meanonly
+				local duplicate_subtract = r(mean)
+				
+				//	di "local index_`i' = `index_pre_dup' - `duplicate_subtract'"
+				local index_`i' = `index_pre_dup' - `duplicate_subtract'
+				
 				//	di "name_`i': `name_`i''"
 				//	di "index_`i': `index_`i''"
 
+				/*
 				if (type[`i'] == "strl") {
 					local type_`i' = "strl"
 					local strl_var_indexes `strl_var_indexes' `index_`i''
 				}
+				*/
 			}
 		}
 		frame drop `f_var_list'
 	}
-
+	
 	local offset = max(0,`offset' - 1)
 	//	local n_rows = `offset' + `row_to_read'
 
@@ -485,12 +499,14 @@ program pq_use_append
 	//	di `"plugin call polars_parquet_plugin, read "`using'" "`matched_vars'" `row_to_read' `offset' "`sql_if'" "`mapping'" "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed'"' 
 
 
-	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed'
+	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed' `batch_size'
 	
 	if ("`strl_var_indexes'" != "") {
 		di "Slowly processing strL variables"
 		foreach var_indexi in `strl_var_indexes' {
-			local lookup_number `var_indexi'
+			local vari = word("`vars_in_file'", `var_indexi')
+			
+			local lookup_number = `index_`var_indexi''
 			forvalues batchi = 1/`n_batches' {
 				local pathi `strl_path_`lookup_number'_`batchi''
 				local namei `strl_name_`lookup_number'_`batchi''
@@ -504,7 +520,7 @@ program pq_use_append
 				}
 				
 				//	di `"pq_process_strl, path(`pathi') name(`namei') var_index(`lookup_number') first(`starti') last(`endi')"'
-				pq_process_strl, path(`pathi') name(`namei') var_index(`lookup_number') first(`starti') last(`endi')
+				pq_process_strl, path(`pathi') name(`namei')  var_index(`lookup_number') first(`starti') last(`endi')
 			}
 		}
 	}
@@ -1022,6 +1038,16 @@ mata:
 						 real scalar first,
 						 real scalar last) {
 		strl_values = cat(path)
+		//	printf("var_index = %f\n", var_index)
+		//	printf("first = %f\n", first)
+		//	printf("last = %f\n", last)
+		//	printf("Number of rows in strl_values = %f\n", rows(strl_values))
+		
+		// Print first few rows
+		//	for (i=1; i<=min((rows(strl_values), 5)); i++) {
+		//		printf("strl_values[%f] = %s\n", i, strl_values[i])
+		//	}
+
 		st_sstore(first::last,var_index,strl_values)		
 	}
 

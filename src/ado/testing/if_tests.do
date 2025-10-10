@@ -43,31 +43,40 @@ program define in_test_parquet_io_data
 	//	Several if statements
 	local n_if = 1
 	local if_set`n_if' (c_3 > 0 & !missing(c_3))
+	local assert`n_if' 1
 	
 	local n_if = `n_if' + 1
 	local if_set`n_if' (c_3 > 0 & !missing(c_3)) & c_4 < 0
+	local assert`n_if' 1
 	
 	local n_if = `n_if' + 1
 	local if_set`n_if' (c_3 > 0 & !missing(c_3)) | c_4 < 0
+	local assert`n_if' 1
 	
 	local n_if = `n_if' + 1
 	local if_set`n_if' (c_3 > 0 & !missing(c_3)) | c_4 < 0 & !missing(c_5)
+	local assert`n_if' 1
 	
 	local n_if = `n_if' + 1
 	local if_set`n_if' (inrange(c_3, 0.5,1))
+	local assert`n_if' 1
 	
 	local n_if = `n_if' + 1
 	local if_set`n_if' inlist(c_1, 100,101, 500)
+	local assert`n_if' 1
 	
 	local n_if = `n_if' + 1
 	local if_set`n_if' c_2 == "A"
+	local assert`n_if' 1
 	
 	local n_if = `n_if' + 1
 	local if_set`n_if' c_2 == "B" & !missing(c_4) & (c_5 > 100 & !missing(c_5))
+	local assert`n_if' 0
 	
 	
 	local n_if = `n_if' + 1
 	local if_set`n_if' c_2 == "B" & !missing(c_4) & c_5 > 100
+	local assert`n_if' 0
 	
 	
 	forvalues i = 1/`n_if' {
@@ -86,10 +95,12 @@ program define in_test_parquet_io_data
 		rename * *_pq
 		quietly merge 1:1 _n using "`path_save_root'.dta", nogen
 
+		local do_assert
+		if (0`assert`i'') local do_assert do_assert
 		
 		di `"N for `if_set`i'':	"' _N
 		di `"Disagreements in for `if_set`i'':"'
-		compare_files `all_vars'
+		compare_files `all_vars', `do_assert'
 
 		di _newline(2)
 		
@@ -144,13 +155,19 @@ end
 
 capture program drop compare_files
 program compare_files
-	syntax varlist
+	syntax varlist, [do_assert]
 	
 	
-	
+	local var_count = 0
 	foreach vari in `varlist' {
+		local var_count = `var_count' + 1
+		
 		quietly count if (`vari' != `vari'_pq) | (missing(`vari'_pq) & !missing(`vari'))
 		local n_disagree = r(N)
+		if ("`do_assert'" != "") {
+			if (`var_count' == 1)	di "Asserting no disagreements"
+			assert `n_disagree' == 0
+		}
 		di as text "  " %-33s "`vari':" as result %8.0f r(N)
 		
 		if `n_disagree' {

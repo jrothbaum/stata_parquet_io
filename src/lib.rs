@@ -136,6 +136,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     subfunction_args[10].parse::<usize>().unwrap(),
                     subfunction_args[11].parse::<f64>().unwrap(),
                     subfunction_args[12].parse::<u64>().unwrap(),
+                    subfunction_args[13].parse::<usize>().unwrap(),
                 );
         
                 // Use match to handle the Result

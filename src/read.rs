@@ -530,6 +530,7 @@ pub fn read_to_stata(
     stata_offset:usize,
     random_share:f64,
     random_seed:u64,
+    batch_size:usize,
 ) -> Result<i32, Box<dyn Error>> {
 
     // Handle empty variable list by getting from macros
@@ -676,7 +677,6 @@ pub fn read_to_stata(
     //  display(&format!("columns: {:?}", columns));
     
     // Configure batch processing
-    let batch_size: usize = 1_000_000;
     let n_batches = (n_rows as f64 / batch_size as f64).ceil() as usize;
 
     // Determine thread count based on data size

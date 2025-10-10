@@ -14,5 +14,5 @@ pq save "`path'/`file'_write.parquet", replace
 
 
 pq use using "`path'/`file'_write.parquet", clear
-
+list
 capture log close

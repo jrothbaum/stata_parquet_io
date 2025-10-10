@@ -33,7 +33,7 @@ program define test_file
 			sum `vari' `vari'_pq
 		}
 		
-		//	assert `n_disagree' == 0
+		assert `n_disagree' == 0
 	}
 	
 	capture erase `path_save_root'.parquet

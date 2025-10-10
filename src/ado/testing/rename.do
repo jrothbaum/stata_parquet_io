@@ -10,7 +10,9 @@ return list
 
 pq save using "`path'/`file'_saved.parquet", replace noautorename
 pq describe using "`path'/`file'_saved.parquet"
-
+sum this_is_a_super_long_variabl*
 
 pq save using "`path'/`file'_saved.parquet", replace
 pq describe using "`path'/`file'_saved.parquet"
+
+sum this_is_a_super_long_variabl*
