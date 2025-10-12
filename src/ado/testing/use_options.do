@@ -44,17 +44,17 @@ program define create_data
 	}
 end
 
-
+set seed 1000
 di "Parallelization"
 create_data, n_rows(100000) n_cols(10) 
 tempfile tparquet
 compress
 pq save "`tparquet'.parquet", replace
+
 clear
 timer clear
 timer on 1
 pq use "`tparquet'.parquet", clear parallelize(columns) compress
-
 timer off 1
 
 clear

@@ -127,4 +127,8 @@ benchmark_parquet_io_data, 	n_cols(100)	///
 benchmark_parquet_io_data, 	n_cols(1000)	///
 				n_rows(100000)
 
+				
+benchmark_parquet_io_data, 	n_cols(100)	///
+				n_rows(10000000)
+
 clear

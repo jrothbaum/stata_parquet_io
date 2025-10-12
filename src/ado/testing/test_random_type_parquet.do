@@ -22,8 +22,6 @@ program define test_file
 	rename * *_pq
 	quietly merge 1:1 _n using "`path_save_root'.dta", nogen
 	
-	di "N for `in_set`i'':	" _N
-	di "Disagreements in for `in_set`i'':"
 	compare_files `all_vars', do_assert
 	di _newline(2)
 	
@@ -67,5 +65,5 @@ end
 
 test_file, path(C:\Users\jonro\Downloads\random_types)
 
-
+;
 pq use "C:\Users\jonro\Downloads\random_types_partitioned.parquet\**.parquet", clear

@@ -41,7 +41,6 @@ restore
 pq use nr date open high volume `keep_long_string' using "`pq1'.parquet", clear
 pq append nr date open high volume `keep_long_string' using "`pq2'.parquet"
 order nr date open high volume `keep_long_string'
-
 if (`with_long_string ')	replace long_string = substr(long_string,1,10)
 save "`f_append1'.dta", replace
 list

@@ -155,6 +155,7 @@ foreach typei in `var_types' {
 	foreach typej in `var_types' {
 		quietly count if missing(`typei'_`typej')
 		di "`typei'_`typej': " r(N)
+		assert r(N) == 0
 		sum `typei'_`typej' if _n <= `n_rows'
 		sum `typei'_`typej' if _n > `n_rows'
 	}

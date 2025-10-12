@@ -1,5 +1,6 @@
 *! pq - read/write parquet files with stata
-*! Version 1.8.0 - Fix pq append for subsets of variables, add settable batch_size *
+*! Version 1.9.0 - Vastly simplified use/append code to make it easier to manage and debug.  No change to API/function signature or functionality
+*! 		   1.8.0 - Fix pq append for subsets of variables, add settable batch_size *
 *! 		   1.7.4 - fix str length bug for special characters (str lengths is number of bytes not characters) *
 *! 		   1.7.3 - Minor change to saves with partition and compress - don't downcast to boolean to avoid a=true/a=false columns (so it's a=1/a=0)*
 *! 	       1.7.2 - Fix overzealous compress on parquet use (to respect stata's odd integer limits) *
@@ -320,6 +321,8 @@ program pq_use_append
 	local strl_var_indexes
 
 	local var_position = 0
+	local rename_count = 0
+	local rename_list
 	foreach vari in `matched_vars' {
 		local var_position = `var_position' + 1
 		local var_number: list posof "`vari'" in vars_in_file
@@ -357,11 +360,7 @@ program pq_use_append
 		
 		local keep = 1
 
-		if ("`type'" == "strl") {
-			local strl_position_`var_number' = `var_number' - `dropped_vars'
-			local strl_var_indexes `strl_var_indexes' `strl_position_`var_number''
-		}
-		else if ("`type'" == "datetime") {
+		if ("`type'" == "datetime") {
 			format `name_to_create' %tc
 		}
 		else if ("`type'" == "date") {
@@ -376,6 +375,10 @@ program pq_use_append
 		}
 
 		if ("`rename_to'" != "") {
+			local rename_list `rename_list' `name_to_create'
+			local rename_count = `rename_count' + 1
+			local rename_from_`rename_count' `vari'
+			
 			label variable `name_to_create' "{parquet_name:`vari'}"
 		}
 
@@ -383,105 +386,57 @@ program pq_use_append
 			//	di "keeping `vari'"
 			local match_vars_non_binary `match_vars_non_binary' `vari'
 		}
-		else {
-			local dropped_vars = `dropped_vars' + 1
-		}
-
-		local index_`var_number' = `var_position' - `dropped_vars'
 	}
 
 	
-	local matched_vars `match_vars_non_binary'
+	//	Make a list of the loaded variables
+	local strl_var_indexes
 	local n_matched_vars: word count `match_vars_non_binary'
 	
-	if ("`all_vars'" != "") {
-		//	Some work to get the proper variable indices for the ones to append
-		tempname f_var_list
-		frame create `f_var_list'
+	local i = 0
+	foreach vari of varlist * {
+		//	Actual variable index
+		local i = `i' + 1
 
+		//	vari is the final name, but if it was renamed, we 
+		//		need to get the original value to get the index
+		//		of the variable in the original list
+		local i_rename : list posof "`vari'" in rename_list
+		if (`i_rename' > 0)		local vari_original `rename_from_`i_rename''
+		else					local vari_original `vari'
+		
 
-		forvalues i = 1/`n_vars_already' {
-			local vari = word("`all_vars'", `i')
-			local type_already_`i': type `vari'
+		//	Index of the actual new variables (possible != i for append)
+		local i_matched : list posof "`vari_original'" in match_vars_non_binary
+		
+		if (`i_matched' > 0) {
+			local v_to_read_index_`i_matched' `i'
+			local v_to_read_name_`i_matched' `vari'
+			local v_to_read_type_`i_matched': type `vari'
+			local v_to_read_type_`i_matched' = lower("`v_to_read_type_`i_matched''")
+			//	di "v_to_read_type_`i_matched': `v_to_read_type_`i_matched''"
+			//	For getting the polars and polars assigned stata type and passing back to read
+			local i_original : list posof "`vari'" in vars_in_file
+
+			if (`i_original' == 0) {
+				//	Check renames
+				di "check renames"
+			}
+
+			if ("`v_to_read_type_`i_matched''" == "strl") {
+				local strl_var_indexes `strl_var_indexes' `i'
+			}
+			else {
+				//	Get the originally set stata type
+				local v_to_read_type_`i_matched' `type_`i_original''
+			}
+			//	Get the polars type from the earlier list
+			local v_to_read_p_type_`i_matched' `polars_type_`i_original''
+			
+			//	display "`v_to_read_index_`i_matched'': `v_to_read_name_`i_matched'', `v_to_read_type_`i_matched'', `v_to_read_p_type_`i_matched''"
 		}
-
-		frame `f_var_list' {
-			quietly gen index = .
-			quietly gen name = ""
-			quietly gen type = ""
-			quietly gen byte to_edit = .
-			quietly gen duplicate = .
-			quietly set obs `n_vars_already'
-
-			forvalues i = 1/`n_vars_already' {
-				local vari = word("`all_vars'", `i')
-
-				quietly replace name = "`vari'" if _n == `i'
-				quietly replace type = "`type_already_`i''" if _n == `i'
-			}
-			quietly replace to_edit = 0
-			quietly replace duplicate = 0
-			quietly set obs `=`n_vars' + `n_vars_already''
-			
-			local duplicate_count = 0
-			forvalues i_matched = 1/`n_matched_vars' {
-				local vari = word("`matched_vars'", `i_matched')
-				local i : list posof "`vari'" in all_vars
-				
-				if (`n_vars_already' > 0) {
-					quietly count if name == "`vari'"
-					local duplicate = r(N)
-			
-					local duplicate_count = `duplicate_count' + (`duplicate' > 0)
-				}
-				
-				quietly replace name = "`vari'" if _n == (`i' + `n_vars_already')
-				quietly replace type = "`type_`i''" if _n == (`i' + `n_vars_already')
-				quietly replace to_edit = 1 if _n == (`i' + `n_vars_already')
-				quietly replace duplicate = `duplicate_count' if _n == (`i' + `n_vars_already')
-			}
-			quietly replace index = _n
-			sort name index
-			
-			
-			quietly by name: replace to_edit = to_edit[_N]
-			quietly by name: gen new_index = index[_N]
-			quietly gen is_strl = inlist(type,"strl","strL")
-			quietly by name: egen has_strl = max(is_strl)
-			quietly by name: replace type = "strl" if has_strl
-			
-			quietly by name: keep if _n == 1
-			sort new_index
-			
-			keep if to_edit == 1 & name != ""
-			
-			forvalues i_matched = 1/`n_matched_vars' {
-				local vari = word("`matched_vars'", `i_matched')
-				local i : list posof "`vari'" in vars_in_file
-				
-				quietly sum index if name == "`vari'", meanonly
-				local index_pre_dup = r(mean)
-
-				quietly sum duplicate if name == "`vari'", meanonly
-				local duplicate_subtract = r(mean)
-				
-				//	di "local index_`i' = `index_pre_dup' - `duplicate_subtract'"
-				local index_`i' = `index_pre_dup' - `duplicate_subtract'
-				
-				//	di "name_`i': `name_`i''"
-				//	di "index_`i': `index_`i''"
-
-				/*
-				if (type[`i'] == "strl") {
-					local type_`i' = "strl"
-					local strl_var_indexes `strl_var_indexes' `index_`i''
-				}
-				*/
-			}
-		}
-		frame drop `f_var_list'
 	}
-	
+
 	local offset = max(0,`offset' - 1)
 	//	local n_rows = `offset' + `row_to_read'
 
@@ -500,27 +455,28 @@ program pq_use_append
 
 
 	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed' `batch_size'
-	
+	//	macro list _all
+	//	di "strl_var_indexes: `strl_var_indexes'"
 	if ("`strl_var_indexes'" != "") {
 		di "Slowly processing strL variables"
-		foreach var_indexi in `strl_var_indexes' {
-			local vari = word("`vars_in_file'", `var_indexi')
+		foreach i in `strl_var_indexes' {
+			local vari = `v_to_read_name_`i_matched''
+
 			
-			local lookup_number = `index_`var_indexi''
 			forvalues batchi = 1/`n_batches' {
-				local pathi `strl_path_`lookup_number'_`batchi''
-				local namei `strl_name_`lookup_number'_`batchi''
-				local starti `strl_start_`lookup_number'_`batchi''
-				local endi `strl_end_`lookup_number'_`batchi''
+				local pathi `strl_path_`i'_`batchi''
+				local namei `strl_name_`i'_`batchi''
+				local starti `strl_start_`i'_`batchi''
+				local endi `strl_end_`i'_`batchi''
 
 				//	local starti = `starti' + `n_obs_already'
 
 				if `batchi' == 1 {
 					di "	`namei'"
 				}
-				
-				//	di `"pq_process_strl, path(`pathi') name(`namei') var_index(`lookup_number') first(`starti') last(`endi')"'
-				pq_process_strl, path(`pathi') name(`namei')  var_index(`lookup_number') first(`starti') last(`endi')
+
+				//	di `"pq_process_strl, path(`pathi') name(`namei') var_index(`i') first(`starti') last(`endi')"'
+				pq_process_strl, path(`pathi') name(`namei')  var_index(`i') first(`starti') last(`endi')
 			}
 		}
 	}

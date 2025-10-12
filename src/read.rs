@@ -542,7 +542,7 @@ pub fn read_to_stata(
 
     // Get column info either from mapping or macros
     let all_columns_unfiltered: Vec<ColumnInfo> = if mapping.is_empty() || mapping == "from_macros" {
-        let n_vars_str = get_macro("n_vars", false, None);
+        let n_vars_str = get_macro("n_matched_vars", false, None);
         let n_vars = match n_vars_str.parse::<usize>() {
             Ok(num) => num,
             Err(e) => {
@@ -705,7 +705,7 @@ pub fn read_to_stata(
     // display(&format!("Rows: {}", n_rows));
     for batchi in 0..n_batches {
         let mut df_batch = df.clone()
-                                        .select(&columns);
+                             .select(&columns);
 
         let batch_offseti = offset + batchi * batch_size;
 
@@ -793,10 +793,10 @@ fn column_info_from_macros(n_vars: usize) -> Vec<ColumnInfo> {
     let mut column_infos = Vec::with_capacity(n_vars);
     
     for i in 0..n_vars {
-        let index = get_macro(&format!("index_{}", i+1), false, None).parse::<usize>().unwrap_or(i+1) - 1;
-        let name = get_macro(&format!("name_{}", i+1), false, None);
-        let dtype = get_macro(&format!("polars_type_{}", i+1), false, None);
-        let stata_type = get_macro(&format!("type_{}", i+1), false, None);
+        let index = get_macro(&format!("v_to_read_index_{}", i+1), false, None).parse::<usize>().unwrap() - 1;
+        let name = get_macro(&format!("v_to_read_name_{}", i+1), false, None);
+        let dtype = get_macro(&format!("v_to_read_p_type_{}", i+1), false, None);
+        let stata_type = get_macro(&format!("v_to_read_type_{}", i+1), false, None);
         
         column_infos.push(ColumnInfo {
             index,
@@ -806,6 +806,8 @@ fn column_info_from_macros(n_vars: usize) -> Vec<ColumnInfo> {
         });
     }
     
+    //  display(&format!("{:?}", column_infos));
+            
     column_infos
 }
 

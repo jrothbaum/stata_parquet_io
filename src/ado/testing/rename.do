@@ -16,3 +16,6 @@ pq save using "`path'/`file'_saved.parquet", replace
 pq describe using "`path'/`file'_saved.parquet"
 
 sum this_is_a_super_long_variabl*
+
+pq use using "`path'/`file'_saved.parquet", clear
+sum this_is_a_super_long_variabl* *int*
