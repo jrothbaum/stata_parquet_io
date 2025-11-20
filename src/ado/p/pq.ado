@@ -1,5 +1,6 @@
 *! pq - read/write parquet files with stata
-*! Version 1.9.0 - Vastly simplified use/append code to make it easier to manage and debug.  No change to API/function signature or functionality
+*! Version 1.9.1 - Fix parquet->stata integer cast overflow bug
+*!         1.9.0 - Vastly simplified use/append code to make it easier to manage and debug.  No change to API/function signature or functionality
 *! 		   1.8.0 - Fix pq append for subsets of variables, add settable batch_size *
 *! 		   1.7.4 - fix str length bug for special characters (str lengths is number of bytes not characters) *
 *! 		   1.7.3 - Minor change to saves with partition and compress - don't downcast to boolean to avoid a=true/a=false columns (so it's a=1/a=0)*
