@@ -33,10 +33,10 @@ use read::{
 };
 
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub static mut _stata_: *mut stata_sys::ST_plugin = ptr::null_mut();
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn pginit(p: *mut stata_sys::ST_plugin) -> stata_sys::ST_retcode {
     unsafe {
         _stata_ = p;
@@ -44,7 +44,7 @@ pub extern "C" fn pginit(p: *mut stata_sys::ST_plugin) -> stata_sys::ST_retcode 
     stata_sys::SD_PLUGINVER
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retcode {
     // Wrap the entire function body in catch_unwind
     std::panic::catch_unwind(|| {

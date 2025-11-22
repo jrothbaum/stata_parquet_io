@@ -219,7 +219,7 @@ fn save_partitioned(
 
     match write_partitioned_dataset(
             &mut df, 
-            &PathBuf::from(path),
+            PlPath::new(path).as_ref(),
             partition_by.clone(),
             &pqo, 
             None,
@@ -413,7 +413,7 @@ fn save_partitioned_sequential(
         
         // Generate a unique filename for this partition
         let partition_file = partition_dir.join("data_0.parquet");
-        let sink_target = SinkTarget::Path(Arc::new(partition_file.clone()));
+        let sink_target = SinkTarget::Path(PlPath::new(partition_file.to_str().unwrap()));
         
         // Save this partition
         let result_lf = partition_lf.sink_parquet(
@@ -553,7 +553,7 @@ fn save_no_partition(
     }
 
 
-    let sink_target = SinkTarget::Path(Arc::new(PathBuf::from(path)));
+    let sink_target = SinkTarget::Path(PlPath::new(path));
     let pqo = parquet_options(compression, compression_level);
     
     // First set up the sink and handle potential errors there

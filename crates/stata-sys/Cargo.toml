@@ -2,7 +2,7 @@
 name = "stata-sys"
 version = "1.0.0"
 authors = ["Jonathan Rothbaum <jon.rothbaum@gmail.com>"]
-edition = "2021"
+edition = "2024"
 description = "Raw bindings to stata stplugin 3.0 cpp"
 license = "MIT"
 repository = "https://github.com/jrothbaum/stata_parquet_io"
@@ -17,4 +17,4 @@ libc = "0.2"
 
 [build-dependencies]
 cc = "1.0"
-bindgen = "0.71.1"
+bindgen = "0.72.1"

@@ -12,6 +12,7 @@ use std::collections::HashSet;
 use glob::glob;
 use regex::Regex;
 
+
 use crate::mapping::ColumnInfo;
 use crate::stata_interface::{
     display,
@@ -304,7 +305,9 @@ pub fn scan_lazyframe(
             let mut scan_args = ScanArgsParquet::default();
             scan_args.allow_missing_columns = true;
             scan_args.cache = false;
-            LazyFrame::scan_parquet(&normalized_pattern, scan_args.clone())
+            LazyFrame::scan_parquet(
+                PlPath::new(&normalized_pattern), scan_args.clone()
+            )
         }
     }
 
@@ -340,7 +343,7 @@ fn scan_hive_partitioned(dir_path: &str) -> Result<LazyFrame, PolarsError> {
                 let mut scan_args = ScanArgsParquet::default();
                 scan_args.allow_missing_columns = true;
                 scan_args.cache = false;
-                return LazyFrame::scan_parquet(&pattern, scan_args.clone());
+                return LazyFrame::scan_parquet(PlPath::new(&pattern), scan_args.clone());
             }
         }
     }
@@ -381,7 +384,7 @@ fn scan_with_diagonal_relaxed(glob_path: &str) -> Result<LazyFrame, PolarsError>
         .iter()
         .map(|path| {
             LazyFrame::scan_parquet(
-                path.to_string_lossy().as_ref(), 
+                PlPath::new(path.to_string_lossy().as_ref()), 
                 scan_args.clone(),
             )
         })
@@ -470,7 +473,7 @@ fn scan_with_filename_extraction(
             scan_args.allow_missing_columns = true;
             scan_args.cache = false;
             LazyFrame::scan_parquet(
-                path_str.as_ref(), 
+                PlPath::new(path_str.as_ref()), 
                 scan_args.clone()
             )
             .map(|lf| {
@@ -700,62 +703,63 @@ pub fn read_to_stata(
     set_macro("n_batches", &n_batches.to_string(), false);
 
 
+
+    use std::num::NonZeroUsize;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     // display(&format!("Batches: {}", n_batches));
     // display(&format!("Offset: {}", offset));
     // display(&format!("Rows: {}", n_rows));
-    for batchi in 0..n_batches {
-        let mut df_batch = df.clone()
-                             .select(&columns);
+    // Track the current row offset
+    let row_offset = Arc::new(AtomicUsize::new(0));
+    let row_offset_clone = row_offset.clone();
+    let batch_counter = Arc::new(AtomicUsize::new(0));
+    let batch_counter_clone = batch_counter.clone();
 
-        let batch_offseti = offset + batchi * batch_size;
+    // Clone what you need for the closure
+    let all_columns_clone = all_columns.clone();
 
-        let batch_lengthi = if (batchi + 1) * batch_size > n_rows {
-            n_rows - batchi * batch_size
-        } else {
-            batch_size
-        } as u32;
-        
-        // display("");
-        // display(&format!("Batch #{}", batchi + 1));
-        // display(&format!("Batch start: {}", batch_offseti));
-        // display(&format!("Batch length: {}", batch_lengthi));
-        
-        // Apply slice to get current batch
-        df_batch = df_batch.slice(
-            batch_offseti as i64, 
-            batch_lengthi
-        );
+    df.clone()
+        .select(&columns)
+        .slice(offset as i64, n_rows as u32)
+        .sink_batches(
+            PlanCallback::new(move |batch_df: DataFrame| -> PolarsResult<bool> {
+                // Get current row offset and increment by batch size
+                let current_row = row_offset_clone.fetch_add(
+                    batch_df.height(), 
+                    Ordering::SeqCst
+                );
+                
+                // Get current batch index and increment
+                let batch_idx = batch_counter_clone.fetch_add(1, Ordering::SeqCst);
+                
+                // Process the batch
+                match process_batch_with_strategy(
+                    &batch_df,
+                    current_row,
+                    &all_columns_clone,
+                    strategy,
+                    n_threads,
+                    batch_idx,
+                    stata_offset
+                ) {
+                    Ok(_) => Ok(false),
+                    Err(e) => {
+                        display(&format!("Error assigning values to stata data: {:?}", e));
+                        Err(PolarsError::ComputeError(
+                            format!("Batch processing error: {:?}", e).into()
+                        ))
+                    },
+                }
+            }),
+            true,  // maintain_order
+            NonZeroUsize::new(batch_size),
+        )?
+        .collect()?;
 
-        // Collect the batch to a DataFrame
-        let batch_df = match df_batch.collect() {
-            Ok(df) => df,
-            Err(e) => {
-                display(&format!("Error collecting batch: {:?}", e));
-                return Ok(198);
-            }
-        };
-
-        // Process the batch with the selected parallelization strategy
-        match process_batch_with_strategy(
-            &batch_df,
-            //  The index to assign to ignores the offset in the original data
-            //      But it is offset by the stata_offset (for appends) 
-            batch_offseti - offset, 
-            &all_columns,
-            strategy,
-            n_threads,
-            batchi,
-            stata_offset
-        ) {
-            Ok(_) => {
-                // Do nothing on success
-            },
-            Err(e) => {
-                display(&format!("Error assigning values to stata data: {:?}", e));
-                return Ok(198);
-            },
-        };
-    }
+    // After completion, check how many batches were processed
+    let total_batches = batch_counter.load(Ordering::SeqCst);
+    set_macro("n_batches", &total_batches.to_string(), false);
 
     Ok(0)
 }
@@ -1257,7 +1261,7 @@ fn process_strl_column(
         &(end_row + start_index + stata_offset).to_string(),
         false,
     );
-    let sink_target = SinkTarget::Path(Arc::new(PathBuf::from(path)));
+    let sink_target = SinkTarget::Path(PlPath::new(path.as_ref()));
     let mut csv_options = CsvWriterOptions::default();
     csv_options.include_header = false;
     csv_options.serialize_options.quote_style = QuoteStyle::Never;

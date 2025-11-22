@@ -121,7 +121,7 @@ pub fn get_schema(path:&str) -> PolarsResult<Schema> {
     let mut scan_args = ScanArgsParquet::default();
     scan_args.allow_missing_columns = true;
     scan_args.cache = false;
-    let mut df = LazyFrame::scan_parquet(path, scan_args.clone())?;
+    let mut df = LazyFrame::scan_parquet(PlPath::new(path), scan_args.clone())?;
 
     let schema = df.collect_schema()?;
     

@@ -8,7 +8,7 @@ members = [
 name = "stata_parquet_io"
 version = "1.9.1"
 authors = ["Jon Rothbaum <jlrothbaum@gmail.com>"]
-edition = "2021"
+edition = "2024"
 description = "Stata plugin to read/write parquet files using polars Rust"
 license = "MIT"
 default-run = "stata_parquet_io"
@@ -20,7 +20,7 @@ name = "stata_parquet_io"
 crate-type= ["cdylib"]
 
 [dependencies]
-polars = { version = "0.49.1", features=["lazy",
+polars = { version = "0.52.0", features=["lazy",
     "parquet",
     # "streaming",
     "dtype-categorical",
@@ -29,22 +29,22 @@ polars = { version = "0.49.1", features=["lazy",
     "dtype-u8",
     "dtype-u16",
 ] }
-polars-sql = "0.49.1" 
+polars-sql = "0.52.0" 
 
 stata-sys = { path = "./crates/stata-sys" }
-rayon = "1.8"
-log = "0.4"
+rayon = "1.11.0"
+log = "0.4.28"
 env_logger = "0.11.8"
 serde = "1.0.219"
-serde_json = "1.0.141"
-glob = "0.3"
-regex = "1.0"
+serde_json = "1.0.145"
+glob = "0.3.3"
+regex = "1.12.2"
 
 [profile.release]
 strip = "symbols"  # Remove debug info but keep symbols needed for performance
 panic = "unwind"     # Default panic behavior (often better for libraries)
-lto = "fat"         # More aggressive link-time optimization for speed
-codegen-units = 1   # Fewer codegen units allow more optimization
+#   lto = "fat"         # More aggressive link-time optimization for speed
+#   codegen-units = 1   # Fewer codegen units allow more optimization
 
 [profile.dev]
 split-debuginfo = "packed"

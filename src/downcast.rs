@@ -112,7 +112,7 @@ fn safe_shrink_integers(
     
     if int_columns.is_empty() {
         // Apply shrink_dtype to all columns if no integers to handle specially
-        return Ok(df.with_columns([col("*").shrink_dtype()]));
+        return Ok(df); //    .with_columns([col("*").shrink_dtype()]));
     }
     
     // Get min/max for all integer columns at once
@@ -162,10 +162,11 @@ fn safe_shrink_integers(
     }
     
     // Apply shrink_dtype to non-integer columns only
-    if int_columns.len() < columns.len() {
-        let non_int_shrink_expr = col("*").exclude(&int_columns).shrink_dtype();
-        result_df = result_df.with_columns([non_int_shrink_expr]);
-    }
+    // if int_columns.len() < columns.len() {
+        
+    //     let non_int_shrink_expr =  all().exclude_cols(&int_columns).shrink_type();
+    //     result_df = result_df.with_columns([non_int_shrink_expr]);
+    // }
     
     Ok(result_df)
 }
