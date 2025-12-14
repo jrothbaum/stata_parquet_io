@@ -9,6 +9,7 @@ use utilities::ParallelizationStrategy;
 
 
 pub mod read;
+pub mod read_java_temp;
 pub mod write;
 pub mod mapping;
 pub mod stata_interface;
@@ -32,6 +33,8 @@ use read::{
     read_to_stata
 };
 
+use stata_jv;
+
 
 #[unsafe(no_mangle)]
 pub static mut _stata_: *mut stata_sys::ST_plugin = ptr::null_mut();
@@ -41,12 +44,15 @@ pub extern "C" fn pginit(p: *mut stata_sys::ST_plugin) -> stata_sys::ST_retcode 
     unsafe {
         _stata_ = p;
     }
+
+    // Register the stata_call function with the JNI layer
+    stata_jv::register_stata_call(stata_call);
+
     stata_sys::SD_PLUGINVER
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retcode {
-    // Wrap the entire function body in catch_unwind
     std::panic::catch_unwind(|| {
     
         if argc < 1 || argv.is_null() {
@@ -87,12 +93,49 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
         let subfunction_args = &args[1..];
         //    println!("subfunction_args = {:?}",subfunction_args);
         
-        
+
         // Call the appropriate subfunction
         match subfunction_name {
             "setup_check" => {
                 return 0 as ST_retcode;
-            }
+            },
+            "read_java" => {
+                let safe_relaxed = match subfunction_args[5] {
+                    "0" => false,
+                    "1" => true,
+                    _ => false
+                };
+
+                let asterisk_to_variable_name = if subfunction_args[6].is_empty() {
+                    None
+                } else {
+                    Some(subfunction_args[7])
+                };
+
+                let read_result = read_java_temp::read_to_stata(    
+                    subfunction_args[0],                                    //  path: &str,
+                    subfunction_args[1],                                    //  variables_as_str: &str,
+                    subfunction_args[2].parse::<usize>().unwrap(),         //  n_rows: usize,
+                    subfunction_args[3].parse::<usize>().unwrap(),          //  offset: usize,
+                    Some(subfunction_args[4]),                              //  sql_if: Option<&str>,
+                    safe_relaxed,                                           //  safe_relaxed: bool, 
+                    asterisk_to_variable_name,                              //  asterisk_to_variable_name: Option<&str>,  
+                    subfunction_args[7],                                    //  sort:&str,
+                    subfunction_args[8].parse::<f64>().unwrap(),            //  random_share:f64,
+                    subfunction_args[9].parse::<u64>().unwrap(),            //  random_seed:u64,
+                    subfunction_args[10].parse::<usize>().unwrap(),         //  batch_size:usize,
+                );
+        
+                // Use match to handle the Result
+                match read_result {
+                    Ok(_) => {
+                        //  Do nothing
+                    },
+                    Err(e) => {
+                        display(&format!("Error reading the file = {:?}",e));
+                    }
+                }
+            },
             "read" => {
                 if !data_exists(&subfunction_args[0]) {
                     stata_interface::display(&format!("File does not exist ({})",subfunction_args[0]));

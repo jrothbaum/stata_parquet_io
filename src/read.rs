@@ -22,6 +22,11 @@ use crate::stata_interface::{
     get_macro
 };
 
+use stata_jv::{
+    send_dataframe_to_java,
+    displayln
+};
+
 use crate::utilities::{
     determine_parallelization_strategy,
     get_thread_count,
@@ -36,7 +41,6 @@ use crate::utilities::{
 use crate::downcast::apply_cast;
 
 // Trait for converting Polars values to Stata values
-
 trait ToStataValue {
     fn to_stata_value(&self) -> Option<f64>;
 }
@@ -825,7 +829,6 @@ fn process_batch_with_strategy(
     n_batch:usize,
     stata_offset:usize,
 ) -> PolarsResult<()> {
-
     // If only 1 thread requested or batch is too small, use single-threaded version
     let row_count = batch.height();
     let min_multithreaded = 10000;

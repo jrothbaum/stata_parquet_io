@@ -41,7 +41,9 @@ program define test_file
 		//	di "str_length_`n_columns_stata': 	`str_length_`n_columns_stata''"
 		
 	}
-	quietly {
+	
+	//	quietly {
+	{
 		//	Just make sure they run
 		pq describe using "`path_save_root'.parquet"
 		pq describe "`path_save_root'.parquet", detailed
@@ -97,6 +99,7 @@ end
 local test_root C:\Users\jonro\OneDrive\Documents\Coding\stata_parquet_io
 test_file, path(`test_root'\test_data\pyreadstat\sample)
 
+;
 local path_haven `test_root'\test_data\haven
 local files_haven notes tagged-na-double tagged-na-int types
 foreach fi in `files_haven' {

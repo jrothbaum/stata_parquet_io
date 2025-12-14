@@ -13,7 +13,12 @@ program define pq
 	gettoken todo 0: 0
     local todo `todo'
 
-    if ("`todo'" == "use") {
+	if ("`todo'" == "use_java") {
+		//	di `"pq_use_append `0'"'
+		//	pq_use_java `0'
+		pq_use_java `0'
+    }
+    else if ("`todo'" == "use") {
 		//	di `"pq_use_append `0'"'
 		//	pq_use_append `0'
 		pq_use_append `0'
@@ -162,6 +167,116 @@ program pq_merge
 
 	frame drop `f_pq'
 
+end
+
+
+capture program drop pq_use_java
+program pq_use_java
+    version 17.0
+    
+    local input_args = `"`0'"'
+
+	// Check if "using" is present in arguments
+    local using_pos = strpos(`" `input_args' "', " using ")
+    
+    if `using_pos' > 0{
+        // 	Extract everything before "using"
+        local namelist = substr(`"`input_args'"', 1, `using_pos'-1)
+        local rest = substr(`"`input_args'"', `using_pos'+6, .)
+		local 0 = `"using `rest'"'
+	}
+    else {
+        // No "using" - parse everything as filename and options
+        local 0 = `"using `input_args'"'
+    
+        // namelist is empty since no "using" separator
+        local namelist ""
+    }
+	
+	syntax using/ [, 	in(string) 				///
+						if(string asis) 		///
+						relaxed 				///
+						asterisk_to_variable(string)	///
+						sort(string)			///
+						compress				///
+						compress_string_to_numeric	///
+						clear					///
+						random_n(integer 0)		///
+						random_share(real 0.0)	///
+						random_seed(integer 0)	///
+						batch_size(integer 10000000)	///
+						append]
+	
+	di "HI1.0"
+	pq_register_plugin
+	di "HI1.1"
+	pq_convert_path `"`using'"'
+	local using = r(fullpath)
+	
+	local b_append = "`append'" != ""
+	di "HI1.1"
+	
+	if (!`b_append' & "`clear'" != "")	clear
+	if (`=_N' > 0 & !`b_append') {
+		display as error "There is already data loaded, pass clear if you want to load a parquet file"
+		exit 2000
+	}
+
+	if (`random_share' > 1) {
+		display as error `"Cannot set random_share > 1 (`random_share')"'
+		exit 198
+	}
+	di "HI1.2"
+	if ("`in'" != "") {
+		local offset = substr("`in'", 1, strpos("`in'", "/") -1)
+		local offset = max(`offset',0)
+		local last_n = substr("`in'", strpos("`in'", "/") + 1, .)
+	}
+	else {
+		local offset = 0
+		local last_n = 0
+	}
+
+	local row_to_read = max(0,`last_n') - `offset' + (`offset' > 0)
+
+	di "HI1.3"
+	//	Process the if statement, if passed
+	if (`"`if'"' != "") {
+		local greater_than = strpos(`"`if'"', ">") > 0
+		if (`greater_than') {
+			di as error "pq will interpret > as in SQL, which is different than Stata."
+			di as error "	It will not include . as > any value."
+		}
+		//	di `"plugin call polars_parquet_plugin, if "`if'""'
+		plugin call polars_parquet_plugin, if `"`if'"'
+	}
+	else {
+		local sql_if
+	}
+	di "HI1.4"
+	//	Get the list of already existing variables
+	capture unab all_vars: *
+	local n_vars_already : word count `all_vars'
+	
+	di "HI1.5"
+	
+	//	Tell polars to concatenate file list with "vertical_relaxed"
+	//		so that it can combine different schema types
+	//		to their supertype 
+	//		i.e. if a is an int8 in file 1 and an int16 in file 2,
+	//			it won't throw an error, but make it an int16 in the final file
+	local vertical_relaxed = "`relaxed'" != ""
+	di "HI1.6"
+	//	asterisk_to_variable - for files /file/*.parquet, convert
+	//		* to a variable, so /file/2019.parquet, file/2020.parquet
+	//		will have the item in asterisk_to_variable as 2019 and 2020
+	//		for the records on the file
+	
+
+	pq_jar_path
+	local jar_path = r(jar_path)
+	di `"javacall com.parquet.io.ParquetIO execute, classpath("`jar_path'") args(read_java using="`using'" namelist="`namelist'" row_to_read=`row_to_read' offset=`offset' sql_if=`"`sql_if'"' vertical_relaxed=`vertical_relaxed' asterisk_to_variable="`asterisk_to_variable'" sort="`sort'" random_share=`random_share' random_seed=`random_seed' batch_size=`batch_size') jar(stata-parquet-io.jar)"' 
+	javacall com.parquet.io.ParquetIO execute, classpath("`jar_path'") args(read_java "`using'" "`namelist'" `row_to_read' `offset' `"`sql_if'"' `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `random_share' `random_seed' `batch_size') jar(stata-parquet-io.jar)
 end
 
 
@@ -644,9 +759,13 @@ program pq_describe, rclass
 	local using = r(fullpath)
 
 	//	Trailing zeros are compress indicators
-	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "" "`asterisk_to_variable'" 0 0
-
+	//	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "" "`asterisk_to_variable'" 0 0
+	di "say hello call:"
 	
+	pq_jar_path
+	local jar_path = r(jar_path)
+	javacall com.parquet.io.ParquetIO execute, classpath("`jar_path'") args(describe "`using'" `b_quiet' `b_detailed' "" "`asterisk_to_variable'" 0 0) jar(stata-parquet-io.jar)
+
 	local macros_to_return n_rows n_columns //	mapping
 	forvalues i = 1/`n_columns' {
 		local macros_to_return `macros_to_return' type_`i' name_`i' rename_`i' 
@@ -661,7 +780,28 @@ program pq_describe, rclass
 end
 
 
-
+capture program drop pq_jar_path
+program pq_jar_path, rclass
+    syntax
+    
+    capture findfile pq.ado
+    if _rc {
+        display as error "Could not locate pq.ado"
+        exit 601
+    }
+    local ado_path "`r(fn)'"
+    
+    // Remove the "pq.ado" part (6 characters)
+    local ado_dir = substr("`ado_path'", 1, length("`ado_path'") - 6)
+    
+    // Construct the jar path
+    local jar_path "`ado_dir'pq.jar"
+    
+    // Convert all backslashes to forward slashes for consistency
+    local jar_path = subinstr("`jar_path'", "\", "/", .)
+    
+    return local jar_path "`jar_path'"
+end
 
 capture program drop pq_match_variables
 program pq_match_variables, rclass
