@@ -15,6 +15,7 @@ use regex::Regex;
 
 use stata_jv::{
     send_dataframe_to_java,
+    shutdown_executor,
     displayln,
     set_local,
     get_local,
@@ -610,8 +611,20 @@ pub fn read_to_stata(
     } else {
         get_thread_count()
     };
-    //  Add observations
-    //  Add whatever variables are needed
+    
+    // Create a shutdown guard at the start
+    struct ExecutorGuard;
+    impl Drop for ExecutorGuard {
+        fn drop(&mut self) {
+            if let Err(e) = shutdown_executor() {
+                // Log but don't panic in drop
+                let _ = displayln(&format!("Warning: Failed to shutdown executor: {:?}", e));
+            }
+        }
+    }
+
+    let _guard = ExecutorGuard; // Will auto-cleanup when it goes out of scope
+
     let existing_rows = get_obs_total().unwrap();
     // displayln(&format!("height={}",height));
     // displayln(&format!("existing height={}",existing_rows));
@@ -691,14 +704,14 @@ pub fn cast_catenum_to_string(lf: &LazyFrame) -> Result<LazyFrame, PolarsError> 
 
 // Main entry point that delegates to appropriate strategy
 fn process_batch(
-    batch: DataFrame,
+    mut batch: DataFrame,
     start_index: usize,
     selected_columns: &Vec<String>,
     n_threads: usize,
     n_batch:usize,
 ) -> PolarsResult<()> {
     let vars_to_stata_types = vars_from_schema(&batch).unwrap();
-
+    let batch = convert_datetime_columns(batch)?;
     
     //  displayln(&format!("Sending data to java - BEGIN"));
     let _ = match send_dataframe_to_java(
@@ -720,53 +733,71 @@ fn process_batch(
 }
 
 
+fn convert_datetime_columns(df: DataFrame) -> PolarsResult<DataFrame> {
+    let schema = df.schema();
+    let mut exprs = Vec::new();
+    
+    for (name, dtype) in schema.iter() {
+        match dtype {
+            DataType::Date => {
+                exprs.push(
+                    col(name.as_str())
+                        .cast(DataType::Int32)
+                        + lit(DAY_SHIFT_SAS_STATA)  // Use + operator
+                );
+            },
+            DataType::Datetime(time_unit, _) => {
+                let mills_factor = match time_unit {
+                    TimeUnit::Nanoseconds => (SEC_NANOSECOND / SEC_MILLISECOND) as f64,
+                    TimeUnit::Microseconds => (SEC_MICROSECOND / SEC_MILLISECOND) as f64,
+                    TimeUnit::Milliseconds => 1.0,
+                };
+                
+                let sec_shift_scaled = (SEC_SHIFT_SAS_STATA as f64) * (SEC_MILLISECOND as f64);
+                
+                exprs.push(
+                    (col(name.as_str()).cast(DataType::Float64) / lit(mills_factor))  // Use / operator
+                        + lit(sec_shift_scaled)  // Use + operator
+                );
+            },
+            DataType::Time => {
+                exprs.push(
+                    col(name.as_str())
+                        .cast(DataType::Int64)
+                        / lit(SEC_MICROSECOND / SEC_MILLISECOND)  // Use / operator
+                );
+            },
+            _ => {
+                // Keep other columns as-is
+                exprs.push(col(name.as_str()));
+            }
+        }
+    }
+    
+    df.lazy().select(exprs).collect()
+}
+
 
 fn vars_from_schema(
     df: &DataFrame,
 ) -> Result<HashMap<String, i32>, Box<dyn std::error::Error>> {
-
     let schema = &df.schema();
     let mut var_types: HashMap<String, i32> = HashMap::with_capacity(schema.len());
 
     let type_options = StataDataType::load()?;
-    let n_vars_already = get_var_count().unwrap(); 
+    let n_vars_already = get_var_count().unwrap();
 
     for (col_name, dtype) in schema.iter() {
-        //  displayln(&format!("col_name={}", col_name));
-        //  displayln(&format!("dtype={}", dtype));
-        
         let var_index = get_var_index(col_name).unwrap();
-        //  displayln(&format!("var_index={}", var_index));
 
         if var_index > 0 && var_index <= n_vars_already {
-            // Var exists already, no need to create it
-            let mut stata_type = get_type(var_index).unwrap();
+            // Variable exists
+            let stata_type = get_type(var_index).unwrap();
             var_types.insert(col_name.to_string(), stata_type);
-
-            //  Some types need more information
-            if (
-                stata_type == type_options.type_byte
-                || stata_type == type_options.type_int
-                || stata_type == type_options.type_long
-            ) {
-                stata_type = check_type_int(
-                    &df,
-                    &col_name,
-                    var_index,
-                    stata_type,
-                    &type_options,
-                )?;
-            } else if stata_type == type_options.type_str {
-                stata_type = check_type_str(
-                    &df,
-                    &col_name,
-                    var_index,
-                    stata_type
-                )?;
-            }
-
         } else {
-            let mut stata_type = match dtype {
+            // displayln(&format!("seen as: {}", dtype));
+            // Create new variable
+            let stata_type = match dtype {
                 DataType::Int8 => type_options.type_byte,
                 DataType::Int16 => type_options.type_int,
                 DataType::Int32 => type_options.type_long,
@@ -778,36 +809,65 @@ fn vars_from_schema(
                 DataType::Float32 => type_options.type_float,
                 DataType::Float64 => type_options.type_double,
                 DataType::String => type_options.type_str,
-                DataType::Boolean => type_options.type_strl,
-                DataType::Date => type_options.type_long,
-                DataType::Datetime(_, _) => type_options.type_double,
+                DataType::Boolean => type_options.type_byte,
+                
+                // Date/Time types (converted to numeric in convert_datetime_columns)
+                DataType::Date => {
+                    // displayln("seen as date");
+                    type_options.type_long
+                },
+                DataType::Datetime(_, _) => {
+                    
+                    // displayln("seen as datetime");
+                    type_options.type_double
+                },
+                DataType::Time => {
+                    
+                    // displayln("seen as time");
+                    type_options.type_double
+                },
+                
                 DataType::Categorical(_, _) | DataType::Enum(_, _) => type_options.type_long,
                 _ => {
                     return Err(format!("Unsupported data type for column {}: {:?}", col_name, dtype).into());
                 }
             };
 
-            
+            // Create the variable
             let _ = match stata_type {
-                t if t == type_options.type_byte =>      add_var_byte(col_name),
-                t if t == type_options.type_int =>       add_var_int(col_name),
-                t if t == type_options.type_long =>      add_var_long(col_name),
-                t if t == type_options.type_float =>     add_var_float(col_name),
-                t if t == type_options.type_double =>    add_var_double(col_name),
+                t if t == type_options.type_byte => add_var_byte(col_name),
+                t if t == type_options.type_int => add_var_int(col_name),
+                t if t == type_options.type_long => add_var_long(col_name),
+                t if t == type_options.type_float => add_var_float(col_name),
+                t if t == type_options.type_double => add_var_double(col_name),
                 t if t == type_options.type_str => {
-                    let str_length = str_length_max(
-                        &df,
-                        &col_name
-                    ).unwrap();
-
-                    add_var_str(
-                        col_name,
-                        str_length
-                    )
+                    let str_length = str_length_max(&df, &col_name).unwrap();
+                    add_var_str(col_name, str_length)
                 },
-                t if t == type_options.type_strl =>      add_var_strl(col_name),
+                t if t == type_options.type_strl => add_var_strl(col_name),
                 _ => return Err("Unknown Stata type".into()),
             };
+
+
+            let var_index = get_var_index(col_name).unwrap();
+            // Set appropriate format for date/time variables
+            match dtype {
+                DataType::Date => {
+                    // displayln("Setting to date");
+                    let _ = set_var_format(var_index, "%td");
+                },
+                DataType::Datetime(_, _) => {
+                    // displayln("Setting to datetime");
+                    let _ = set_var_format(var_index, "%tc");
+                },
+                DataType::Time => {
+                    // displayln("Setting to time");
+                    let _ = set_var_format(var_index, "%tcHH:MM:SS");
+                },
+                _ => {
+                    // No special format needed
+                }
+            }
 
             var_types.insert(col_name.to_string(), stata_type);
         }
@@ -815,6 +875,7 @@ fn vars_from_schema(
     
     Ok(var_types)
 }
+
 
 fn str_length_max(
     df: &DataFrame,

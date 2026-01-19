@@ -9,8 +9,9 @@ use utilities::ParallelizationStrategy;
 
 
 pub mod read;
-pub mod read_java_temp;
+pub mod read_java;
 pub mod write;
+pub mod write_java;
 pub mod mapping;
 pub mod stata_interface;
 pub mod describe;
@@ -112,10 +113,10 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     Some(subfunction_args[7])
                 };
 
-                let read_result = read_java_temp::read_to_stata(    
+                let read_result = read_java::read_to_stata(    
                     subfunction_args[0],                                    //  path: &str,
                     subfunction_args[1],                                    //  variables_as_str: &str,
-                    subfunction_args[2].parse::<usize>().unwrap(),         //  n_rows: usize,
+                    subfunction_args[2].parse::<usize>().unwrap(),          //  n_rows: usize,
                     subfunction_args[3].parse::<usize>().unwrap(),          //  offset: usize,
                     Some(subfunction_args[4]),                              //  sql_if: Option<&str>,
                     safe_relaxed,                                           //  safe_relaxed: bool, 
@@ -255,6 +256,47 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 ) {
                     Ok(_) => 0 as i32,
                     Err(_e) => 198 as i32
+                };
+                return output as ST_retcode;
+            },
+            "save_java" => {
+                let path = subfunction_args[0];
+                let varlist = subfunction_args[1];
+                let n_rows = subfunction_args[2];
+                let offset = subfunction_args[3];
+                let sql_if = subfunction_args[4];
+                let partition_by = subfunction_args[5];
+                let compression = subfunction_args[6];
+                let compression_level_passed = subfunction_args[7].parse::<i32>().unwrap();
+                let overwrite_partition = subfunction_args[8].parse::<i32>().unwrap() == 1;
+
+                let compression_level = if compression_level_passed == -1 {
+                    None
+                } else {
+                    Some(compression_level_passed as usize)
+                };
+
+                let compress = subfunction_args[9].parse::<u8>().unwrap() != 0;
+                let compress_string = subfunction_args[10].parse::<u8>().unwrap() != 0;
+
+                let output = match write_java::write_from_stata(
+                    path,                                           // path: &str
+                    varlist,                                        // variables_as_str: &str
+                    n_rows.parse::<usize>().unwrap(),               // n_rows: usize
+                    offset.parse::<usize>().unwrap(),               // offset: usize
+                    Some(sql_if),                                   // sql_if: Option<&str>
+                    partition_by,                                   // partition_by_str: &str
+                    compression,                                    // compression: &str
+                    compression_level,                              // compression_level: Option<usize>
+                    overwrite_partition,                            // overwrite_partition: bool
+                    compress,                                       // compress: bool
+                    compress_string,                                // compress_string: bool
+                ) {
+                    Ok(rc) => rc,
+                    Err(e) => {
+                        display(&format!("Error saving the file: {:?}", e));
+                        198
+                    }
                 };
                 return output as ST_retcode;
             },

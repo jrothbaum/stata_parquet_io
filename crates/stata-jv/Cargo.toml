@@ -13,6 +13,7 @@ polars = { version = "0.52.0", features=["lazy",
     "dtype-i16",
     "dtype-u8",
     "dtype-u16",
+    "diagonal_concat",
 ] }
 polars-sql = "0.52.0" 
 polars-arrow = "0.52.0"

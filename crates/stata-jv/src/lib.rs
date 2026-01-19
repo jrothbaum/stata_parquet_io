@@ -1,18 +1,33 @@
-use jni::{JavaVM, JNIEnv, objects::{JClass, JObjectArray, JValue, JObject, GlobalRef}};
-use jni::sys::jlong;
+// JNI imports
+use jni::{
+    JavaVM, JNIEnv, 
+    // CORRECTED: Removed JMethodIDPtr, signature types (they weren't used or were incorrect)
+    objects::{JClass, JObjectArray, JValue, JObject, GlobalRef, JMethodID},
+};
+// CORRECTED: Cleaned up unnecessary imports from jni::signature
+use jni::sys::{jlong, jint, jsize}; 
 use std::sync::Mutex;
 use std::os::raw::{c_int, c_char};
 use std::cell::Cell;
 use std::collections::HashMap;
 
-
+// Polars/Arrow imports
 use polars::datatypes::CompatLevel;
 use polars::frame::DataFrame;
-use polars_arrow::ffi::{export_array_to_c, export_field_to_c, ArrowArray, ArrowSchema};
+use polars_arrow::ffi::{
+    export_array_to_c, 
+    export_field_to_c, 
+    ArrowArray, 
+    ArrowSchema,
+    import_array_from_c,
+    import_field_from_c
+};
 use polars_arrow::array::StructArray;
 use polars_arrow::datatypes::Field;
+use polars::prelude::*;
+use std::sync::Arc;
 
-
+// --- GLOBAL STATE ---
 // Global storage for the JVM
 static GLOBAL_JVM: Mutex<Option<JavaVM>> = Mutex::new(None);
 
@@ -23,6 +38,9 @@ static PARQUET_CLASS_REF: Mutex<Option<GlobalRef>> = Mutex::new(None);
 thread_local! {
     static CURRENT_ENV: Cell<Option<*mut jni::sys::JNIEnv>> = Cell::new(None);
 }
+
+// Global variable to hold the JClass ID obtained in JNI_OnLoad
+static PARQUET_CLASS_ID: Mutex<Option<JClass<'static>>> = Mutex::new(None);
 
 // Helper to set the current environment
 pub fn set_current_env(env: *mut jni::sys::JNIEnv) {
@@ -37,7 +55,7 @@ where
     let env_ptr = CURRENT_ENV.with(|e| e.get())
         .ok_or("No JNI environment available")?;
     
-    let mut env = unsafe { JNIEnv::from_raw(env_ptr)? };
+    let mut env = unsafe { JNIEnv::from_raw(env_ptr)? }; 
     f(&mut env)
 }
 
@@ -65,82 +83,152 @@ where
     guard.as_ref().map(|jvm| f(jvm))
 }
 
-/// JNI entry point called from Java
+
+/// JNI_OnLoad is called when the native library is loaded by the JVM.
+/// This implementation manually re-registers the native method.
 #[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "system" fn JNI_OnLoad(vm: *mut jni::sys::JavaVM, _reserved: *mut std::ffi::c_void) -> jint {
+    displayln("=== JNI_OnLoad called ===");
+    
+    let jvm = match unsafe { JavaVM::from_raw(vm) } {
+        Ok(jvm) => jvm,
+        Err(e) => {
+            displayln(&format!("JNI_OnLoad: Failed to create JavaVM: {:?}", e));
+            return jni::sys::JNI_ERR;
+        }
+    };
+    
+    let mut env = match jvm.attach_current_thread() {
+        Ok(env) => {
+            displayln("JNI_OnLoad: Attached to current thread");
+            env
+        }
+        Err(e) => {
+            displayln(&format!("JNI_OnLoad: Failed to attach: {:?}", e));
+            return jni::sys::JNI_ERR;
+        }
+    };
+
+    let parquet_class = match env.find_class("com/parquet/io/ParquetIO") {
+        Ok(class) => {
+            displayln("JNI_OnLoad: Found ParquetIO class");
+            class
+        }
+        Err(e) => {
+            displayln(&format!("JNI_OnLoad: Failed to find class: {:?}", e));
+            return jni::sys::JNI_ERR;
+        }
+    };
+
+    displayln("JNI_OnLoad: Native methods registered successfully");
+
+    let class_global_ref = match env.new_global_ref(parquet_class) {
+        Ok(g) => g,
+        Err(e) => {
+            displayln(&format!("JNI_OnLoad: Failed to create global ref: {:?}", e));
+            return jni::sys::JNI_ERR;
+        }
+    };
+    
+    *PARQUET_CLASS_REF.lock().unwrap() = Some(class_global_ref);
+
+    let jvm_to_store = match env.get_java_vm() {
+        Ok(jvm) => jvm,
+        Err(e) => {
+            displayln(&format!("JNI_OnLoad: Failed to get JavaVM: {:?}", e));
+            return jni::sys::JNI_ERR;
+        }
+    };
+    
+    *GLOBAL_JVM.lock().unwrap() = Some(jvm_to_store);
+
+    displayln("=== JNI_OnLoad completed successfully ===");
+    jni::sys::JNI_VERSION_1_8
+}
+
+#[unsafe(no_mangle)]#[allow(non_snake_case)]
+pub extern "system" fn JNI_OnUnload(vm: *mut jni::sys::JavaVM, _reserved: *mut std::ffi::c_void) {
+    // 1. Detach the thread if necessary
+    let jvm = unsafe { JavaVM::from_raw(vm) }.unwrap();
+    
+    // 2. Clear global references
+    *PARQUET_CLASS_REF.lock().unwrap() = None;
+    *GLOBAL_JVM.lock().unwrap() = None;
+}
+
+
+// --- JNI ENTRY POINT ---
+
+/// JNI entry point called from Java
+/// This function is manually registered in JNI_OnLoad.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
 pub extern "system" fn Java_com_parquet_io_ParquetIO_stataCall( 
     mut env: JNIEnv,
-    class: JClass,
+    _class: JClass, // Class parameter is ignored as we use the globally stored class ref
     args: JObjectArray,
 ) -> jni::sys::jint {
     // Store the raw JNIEnv pointer for reuse
     set_current_env(env.get_raw());
 
-    // Store JVM and class reference on first call
-    let mut jvm_guard = GLOBAL_JVM.lock().unwrap();
-    if jvm_guard.is_none() {
-        match env.get_java_vm() {
-            Ok(jvm) => {
-                *jvm_guard = Some(jvm);
-            }
-            Err(e) => {
-                eprintln!("Failed to get JavaVM: {:?}", e);
-                return 198;
-            }
-        }
-        drop(jvm_guard); // Release the lock
-        
-        // Store global reference to the class (borrow it, don't move it)
-        match env.new_global_ref(&class) {  // <-- Add & here
-            Ok(global_ref) => {
-                *PARQUET_CLASS_REF.lock().unwrap() = Some(global_ref);
-            }
-            Err(e) => {
-                eprintln!("Failed to create global ref: {:?}", e);
-                return 198;
-            }
-        }
+    // Always use the global class reference stored in JNI_OnLoad
+    let class = {
+        let class_guard = PARQUET_CLASS_REF.lock().unwrap();
+        let class_ref = match class_guard.as_ref() {
+             Some(c) => c,
+             None => {
+                 displayln("stataCall: Class reference not initialized. JNI_OnLoad failed.");
+                 return 198;
+             }
+        };
+        unsafe { JClass::from_raw(class_ref.as_obj().as_raw()) }
+    };
     
-        // Store JAR path on first call
-        if JAR_PATH.lock().unwrap().is_none() {
-            // Get the ProtectionDomain
-            let protection_domain = env.call_method(
-                &class,  // <-- Add & here too
-                "getProtectionDomain",
-                "()Ljava/security/ProtectionDomain;",
+    // Update JAR path only if it's not set
+    let jar_path_is_none = JAR_PATH.lock().unwrap().is_none();
+    
+    if jar_path_is_none {
+        // Get the ProtectionDomain
+        // ... (JAR path retrieval logic remains here) ...
+        let protection_domain = env.call_method(
+            &class,
+            "getProtectionDomain",
+            "()Ljava/security/ProtectionDomain;",
+            &[]
+        ).ok().and_then(|r| r.l().ok());
+        
+        if let Some(pd) = protection_domain {
+            // Get CodeSource
+            let code_source = env.call_method(
+                pd,
+                "getCodeSource",
+                "()Ljava/security/CodeSource;",
                 &[]
             ).ok().and_then(|r| r.l().ok());
             
-            if let Some(pd) = protection_domain {
-                // Get CodeSource
-                let code_source = env.call_method(
-                    pd,
-                    "getCodeSource",
-                    "()Ljava/security/CodeSource;",
+            if let Some(cs) = code_source {
+                // Get Location (URL)
+                let location = env.call_method(
+                    cs,
+                    "getLocation",
+                    "()Ljava/net/URL;",
                     &[]
                 ).ok().and_then(|r| r.l().ok());
                 
-                if let Some(cs) = code_source {
-                    // Get Location (URL)
-                    let location = env.call_method(
-                        cs,
-                        "getLocation",
-                        "()Ljava/net/URL;",
+                if let Some(url) = location {
+                    // Get path string
+                    let path: Option<JObject> = env.call_method(
+                        url,
+                        "getPath",
+                        "()Ljava/lang/String;",
                         &[]
-                    ).ok().and_then(|r| r.l().ok());
+                    ).ok() // Result<JValue, Error> -> Option<JValue>
+                    .and_then(|r| r.l().ok()); // Option<JValue> -> Option<Result<JObject, Error>> -> Option<JObject>
                     
-                    if let Some(url) = location {
-                        // Get path string
-                        let path = env.call_method(
-                            url,
-                            "getPath",
-                            "()Ljava/lang/String;",
-                            &[]
-                        ).ok().and_then(|r| r.l().ok());
-                        
-                        if let Some(path_str) = path {
-                            if let Ok(java_string) = env.get_string(&path_str.into()) {
-                                *JAR_PATH.lock().unwrap() = Some(java_string.to_str().unwrap_or("").to_string());
-                            }
+                    if let Some(path_str) = path {
+                        if let Ok(java_string) = env.get_string(&path_str.into()) {
+                            *JAR_PATH.lock().unwrap() = Some(java_string.to_str().unwrap_or("").to_string());
                         }
                     }
                 }
@@ -185,7 +273,7 @@ pub extern "system" fn Java_com_parquet_io_ParquetIO_stataCall(
     if let Some(callback) = *STATA_CALL_CALLBACK.lock().unwrap() {
         callback(argc, c_ptrs.as_ptr())
     } else {
-        eprintln!("stata_call callback not registered!");
+        displayln("stata_call callback not registered!");
         198
     }
 }
@@ -196,10 +284,7 @@ pub fn send_dataframe_to_java(
     start_index: usize,
     vars_to_stata_types: HashMap<String, i32>,
     n_threads: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
-    eprintln!("=== STEP 1: Using current JNI environment");
-    
-
+) -> Result<(), Box<dyn std::error::Error>> {    
     // Load type constants
     let type_options = StataDataType::load()?;
 
@@ -220,20 +305,13 @@ pub fn send_dataframe_to_java(
     // Don't attach - we're already in a JNI call!
     // Use the thread-local environment that was set during the original Java->Rust call
     with_current_env(|env| {
-        eprintln!("=== STEP 2: Got current environment");
-        
         // Get class reference in a limited scope
         let class = {
-            eprintln!("=== STEP 3: Acquiring class lock");
             let class_guard = PARQUET_CLASS_REF.lock().unwrap();
-            eprintln!("=== STEP 4: Class lock acquired");
             
             let class_ref = class_guard.as_ref().ok_or("Class reference not stored")?;
             unsafe { JClass::from_raw(class_ref.as_obj().as_raw()) }
         };
-        eprintln!("=== STEP 5: Class lock released");
-     
-        eprintln!("=== STEP 6: Processing DataFrame");
         
         // Get the columns
         let columns = df.get_columns();
@@ -261,18 +339,11 @@ pub fn send_dataframe_to_java(
         // Create a field for the schema
         let field = Field::new("".into(), struct_dtype, false);
         
-        eprintln!("=== STEP 7: Exporting to C Data Interface");
-        
-        // Export to C Data Interface (owned by this function)
-        let schema: ArrowSchema = export_field_to_c(&field);
-        let array: ArrowArray = export_array_to_c(Box::new(struct_array));
-        
-        // Get pointers WITHOUT transferring ownership
-        let schema_ptr = &schema as *const ArrowSchema;
-        let array_ptr = &array as *const ArrowArray;
-        
-        eprintln!("=== STEP 8: Schema ptr: {:p}, Array ptr: {:p}", schema_ptr, array_ptr);
-        eprintln!("=== STEP 9: About to call Java assignToStata");
+        let schema = Box::new(export_field_to_c(&field));
+        let array  = Box::new(export_array_to_c(Box::new(struct_array)));
+
+        let schema_ptr = Box::into_raw(schema) as jlong;
+        let array_ptr  = Box::into_raw(array)  as jlong;
         
         // Prepare strL columns array
         let jstrl_columns = env.new_object_array(
@@ -315,23 +386,20 @@ pub fn send_dataframe_to_java(
                 JValue::Object(&jindices),
             ]
         ) {
-            eprintln!("=== ERROR: Java call failed: {:?}", e);
+            //  displayln("=== ERROR: Java call failed: {:?}", e);
             let _ = env.exception_describe();
             let _ = env.exception_clear();
             return Err("Java exception occurred - see stderr for details".into());
         }
-        
-        eprintln!("=== STEP 10: Java call completed");
         
         // Check for any pending exceptions
         if let Ok(true) = env.exception_check() {
-            eprintln!("=== ERROR: Pending Java exception detected");
+            //  displayln("=== ERROR: Pending Java exception detected");
             let _ = env.exception_describe();
             let _ = env.exception_clear();
             return Err("Java exception occurred - see stderr for details".into());
         }
         
-        eprintln!("=== STEP 11: All done");
         Ok(())
     })
 }
@@ -364,6 +432,389 @@ pub extern "system" fn Java_com_parquet_io_ParquetIO_releaseArrowSchema(
         }
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/// Helper function to receive a single batch from Java
+fn receive_dataframe_from_java_internal(
+    variables: &[String],
+    start_row: i64,
+    batch_size: i32,
+    num_threads: i32,
+    strl_columns: &[String],
+) -> Result<DataFrame, Box<dyn std::error::Error>> {
+    with_current_env(|env| {
+        let class = {
+            let class_guard = PARQUET_CLASS_REF.lock().unwrap();
+            let class_ref = class_guard.as_ref().ok_or("Class reference not stored")?;
+            unsafe { JClass::from_raw(class_ref.as_obj().as_raw()) }
+        };
+        
+        // Prepare variables array
+        let jvariables = env.new_object_array(
+            variables.len() as i32,
+            "java/lang/String",
+            JObject::null()
+        )?;
+        for (i, var) in variables.iter().enumerate() {
+            let jstr = env.new_string(var)?;
+            env.set_object_array_element(&jvariables, i as i32, jstr)?;
+        }
+        
+        // Prepare strL columns array
+        let jstrl_columns = env.new_object_array(
+            strl_columns.len() as i32,
+            "java/lang/String",
+            JObject::null()
+        )?;
+        for (i, col) in strl_columns.iter().enumerate() {
+            let jstr = env.new_string(col)?;
+            env.set_object_array_element(&jstrl_columns, i as i32, jstr)?;
+        }
+        
+        // Call Java exportFromStata
+        let result = env.call_static_method(
+            &class,
+            "exportFromStata",
+            "([Ljava/lang/String;JII[Ljava/lang/String;)[J",
+            &[
+                JValue::Object(&jvariables),
+                JValue::Long(start_row),
+                JValue::Int(batch_size),
+                JValue::Int(num_threads),
+                JValue::Object(&jstrl_columns),
+            ]
+        )?;
+
+        if env.exception_check()? {
+            env.exception_describe()?;
+            env.exception_clear()?;
+            return Err("Java exception occurred during export".into());
+        }
+
+        // Extract pointers
+        let pointers_obj = result.l()?;
+        let pointers_jarray: jni::objects::JPrimitiveArray<jlong> = pointers_obj.into();
+        let pointers_elements = unsafe { 
+            env.get_array_elements(&pointers_jarray, jni::objects::ReleaseMode::NoCopyBack)? 
+        };
+
+        let schema_ptr = pointers_elements[0] as *mut ArrowSchema;
+        let array_ptr = pointers_elements[1] as *mut ArrowArray;
+
+        // Import from C Data Interface
+        let field = unsafe { import_field_from_c(&*schema_ptr)? };
+        let array_data = unsafe { 
+            import_array_from_c(std::ptr::read(array_ptr), field.dtype.clone())? 
+        };
+
+        // Convert to DataFrame
+        let struct_array = array_data.as_any().downcast_ref::<StructArray>()
+            .ok_or("Expected StructArray from Java")?;
+
+        let fields = if let polars_arrow::datatypes::ArrowDataType::Struct(fields) = &field.dtype {
+            fields
+        } else {
+            return Err("Expected Struct dtype".into());
+        };
+
+        let mut columns = Vec::new();
+        for (array, field) in struct_array.values().iter().zip(fields.iter()) {
+            let chunked = vec![array.clone()];
+            
+            let series = unsafe {
+                Series::from_chunks_and_dtype_unchecked(
+                    field.name.clone(),
+                    chunked,
+                    &DataType::from_arrow(&field.dtype, None),
+                )
+            };
+            
+            columns.push(series.into_column());
+        }
+
+        let df = DataFrame::new(columns)?;
+
+        // Clean up Arrow pointers
+        env.call_static_method(
+            &class,
+            "releaseArrowPointers",
+            "(JJ)V",
+            &[
+                JValue::Long(schema_ptr as i64),
+                JValue::Long(array_ptr as i64),
+            ]
+        )?;
+
+        Ok(df)
+    })
+}
+
+
+pub struct StataAnonymousScan {
+    variables: Vec<String>,
+    strl_columns: Vec<String>,
+    num_threads: i32,
+    batch_size: i32,
+    total_rows: i64,
+    current_row: Mutex<i64>,
+}
+
+unsafe impl Send for StataAnonymousScan {}
+unsafe impl Sync for StataAnonymousScan {}
+
+impl AnonymousScan for StataAnonymousScan {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn scan(&self, scan_opts: AnonymousScanArgs) -> PolarsResult<DataFrame> {
+        let n_rows = scan_opts.n_rows.unwrap_or(self.total_rows as usize);
+        
+        let mut all_batches = Vec::new();
+        let mut current_row = 0i64;
+        
+        while (current_row as usize) < n_rows {
+            let current_batch_size = std::cmp::min(
+                self.batch_size as i64, 
+                n_rows as i64 - current_row
+            ) as i32;
+            
+            let df = receive_dataframe_from_java_internal(
+                &self.variables,
+                current_row,
+                current_batch_size,
+                self.num_threads,
+                &self.strl_columns,
+            ).map_err(|e| {
+                PolarsError::ComputeError(format!("Failed to read from Stata: {}", e).into())
+            })?;
+            
+            all_batches.push(df);
+            current_row += current_batch_size as i64;
+        }
+        
+        if all_batches.is_empty() {
+            return Err(PolarsError::ComputeError("No data read".into()));
+        }
+        
+        if all_batches.len() == 1 {
+            Ok(all_batches.into_iter().next().unwrap())
+        } else {
+            polars::functions::concat_df_diagonal(&all_batches)
+        }
+    }
+    
+    fn schema(&self, _infer_schema_length: Option<usize>) -> PolarsResult<SchemaRef> {
+        let df = receive_dataframe_from_java_internal(
+            &self.variables,
+            0,
+            1,
+            self.num_threads,
+            &self.strl_columns,
+        ).map_err(|e| {
+            PolarsError::ComputeError(format!("Failed to infer schema: {}", e).into())
+        })?;
+        
+        Ok(df.schema().clone())
+    }
+    
+    fn next_batch(&self, _scan_opts: AnonymousScanArgs) -> PolarsResult<Option<DataFrame>> {
+        let mut current_row = self.current_row.lock().unwrap();
+        
+        if *current_row >= self.total_rows {
+            return Ok(None);
+        }
+        
+        let current_batch_size = std::cmp::min(
+            self.batch_size as i64,
+            self.total_rows - *current_row
+        ) as i32;
+        
+        let df = receive_dataframe_from_java_internal(
+            &self.variables,
+            *current_row,
+            current_batch_size,
+            self.num_threads,
+            &self.strl_columns,
+        ).map_err(|e| {
+            PolarsError::ComputeError(format!("Failed to read from Stata: {}", e).into())
+        })?;
+        
+        *current_row += current_batch_size as i64;
+        
+        Ok(Some(df))
+    }
+
+    fn allows_predicate_pushdown(&self) -> bool {
+        false
+    }
+
+    fn allows_projection_pushdown(&self) -> bool {
+        false
+    }
+    
+    fn allows_slice_pushdown(&self) -> bool {
+        true
+    }
+}
+
+impl StataAnonymousScan {
+    pub fn new(
+        variables: Vec<String>,
+        strl_columns: Vec<String>,
+        num_threads: i32,
+        batch_size: i32,
+    ) -> PolarsResult<Self> {
+        let total_rows = get_obs_total()
+            .map_err(|e| PolarsError::ComputeError(format!("Failed to get row count: {}", e).into()))?
+            as i64;
+
+        Ok(StataAnonymousScan { 
+            variables,
+            strl_columns,
+            num_threads,
+            batch_size,
+            total_rows,
+            current_row: Mutex::new(0),
+        })
+    }
+}
+
+
+
+
+
+
+
+/// Public API
+pub fn scan_stata(
+    variables: Vec<String>,
+    strl_columns: Vec<String>,
+    num_threads: i32,
+    batch_size: i32,
+) -> PolarsResult<LazyFrame> {
+    let source = StataAnonymousScan::new(variables, strl_columns, num_threads, batch_size)?;
+    
+    // FIXED: anonymous_scan needs ScanArgsAnonymous
+    LazyFrame::anonymous_scan(
+        Arc::new(source),
+        ScanArgsAnonymous {
+            ..Default::default()
+        }
+    )
+}
+
+// /// Export to Parquet
+// pub fn export_stata_to_parquet(
+//     path: &str,
+//     variables: Vec<String>,
+//     strl_columns: Vec<String>,
+//     num_threads: usize,
+//     batch_size: usize,
+//     compression:&str,
+//     compression_level:Option<usize>,
+// ) -> Result<(), Box<dyn std::error::Error>> {
+//     displayln("Starting Stata export...")?;
+    
+//     let lf = scan_stata(
+//         variables, 
+//         strl_columns,
+//         num_threads as i32, 
+//         batch_size as i32
+//     )?;
+    
+//     let pqo = parquet_options(compression, compression_level);
+//     let sink_target = SinkTarget::Path(PlPath::new(&path));
+    
+//     lf.sink_parquet(
+//         sink_target,
+//         pqo.clone(),
+//         None, // CloudOptions
+//         SinkOptions::default(),
+//     )?;
+    
+//     displayln("Export complete!")?;
+    
+//     Ok(())
+// }
+
+// fn parquet_options(
+//     compression:&str,
+//     compression_level:Option<usize>,
+// ) -> ParquetWriteOptions {
+//     let mut pqo = ParquetWriteOptions::default();
+//     pqo.compression = match compression {
+//         "lz4" => ParquetCompression::Lz4Raw,
+//         "uncompressed" => ParquetCompression::Uncompressed,
+//         "snappy" => ParquetCompression::Snappy,
+//         "gzip" => {
+//             let gzip_level = match compression_level {
+//                 None => None,
+//                 Some(level) => GzipLevel::try_new(level as u8).ok()
+//             };
+
+//             ParquetCompression::Gzip(gzip_level)
+//         },
+//         "lzo" => ParquetCompression::Lzo,
+//         "brotli" => {
+//             let brotli_level = match compression_level {
+//                 None => None,
+//                 Some(level) => BrotliLevel::try_new(level as u32).ok()
+//             };
+
+//             ParquetCompression::Brotli(brotli_level)
+//         },
+//         _  => {
+//             let zstd_level = match compression_level {
+//                 None => None,
+//                 Some(level) => ZstdLevel::try_new(level as i32).ok()
+//             };
+
+//             ParquetCompression::Zstd(zstd_level)
+//         }
+//     };
+
+//     pqo
+// }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 /// Generate JNI wrapper functions for calling Java static methods
 macro_rules! jni_static_method {
@@ -750,6 +1201,29 @@ macro_rules! jni_static_method {
             }
         )*
     };
+
+    // Pattern: no params -> void
+    (
+        class: $java_class:expr,
+        $(fn $rust_name:ident() -> () => $java_method:expr;)*
+    ) => {
+        $(
+            pub fn $rust_name() -> Result<(), Box<dyn std::error::Error>> {
+                with_current_env(|env| {
+                    let class = env.find_class($java_class)?;
+                    
+                    env.call_static_method(
+                        class,
+                        $java_method,
+                        "()V",
+                        &[]
+                    )?;
+                    
+                    Ok(())
+                })
+            }
+        )*
+    };
 }
 
 
@@ -860,6 +1334,11 @@ jni_static_method! {
     fn get_global(name: &str) -> String => "getGlobalSafe";
 }
 
+// ParquetIO methods
+jni_static_method! {
+    class: "com/parquet/io/ParquetIO",
+    fn shutdown_executor() -> () => "shutdown";
+}
 
 
 

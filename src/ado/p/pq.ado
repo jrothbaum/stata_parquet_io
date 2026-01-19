@@ -13,7 +13,14 @@ program define pq
 	gettoken todo 0: 0
     local todo `todo'
 
-	if ("`todo'" == "use_java") {
+	if ("`todo'" == "clear") {
+		clear
+		macro drop _all
+		scalar drop _all
+		matrix drop _all
+		timer clear
+	}
+	else if ("`todo'" == "use_java") {
 		//	di `"pq_use_append `0'"'
 		//	pq_use_java `0'
 		pq_use_java `0'
@@ -42,6 +49,11 @@ program define pq
 		//	di `"pq_save `0'"'
         pq_save `0'
     }
+	
+	else if ("`todo'" == "save_java") {
+		//	di `"pq_save_java `0'"'
+        pq_save_java `0'
+    }
     else if ("`todo'" == "describe") {
 		//	di `"pq_describe `0'"'
         pq_describe `0'
@@ -60,7 +72,7 @@ end
 
 capture program drop pq_merge
 program pq_merge
-    version 16.0
+    version 17.0
     
     gettoken mtype 0 : 0, parse(" ,")
 	local origmtype `"`mtype'"'
@@ -207,14 +219,11 @@ program pq_use_java
 						batch_size(integer 10000000)	///
 						append]
 	
-	di "HI1.0"
 	pq_register_plugin
-	di "HI1.1"
 	pq_convert_path `"`using'"'
 	local using = r(fullpath)
 	
 	local b_append = "`append'" != ""
-	di "HI1.1"
 	
 	if (!`b_append' & "`clear'" != "")	clear
 	if (`=_N' > 0 & !`b_append') {
@@ -226,7 +235,7 @@ program pq_use_java
 		display as error `"Cannot set random_share > 1 (`random_share')"'
 		exit 198
 	}
-	di "HI1.2"
+	
 	if ("`in'" != "") {
 		local offset = substr("`in'", 1, strpos("`in'", "/") -1)
 		local offset = max(`offset',0)
@@ -239,7 +248,6 @@ program pq_use_java
 
 	local row_to_read = max(0,`last_n') - `offset' + (`offset' > 0)
 
-	di "HI1.3"
 	//	Process the if statement, if passed
 	if (`"`if'"' != "") {
 		local greater_than = strpos(`"`if'"', ">") > 0
@@ -253,12 +261,10 @@ program pq_use_java
 	else {
 		local sql_if
 	}
-	di "HI1.4"
+	
 	//	Get the list of already existing variables
 	capture unab all_vars: *
 	local n_vars_already : word count `all_vars'
-	
-	di "HI1.5"
 	
 	//	Tell polars to concatenate file list with "vertical_relaxed"
 	//		so that it can combine different schema types
@@ -266,7 +272,7 @@ program pq_use_java
 	//		i.e. if a is an int8 in file 1 and an int16 in file 2,
 	//			it won't throw an error, but make it an int16 in the final file
 	local vertical_relaxed = "`relaxed'" != ""
-	di "HI1.6"
+	
 	//	asterisk_to_variable - for files /file/*.parquet, convert
 	//		* to a variable, so /file/2019.parquet, file/2020.parquet
 	//		will have the item in asterisk_to_variable as 2019 and 2020
@@ -282,7 +288,7 @@ end
 
 capture program drop pq_use_append
 program pq_use_append
-    version 16.0
+    version 17.0
     
     local input_args = `"`0'"'
 
@@ -600,7 +606,7 @@ end
 
 capture program drop pq_gen_or_recast
 program pq_gen_or_recast
-	version 16
+	version 17.0
 	syntax  ,	name(string)				///
 			 	type_new(string)			///
 				str_length(integer)
@@ -719,7 +725,7 @@ end
 
 capture program drop pq_describe
 program pq_describe, rclass
-    version 16.0
+    version 17.0
     
 	local input_args = `"`0'"'
 
@@ -858,7 +864,7 @@ end
 
 capture program drop pq_save
 program pq_save
-	version 16.0
+	version 17.0
 	
 	
     local input_args = `"`0'"'
@@ -1074,6 +1080,203 @@ end
 
 
 
+capture program drop pq_save_java
+program pq_save_java
+	version 17.0
+	
+	
+    local input_args = `"`0'"'
+    //	di `"`input_args"'
+	// Check if "using" is present in arguments
+    local using_pos = strpos(`" `input_args' "', " using ")
+    
+    if `using_pos' > 0{
+        // 	Extract everything before "using"
+        local varlist = substr(`"`input_args'"', 1, `using_pos'-1)
+		if (strtrim("`varlist'") == "")	local varlist *
+
+		local rest = substr(`"`input_args'"', `using_pos'+6, .)
+
+		local 0 = `"`varlist' using `rest'"'
+    }
+    else {
+        // No "using" - parse everything as filename and options
+        local 0 = `"* using `input_args'"'
+        
+        // namelist is empty since no "using" separator
+    }
+
+	syntax varlist using/ [, replace 						///
+						   if(string asis) 					///
+						   NOAUTORENAME						///
+						   partition_by(varlist)			///
+						   compression(string)				///
+						   compression_level(integer -1)	///
+						   NOPARTITIONOVERWRITE				///
+						   compress							///
+						   compress_string_to_numeric		///
+						   label 							///	
+						   ]	//	in(string) 
+        
+	if (!inlist("`compression'", "", "lz4", "uncompressed", "snappy", "gzip", "lzo", "brotli", "zstd")) {
+		display as error `"Acceptable options for compression are "lz4", "uncompressed", "snappy", "gzip", "lzo", "brotli", "zstd", and "" ("" will be zstd), passed "`compression'""'
+		exit 198
+	}
+	
+	if `compression_level' != -1 {
+		local check_compression_level = 0
+		if inlist("`compression'", "", "zstd") {
+			local check_compression_level = 1
+			local compression_level_min = 1
+			local compression_level_max = 22
+		}
+		else if "`compression'"== "brotli" {
+			local check_compression_level = 1
+			local compression_level_min = 0
+			local compression_level_max = 11
+		}
+		else if "`compression'"== "gzip" {
+			local check_compression_level = 1
+			local compression_level_min = 0
+			local compression_level_max = 9
+		}
+		
+		if `check_compression_level' {
+			if !inrange(`compression_level', `compression_level_min', `compression_level_max') {
+				display as error `"Acceptable compression_level range for compression = "`compression'" (zstd if blank) [`compression_level_min', `compression_level_max'], passed "`compression_level'""'
+				exit 198
+				
+			}
+		}
+	}
+		
+	//	Currently not available to have an in statement on write
+	local in
+	pq_register_plugin
+	
+	pq_convert_path `"`using'"'
+	local using = r(fullpath)
+
+	if "`replace'" == "" {
+		//	Check if file exists as file or path
+		quietly local is_file = fileexists("`using'")
+		mata: st_local("is_directory",  strofreal(direxists("`using'")))
+
+		if `is_file' | `is_directory' {
+			di as error "File exists: `using'"
+			di as error `" 	Add ", replace" if you want to overwrite the file"'
+			error 602
+		}
+	}
+
+	local n_rename = 0
+
+	local vars_labeled	
+	local original_order
+	if ("`label'" == "label") {
+		quietly ds
+		local original_order `r(varlist)'
+		
+		//	Do any variables have labels?
+		foreach vari in `varlist' {
+			local labeli : value label `vari'
+			if "`labeli'" != "" {
+				local vars_labeled `vars_labeled' `vari'
+				tempvar `vari'
+
+				//	Move the "true" value to a tempvar
+				quietly rename `vari' ``vari''
+
+				//	Create a decoded value in the original variable name
+				decode ``vari'', gen(`vari')
+			}
+		}
+
+		quietly order `original_order'
+	}
+
+	//	Handle auto-renaming (parquet_name labels)
+	if ("`noautorename'" == "") {
+		foreach vari in `varlist' {
+			local labeli: variable label `vari'
+
+			if regexm(`"`labeli'"', "^\{parquet_name:([^}]*)\}") {
+				//	Extract the value between "parquet_name:" and "}"
+				local n_rename = `n_rename' + 1
+				local rename_from_`n_rename' `vari'
+				local rename_to_`n_rename' = regexs(1)
+			}
+		}
+	}
+	
+	
+	if ("`in'" != "") {
+		local offset = substr("`in'", 1, strpos("`in'", "/") -1)
+		local offset = max(`offset',0)
+		local last_n = substr("`in'", strpos("`in'", "/") + 1, .)
+		local n_rows = `last_n' - `offset' + 1
+	}
+	else {
+		local offset = 0
+		local last_n = 0
+		local n_rows = 0
+	}
+	
+	
+	//	Process the if statement, if passed
+	if (`"`if'"' != "") {
+		local greater_than = strpos(`"`if'"', ">") > 0
+		if (`greater_than') {
+			di as error "pq will interpret > as in SQL, which is different than Stata."
+			di as error "	It will not include . as > any value."
+		}
+
+		plugin call polars_parquet_plugin, if `"`if'"'
+	}
+	else {
+		local sql_if
+	}
+	
+	
+	local offset = max(0,`offset' - 1)
+	
+	local overwrite_partition = "`nopartitionoverwrite'" == ""
+	local b_compress = "`compress'" != ""
+	local b_compress_string_to_numeric = "`compress_string_to_numeric'" != ""
+	
+	//	Call Java with save_java
+	//	Arguments (in order, no mapping parameter):
+	//		0: path
+	//		1: varlist
+	//		2: n_rows
+	//		3: offset
+	//		4: sql_if
+	//		5: partition_by
+	//		6: compression
+	//		7: compression_level
+	//		8: overwrite_partition
+	//		9: compress
+	//		10: compress_string_to_numeric
+	
+	pq_jar_path
+	local jar_path = r(jar_path)
+	
+	//	di `"javacall com.parquet.io.ParquetIO execute, classpath("`jar_path'") args(save_java "`using'" "`varlist'" `n_rows' `offset' "`sql_if'" "`partition_by'" "`compression'" `compression_level' `overwrite_partition' `b_compress' `b_compress_string_to_numeric') jar(stata-parquet-io.jar)"'
+	javacall com.parquet.io.ParquetIO execute, classpath("`jar_path'") args(save_java "`using'" "`varlist'" `n_rows' `offset' `"`sql_if'"' "`partition_by'" "`compression'" `compression_level' `overwrite_partition' `b_compress' `b_compress_string_to_numeric') jar(stata-parquet-io.jar)
+
+	//	Reset the labeled variables to their original value
+	if ("`vars_labeled'" != "") {
+		foreach vari in `vars_labeled' {
+			quietly drop `vari'
+			quietly rename ``vari'' `vari'
+		}
+
+		quietly order `original_order'
+	}
+end
+
+
+
 
 capture program drop pq_register_plugin
 program pq_register_plugin
@@ -1114,7 +1317,7 @@ end
 
 capture program drop pq_process_strl
 program pq_process_strl
-	version 16.0
+	version 17.0
 
 	syntax , 	path(string)			///
 				name(varname)			///
@@ -1152,7 +1355,7 @@ end
 
 
 program define pq_convert_path, rclass
-	version 16
+	version 17.0
     syntax anything
     
 	local filepath `anything'
