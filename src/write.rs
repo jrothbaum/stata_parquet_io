@@ -1,13 +1,16 @@
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
+use std::fs::File;
 use polars::prelude::{NamedFrom, TimeUnit};
 use polars::prelude::*;
+use polars::io::parquet::write::BatchedWriter;
 use polars_sql::SQLContext;
 use rayon::prelude::*;
 use std::error::Error;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::Path;
+use polars_parquet::write::{BrotliLevel, GzipLevel, ZstdLevel};
 
 use crate::{downcast, stata_interface};
 use crate::stata_interface::{
@@ -23,9 +26,21 @@ use crate::utilities::{
     SEC_MICROSECOND,
     //  SEC_NANOSECOND,
     get_thread_count,
+    get_thread_pool,
     ParallelizationStrategy,
     determine_parallelization_strategy,
 };
+
+fn adaptive_write_batch_size(requested_rows: usize, n_cols: usize, n_rows: usize) -> usize {
+    if n_rows == 0 {
+        return 1;
+    }
+    let requested = requested_rows.max(10_000);
+    let est_bytes_per_row = std::cmp::max(1, n_cols) * 16;
+    let target_bytes = 64 * 1024 * 1024;
+    let adaptive = (target_bytes / est_bytes_per_row).clamp(10_000, 1_000_000);
+    requested.min(adaptive).min(n_rows)
+}
 
 
 
@@ -122,12 +137,12 @@ pub fn write_from_stata(
     
     let a_scan_arc = Arc::new(a_scan);
 
-    let mut lf = LazyFrame::anonymous_scan(
+    let lf = LazyFrame::anonymous_scan(
         a_scan_arc,
         ScanArgsAnonymous::default()
     );
     
-    let mut lf_unwrapped = lf.unwrap().with_new_streaming(true);
+    let lf_unwrapped = lf.unwrap();
 
 
     let delete_error = delete_existing_files(
@@ -181,8 +196,6 @@ fn save_partitioned(
     compress:bool,
     compress_string: bool,
 )  -> Result<i32,Box<dyn Error>> {
-    let pqo = parquet_options(compression, compression_level);
-
     let mut df = match lf.collect() {
         Err(e) => {
             display(&format!("Parquet collect error: {}", e));
@@ -217,23 +230,15 @@ fn save_partitioned(
         }
     }
 
-    match write_partitioned_dataset(
-            &mut df, 
-            &PathBuf::from(path),
-            partition_by.clone(),
-            &pqo, 
-            None,
-            100_000_000_000
-        ) {
-        Err(e) => {
-            display(&format!("Parquet write error during write_partitioned_dataset: {}", e));
-            Ok(198)
-        },
-        Ok(_) => {
-            display(&format!("File saved to {}", path));
-            Ok(0)
-        }
-    }
+    save_partitioned_sequential(
+        path,
+        df.lazy(),
+        compression,
+        compression_level,
+        partition_by,
+        false,
+        false,
+    )
 
     // let partition_variant = PartitionVariant::ByKey {
     //      key_exprs: partition_cols, 
@@ -266,6 +271,21 @@ fn save_partitioned(
     //         Ok(0)
     //     }
     // }
+}
+
+fn format_partition_float(value: f64) -> String {
+    if value.is_finite() && value.fract().abs() < 1e-9 {
+        format!("{:.1}", value)
+    } else {
+        let mut s = format!("{:.12}", value);
+        while s.contains('.') && s.ends_with('0') {
+            s.pop();
+        }
+        if s.ends_with('.') {
+            s.pop();
+        }
+        s
+    }
 }
 
 
@@ -350,9 +370,8 @@ fn save_partitioned_sequential(
                 AnyValue::UInt32(i) => format!("{}={}", col_name, i),
                 AnyValue::UInt64(i) => format!("{}={}", col_name, i),
 
-                AnyValue::Float64(f) => format!("{}={}", col_name, f),
-                AnyValue::Float32(f) => format!("{}={}", col_name, f),
-                AnyValue::Boolean(b) => format!("{}={}", col_name, b),
+                AnyValue::Float64(f) => format!("{}={}", col_name, format_partition_float(f)),
+                AnyValue::Float32(f) => format!("{}={}", col_name, format_partition_float(f as f64)),
                 AnyValue::Date(d) => format!("{}={}", col_name, d),
                 AnyValue::Datetime(dt, _tu, _tz) => format!("{}={}", col_name, dt),
                 _ => format!("{}={:?}", col_name, value),
@@ -385,19 +404,19 @@ fn save_partitioned_sequential(
         for filter_expr in partition_filters {
             partition_lf = partition_lf.filter(filter_expr);
         }
-        
+
+        let mut partition_df = partition_lf.collect()
+            .map_err(|e| {
+                display(&format!("Error collecting partition data: {}", e));
+                e
+            })?;
+
         // Apply compression if requested
         if compress || compress_string {
-            let mut partition_df = partition_lf.collect()
-                .map_err(|e| {
-                    display(&format!("Error collecting partition data: {}", e));
-                    e
-                })?;
-            
             let mut down_config = downcast::DowncastConfig::default();
             down_config.check_strings = compress_string;
             down_config.prefer_int_over_float = compress;
-            
+
             partition_df = downcast::intelligent_downcast_df(
                 partition_df,
                 None,
@@ -407,26 +426,15 @@ fn save_partitioned_sequential(
                 display(&format!("Partition downcast/compress error: {}", e));
                 e
             })?;
-            
-            partition_lf = partition_df.lazy();
         }
         
         // Generate a unique filename for this partition
         let partition_file = partition_dir.join("data_0.parquet");
-        let sink_target = SinkTarget::Path(Arc::new(partition_file.clone()));
-        
-        // Save this partition
-        let result_lf = partition_lf.sink_parquet(
-            sink_target,
-            pqo.clone(),
-            None,
-            SinkOptions::default()
-        ).map_err(|e| {
-            display(&format!("Partition sink setup error for {}: {}", partition_dir.display(), e));
+        let file = File::create(&partition_file).map_err(|e| {
+            display(&format!("Partition file create error for {}: {}", partition_dir.display(), e));
             e
         })?;
-        
-        result_lf.collect().map_err(|e| {
+        pqo.to_writer(file).finish(&mut partition_df).map_err(|e| {
             display(&format!("Partition write error for {}: {}", partition_dir.display(), e));
             e
         })?;
@@ -553,29 +561,24 @@ fn save_no_partition(
     }
 
 
-    let sink_target = SinkTarget::Path(Arc::new(PathBuf::from(path)));
     let pqo = parquet_options(compression, compression_level);
-    
-    // First set up the sink and handle potential errors there
-    let result_lf = match lf.sink_parquet(
-        sink_target, 
-        pqo,
-        None,
-        SinkOptions::default()) {
-            Err(e) => {
-                display(&format!("Parquet sink setup error: {}", e));
-                return Ok(198);
-            },
-            Ok(lf) => lf,
-        };
-
-    // Then trigger execution with collect and handle those errors
-    match result_lf.collect() {
+    match lf.collect() {
         Err(e) => {
-            display(&format!("Parquet write error during collection: {}", e));
+            display(&format!("Parquet collect error: {}", e));
             Ok(198)
         },
-        Ok(_) => {
+        Ok(mut df) => {
+            let file = match File::create(path) {
+                Ok(f) => f,
+                Err(e) => {
+                    display(&format!("Parquet file create error: {}", e));
+                    return Ok(198);
+                }
+            };
+            if let Err(e) = pqo.to_writer(file).finish(&mut df) {
+                display(&format!("Parquet write error: {}", e));
+                return Ok(198);
+            }
             display(&format!("File saved to {}", path));
             Ok(0)
         }
@@ -599,7 +602,7 @@ fn parquet_options(
 
             ParquetCompression::Gzip(gzip_level)
         },
-        "lzo" => ParquetCompression::Lzo,
+        "lzo" => ParquetCompression::Zstd(None),
         "brotli" => {
             let brotli_level = match compression_level {
                 None => None,
@@ -865,23 +868,20 @@ impl AnonymousScan for StataDataScan {
 
     #[allow(unused)]
     fn scan(&self, scan_opts: AnonymousScanArgs) -> PolarsResult<DataFrame> {
-        // Reset current offset
-        let mut offset = self.current_offset.lock().unwrap();
-    
         // If no data, return an empty DataFrame
         if self.n_rows == 0 {
             return Ok(DataFrame::empty_with_schema(&self.schema));
         }
-        
-        // Update the offset for the next batch
-        *offset += self.n_rows;
+
+        let n_rows = scan_opts.n_rows.unwrap_or(self.n_rows);
+        let n_rows = std::cmp::min(n_rows, self.n_rows);
 
         // Call read_single_batch and handle errors with the ? operator
         let result = read_single_batch(
             self, 
             scan_opts,
             0,
-            self.n_rows,
+            n_rows,
             self.parallel_strategy
         )?;
 
@@ -892,39 +892,10 @@ impl AnonymousScan for StataDataScan {
         }
     }
     
-    #[allow(unused)]
-    fn next_batch(
-        &self,
-        scan_opts: AnonymousScanArgs,
-    ) -> PolarsResult<Option<DataFrame>> {
-        let mut offset = self.current_offset.lock().unwrap();
-    
-        // If we've read all rows, return empty DataFrame
-        if *offset >= self.n_rows {
-            return Ok(None);
-        }
-
-        let initial_offset = offset.clone();
-
-        // Update the offset for the next batch
-        *offset += self.batch_size;
-
-        
-        read_single_batch(
-            self, 
-            scan_opts,
-            initial_offset,
-            self.batch_size,
-            self.parallel_strategy)
-    }
-    
     fn allows_predicate_pushdown(&self) -> bool {
         false
     }
     fn allows_projection_pushdown(&self) -> bool {
-        false
-    }
-    fn allows_slice_pushdown(&self) -> bool {
         false
     }
 }
@@ -1088,7 +1059,7 @@ fn process_column(
 
 fn read_single_batch(
     sds: &StataDataScan,
-    scan_opts: AnonymousScanArgs,
+    _scan_opts: AnonymousScanArgs,
     offset: usize,
     n_rows: usize,
     parallel_strategy: Option<ParallelizationStrategy>,
@@ -1113,10 +1084,7 @@ fn read_single_batch(
         )
     });
     
-    let thread_pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(n_threads)
-        .build()
-        .map_err(|e| PolarsError::ComputeError(format!("Failed to build thread pool: {}", e).into()))?;
+    let thread_pool = get_thread_pool(n_threads);
     
     // Apply the strategy
     let columns_result: PolarsResult<Vec<Series>> = match strategy {
@@ -1153,7 +1121,8 @@ fn read_single_batch(
     let columns = columns_result?;
     
     // Return the DataFrame built from columns
-    let mut df = DataFrame::from_iter(columns).lazy();
+    let columns: Vec<Column> = columns.into_iter().map(Column::from).collect();
+    let mut df = DataFrame::new_infer_height(columns)?.lazy();
     
     if let Some(sql_if) = &sds.sql_if {
         if !sql_if.is_empty() {

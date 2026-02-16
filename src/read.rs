@@ -1,6 +1,10 @@
 use std::path::Path;
-use std::sync::Arc;
 use std::path::PathBuf;
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::num::NonZeroUsize;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use rayon::prelude::*;
 use polars::error::ErrString;
 use polars::prelude::*;
@@ -24,6 +28,7 @@ use crate::stata_interface::{
 use crate::utilities::{
     determine_parallelization_strategy,
     get_thread_count,
+    get_thread_pool,
     ParallelizationStrategy,
     DAY_SHIFT_SAS_STATA,
     SEC_MICROSECOND,
@@ -152,6 +157,18 @@ impl ToStataValue for DatetimeValue {
         
         Some(self.0 as f64 / mills_factor + (SEC_SHIFT_SAS_STATA as f64) * (SEC_MILLISECOND as f64))
     }
+}
+
+fn adaptive_batch_size(requested_rows: usize, n_cols: usize, n_rows: usize) -> usize {
+    if n_rows == 0 {
+        return 1;
+    }
+    let requested = requested_rows.max(10_000);
+    // Rough upper-bound estimate for mixed numeric/string workloads.
+    let est_bytes_per_row = std::cmp::max(1, n_cols) * 16;
+    let target_bytes = 64 * 1024 * 1024;
+    let adaptive = (target_bytes / est_bytes_per_row).clamp(10_000, 1_000_000);
+    requested.min(adaptive).min(n_rows)
 }
 
 pub fn data_exists(path: &str) -> bool {
@@ -304,7 +321,7 @@ pub fn scan_lazyframe(
             let mut scan_args = ScanArgsParquet::default();
             scan_args.allow_missing_columns = true;
             scan_args.cache = false;
-            LazyFrame::scan_parquet(&normalized_pattern, scan_args.clone())
+            LazyFrame::scan_parquet(normalized_pattern.as_str().into(), scan_args.clone())
         }
     }
 
@@ -340,7 +357,7 @@ fn scan_hive_partitioned(dir_path: &str) -> Result<LazyFrame, PolarsError> {
                 let mut scan_args = ScanArgsParquet::default();
                 scan_args.allow_missing_columns = true;
                 scan_args.cache = false;
-                return LazyFrame::scan_parquet(&pattern, scan_args.clone());
+                return LazyFrame::scan_parquet(pattern.as_str().into(), scan_args.clone());
             }
         }
     }
@@ -381,7 +398,7 @@ fn scan_with_diagonal_relaxed(glob_path: &str) -> Result<LazyFrame, PolarsError>
         .iter()
         .map(|path| {
             LazyFrame::scan_parquet(
-                path.to_string_lossy().as_ref(), 
+                path.to_string_lossy().as_ref().into(), 
                 scan_args.clone(),
             )
         })
@@ -397,6 +414,7 @@ fn scan_with_diagonal_relaxed(glob_path: &str) -> Result<LazyFrame, PolarsError>
             rechunk: false,
             to_supertypes: true,
             diagonal: true,
+            strict: false,
             from_partitioned_ds: true,
             maintain_order: true,
         }
@@ -470,7 +488,7 @@ fn scan_with_filename_extraction(
             scan_args.allow_missing_columns = true;
             scan_args.cache = false;
             LazyFrame::scan_parquet(
-                path_str.as_ref(), 
+                path_str.as_ref().into(), 
                 scan_args.clone()
             )
             .map(|lf| {
@@ -492,6 +510,7 @@ fn scan_with_filename_extraction(
             rechunk: false,
             to_supertypes: true,
             diagonal: true,
+            strict: false,
             from_partitioned_ds: true,
             maintain_order: true,
         }
@@ -675,10 +694,8 @@ pub fn read_to_stata(
         .collect();
 
     //  display(&format!("columns: {:?}", columns));
+    let effective_batch_size = adaptive_batch_size(batch_size, columns.len(), n_rows);
     
-    // Configure batch processing
-    let n_batches = (n_rows as f64 / batch_size as f64).ceil() as usize;
-
     // Determine thread count based on data size
     let n_threads = if n_rows < 1_000 {
         1
@@ -693,69 +710,64 @@ pub fn read_to_stata(
             n_threads
         )
     });
+
+    let thread_pool = if n_threads > 1 {
+        Some(get_thread_pool(n_threads))
+    } else {
+        None
+    };
     
     //  display(&format!("Processing with strategy: {:?}, threads: {}", strategy, n_threads));
-    
-    // Process data in batches
-    set_macro("n_batches", &n_batches.to_string(), false);
+    let all_columns_ref = Arc::new(all_columns);
+    let row_offset = Arc::new(AtomicUsize::new(0));
+    let batch_counter = Arc::new(AtomicUsize::new(0));
 
+    let all_columns_cb = Arc::clone(&all_columns_ref);
+    let row_offset_cb = Arc::clone(&row_offset);
+    let batch_counter_cb = Arc::clone(&batch_counter);
+    let read_pool_cb = thread_pool;
+    let chunk_size = NonZeroUsize::new(effective_batch_size);
 
-    // display(&format!("Batches: {}", n_batches));
-    // display(&format!("Offset: {}", offset));
-    // display(&format!("Rows: {}", n_rows));
-    for batchi in 0..n_batches {
-        let mut df_batch = df.clone()
-                             .select(&columns);
+    let sink_lf = match df
+        .select(&columns)
+        .slice(offset as i64, n_rows as u32)
+        .sink_batches(
+            PlanCallback::new(move |batch: DataFrame| {
+                let start_index = row_offset_cb.fetch_add(batch.height(), Ordering::SeqCst);
+                let batchi = batch_counter_cb.fetch_add(1, Ordering::SeqCst);
+                process_batch_with_strategy(
+                    &batch,
+                    start_index,
+                    all_columns_cb.as_ref(),
+                    strategy,
+                    n_threads,
+                    batchi,
+                    stata_offset,
+                    read_pool_cb,
+                )?;
+                Ok(false)
+            }),
+            true,
+            chunk_size,
+        )
+    {
+        Ok(lf) => lf,
+        Err(e) => {
+            display(&format!("Error creating streaming batch sink: {:?}", e));
+            return Ok(198);
+        }
+    };
 
-        let batch_offseti = offset + batchi * batch_size;
-
-        let batch_lengthi = if (batchi + 1) * batch_size > n_rows {
-            n_rows - batchi * batch_size
-        } else {
-            batch_size
-        } as u32;
-        
-        // display("");
-        // display(&format!("Batch #{}", batchi + 1));
-        // display(&format!("Batch start: {}", batch_offseti));
-        // display(&format!("Batch length: {}", batch_lengthi));
-        
-        // Apply slice to get current batch
-        df_batch = df_batch.slice(
-            batch_offseti as i64, 
-            batch_lengthi
-        );
-
-        // Collect the batch to a DataFrame
-        let batch_df = match df_batch.collect() {
-            Ok(df) => df,
-            Err(e) => {
-                display(&format!("Error collecting batch: {:?}", e));
-                return Ok(198);
-            }
-        };
-
-        // Process the batch with the selected parallelization strategy
-        match process_batch_with_strategy(
-            &batch_df,
-            //  The index to assign to ignores the offset in the original data
-            //      But it is offset by the stata_offset (for appends) 
-            batch_offseti - offset, 
-            &all_columns,
-            strategy,
-            n_threads,
-            batchi,
-            stata_offset
-        ) {
-            Ok(_) => {
-                // Do nothing on success
-            },
-            Err(e) => {
-                display(&format!("Error assigning values to stata data: {:?}", e));
-                return Ok(198);
-            },
-        };
+    if let Err(e) = sink_lf.collect() {
+        display(&format!("Error collecting streamed batches: {:?}", e));
+        return Ok(198);
     }
+
+    set_macro(
+        "n_batches",
+        &batch_counter.load(Ordering::SeqCst).to_string(),
+        false
+    );
 
     Ok(0)
 }
@@ -820,6 +832,7 @@ fn process_batch_with_strategy(
     n_threads: usize,
     n_batch:usize,
     stata_offset:usize,
+    thread_pool: Option<&rayon::ThreadPool>,
 ) -> PolarsResult<()> {
 
     // If only 1 thread requested or batch is too small, use single-threaded version
@@ -838,15 +851,7 @@ fn process_batch_with_strategy(
         });
 
     
-    // Setup thread pool with rayon
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(n_threads)
-        .build()
-        .map_err(|e| PolarsError::ComputeError(
-            ErrString::from(format!("Failed to build thread pool: {}", e))
-        ))?;
-
-    pool.install(|| {
+    let run = || -> PolarsResult<()> {
         // First, process regular columns with the chosen strategy
         if !regular_columns.is_empty() {
             // Create a vector of regular ColumnInfo objects
@@ -901,7 +906,13 @@ fn process_batch_with_strategy(
         }
         
         Ok(())
-    })
+    };
+
+    if let Some(pool) = thread_pool {
+        pool.install(run)
+    } else {
+        run()
+    }
 }
 
 
@@ -1166,6 +1177,104 @@ fn process_numeric_column(
     col_idx: usize,
     stata_offset: usize,
 ) -> PolarsResult<()> {
+    let mut write_number = |row_idx: usize, value: Option<f64>| {
+        let global_row_idx = row_idx + start_index;
+        replace_number(value, global_row_idx + 1 + stata_offset, col_idx);
+    };
+
+    // Fast typed path avoids AnyValue matching for common numeric primitives.
+    match col_info.dtype.as_str() {
+        "Boolean" => {
+            if let Ok(ca) = col.bool() {
+                for row_idx in start_row..end_row {
+                    write_number(row_idx, ca.get(row_idx).map(|v| if v { 1.0 } else { 0.0 }));
+                }
+                return Ok(());
+            }
+        }
+        "Int8" => {
+            if let Ok(ca) = col.i8() {
+                for row_idx in start_row..end_row {
+                    write_number(row_idx, ca.get(row_idx).map(|v| v as f64));
+                }
+                return Ok(());
+            }
+        }
+        "Int16" => {
+            if let Ok(ca) = col.i16() {
+                for row_idx in start_row..end_row {
+                    write_number(row_idx, ca.get(row_idx).map(|v| v as f64));
+                }
+                return Ok(());
+            }
+        }
+        "Int32" => {
+            if let Ok(ca) = col.i32() {
+                for row_idx in start_row..end_row {
+                    write_number(row_idx, ca.get(row_idx).map(|v| v as f64));
+                }
+                return Ok(());
+            }
+        }
+        "Int64" => {
+            if let Ok(ca) = col.i64() {
+                for row_idx in start_row..end_row {
+                    write_number(row_idx, ca.get(row_idx).map(|v| v as f64));
+                }
+                return Ok(());
+            }
+        }
+        "UInt8" => {
+            if let Ok(ca) = col.u8() {
+                for row_idx in start_row..end_row {
+                    write_number(row_idx, ca.get(row_idx).map(|v| v as f64));
+                }
+                return Ok(());
+            }
+        }
+        "UInt16" => {
+            if let Ok(ca) = col.u16() {
+                for row_idx in start_row..end_row {
+                    write_number(row_idx, ca.get(row_idx).map(|v| v as f64));
+                }
+                return Ok(());
+            }
+        }
+        "UInt32" => {
+            if let Ok(ca) = col.u32() {
+                for row_idx in start_row..end_row {
+                    write_number(row_idx, ca.get(row_idx).map(|v| v as f64));
+                }
+                return Ok(());
+            }
+        }
+        "UInt64" => {
+            if let Ok(ca) = col.u64() {
+                for row_idx in start_row..end_row {
+                    write_number(row_idx, ca.get(row_idx).map(|v| v as f64));
+                }
+                return Ok(());
+            }
+        }
+        "Float32" => {
+            if let Ok(ca) = col.f32() {
+                for row_idx in start_row..end_row {
+                    write_number(row_idx, ca.get(row_idx).map(|v| v as f64));
+                }
+                return Ok(());
+            }
+        }
+        "Float64" => {
+            if let Ok(ca) = col.f64() {
+                for row_idx in start_row..end_row {
+                    write_number(row_idx, ca.get(row_idx));
+                }
+                return Ok(());
+            }
+        }
+        _ => {}
+    }
+
     // Use function pointers for better performance
     let converter: fn(&AnyValue) -> Option<f64> = match col_info.dtype.as_str() {
         "Boolean" => |av| match av { AnyValue::Boolean(b) => Some(if *b { 1.0 } else { 0.0 }), _ => None },
@@ -1186,9 +1295,8 @@ fn process_numeric_column(
 
     // Get the column's data type from the stored string representation
     for row_idx in start_row..end_row {
-        let global_row_idx = row_idx + start_index;
         let value = col.get(row_idx).ok().and_then(|av| converter(&av));
-        replace_number(value, global_row_idx + 1 + stata_offset, col_idx);
+        write_number(row_idx, value);
     }
     Ok(())
 }
@@ -1257,11 +1365,6 @@ fn process_strl_column(
         &(end_row + start_index + stata_offset).to_string(),
         false,
     );
-    let sink_target = SinkTarget::Path(Arc::new(PathBuf::from(path)));
-    let mut csv_options = CsvWriterOptions::default();
-    csv_options.include_header = false;
-    csv_options.serialize_options.quote_style = QuoteStyle::Never;
-
     let processed = batch.clone().lazy()
         .select([
             col(&column_name.to_string())
@@ -1271,23 +1374,28 @@ fn process_strl_column(
                 .str().replace_all(lit("\""), lit("'"), false)
                 .alias(&column_name.to_string())
         ])
-        .collect()
-        .unwrap();
+        .collect()?;
 
-    match processed.lazy().sink_csv(
-                                sink_target,
-                                csv_options,
-                                None,
-                                SinkOptions::default()
-                            )
-                            .unwrap()
-                            .collect() {
-            Err(e) => {
-                display(&format!("Strl csv write error for {}: {}", column_name, e));
-                Err(e)
-            },
-            Ok(_) => {
-                Ok(())
-            }
+    let mut writer = BufWriter::new(File::create(PathBuf::from(path)).map_err(|e| {
+        PolarsError::ComputeError(format!("Strl csv create error for {}: {}", column_name, e).into())
+    })?);
+
+    let str_col = processed
+        .column(column_name.as_str())?
+        .str()?;
+
+    for value in str_col.into_iter() {
+        if let Some(text) = value {
+            writer.write_all(text.as_bytes()).map_err(|e| {
+                PolarsError::ComputeError(format!("Strl csv write error for {}: {}", column_name, e).into())
+            })?;
         }
+        writer.write_all(b"\n").map_err(|e| {
+            PolarsError::ComputeError(format!("Strl csv newline write error for {}: {}", column_name, e).into())
+        })?;
+    }
+    writer.flush().map_err(|e| {
+        PolarsError::ComputeError(format!("Strl csv flush error for {}: {}", column_name, e).into())
+    })?;
+    Ok(())
 }

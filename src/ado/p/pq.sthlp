@@ -12,25 +12,25 @@
 Import a Parquet file into Stata:
 
 {p 8 17 2}
-{cmd:pq use} [{varlist}] {cmd:using} {it:filename} [, {opt clear} {opt append} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} 
+{cmd:pq use} [{varlist}] {cmd:using} {it:filename} [, {opt clear} {opt append} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)}
 {opt compress} {opt compress_string_to_numeric} {opt random_n(integer 0)}
-{opt random_share(float 0.0)} {opt random_seed(integer 0)}]
+{opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt drop(varlist)} {opt drop_strl}]
 
 {phang}
 Append a Parquet file to existing data:
 
 {p 8 17 2}
-{cmd:pq append} [{varlist}] {cmd:using} {it:filename} [, {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} {opt compress} 
+{cmd:pq append} [{varlist}] {cmd:using} {it:filename} [, {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} {opt compress}
 {opt compress_string_to_numeric} {opt random_n(integer 0)}
-{opt random_share(float 0.0)} {opt random_seed(integer 0)}]
+{opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt drop(varlist)} {opt drop_strl}]
 
 {phang}
 Merge a Parquet file with existing data:
 
 {p 8 17 2}
-{cmd:pq merge} {it:merge_type} [{varlist}] {cmd:using} {it:filename} [, {merge_options} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} {opt compress} 
+{cmd:pq merge} {it:merge_type} [{varlist}] {cmd:using} {it:filename} [, {merge_options} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} {opt compress}
 {opt compress_string_to_numeric} {opt random_n(integer 0)}
-{opt random_share(float 0.0)} {opt random_seed(integer 0)}]
+{opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt drop(varlist)} {opt drop_strl}]
 
 {phang}
 Save Stata data as a Parquet file:
@@ -142,6 +142,18 @@ Overridden by {opt random_n()} if both are set.
 resulting in different samples. Specify a positive integer to ensure the same random sample is selected
 across multiple runs.
 
+{phang}
+{opt drop(varlist)} specifies variables to exclude from the import. Supports Stata-style wildcard patterns
+using {cmd:*} and {cmd:?}. For example, {cmd:drop(weight*)} would exclude all variables whose names begin
+with "weight", and {cmd:drop(x y z)} would exclude those three variables. This is applied after any
+variable selection from the {varlist} and can be combined with {opt drop_strl}.
+
+{phang}
+{opt drop_strl} automatically excludes all strL variables (strings longer than 2045 characters) from the
+import. This can be useful when strL columns are not needed and would slow down loading, since strL
+variables require special batch processing. Can be combined with {opt drop()} to exclude additional
+variables.
+
 {dlgtab:Options for pq merge}
 
 {phang}
@@ -187,7 +199,7 @@ across multiple runs.
 {opt update} specifies that missing values in the master dataset be replaced with values from the using dataset.
 
 {phang}
-All read options ({opt in()}, {opt if()}, {opt relaxed}, {opt asterisk_to_variable()}, {opt parallelize()}, {opt sort()}, {opt compress}, {opt compress_string_to_numeric}, {opt random_n}, {opt random_share}, {opt random_seed}) 
+All read options ({opt in()}, {opt if()}, {opt relaxed}, {opt asterisk_to_variable()}, {opt parallelize()}, {opt sort()}, {opt compress}, {opt compress_string_to_numeric}, {opt random_n}, {opt random_share}, {opt random_seed}, {opt drop()}, {opt drop_strl})
 are also available with {cmd:pq merge}.
 This will load the data using {cmd:pq use} in a temporary frame, {cmd:save} it to a temporary dta file, and then run the specified {cmd:merge}.
 
@@ -280,6 +292,20 @@ that would be created from the asterisk pattern.
 {pstd}Note: If both random_n and random_share are specified, random_share will be ignored:{p_end}
 {phang2}{cmd:. pq use using large_dataset.parquet, clear random_n(800) random_share(0.2)}{p_end}
 {phang2}{cmd:// This will load exactly 800 random rows, ignoring the 20% specification}
+
+{dlgtab:Dropping variables on import}
+
+{pstd}Load a file but exclude specific variables:{p_end}
+{phang2}{cmd:. pq use using example.parquet, clear drop(weight height)}{p_end}
+
+{pstd}Load a file but exclude variables matching a pattern:{p_end}
+{phang2}{cmd:. pq use using example.parquet, clear drop(temp_*)}{p_end}
+
+{pstd}Load a file but exclude all strL (long string) variables:{p_end}
+{phang2}{cmd:. pq use using example.parquet, clear drop_strl}{p_end}
+
+{pstd}Combine drop_strl with drop() to exclude strL variables and additional variables:{p_end}
+{phang2}{cmd:. pq use using example.parquet, clear drop_strl drop(notes)}{p_end}
 
 {dlgtab:Appending data}
 

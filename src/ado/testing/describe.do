@@ -117,7 +117,13 @@ foreach fi in `files_pandas' {
 local path_econ `test_root'\test_data\econ_data
 local files_econ Table_4_cz_by_cohort_estimates Table_5_national_estimates_by_cohort_primary_outcomes county_population 20zpallagi Fin_Patent_Data_for_Posting.20220403 tm_assignment LLM_match_formulas_all //	tm_assignee
 foreach fi in `files_econ' {
-	test_file, path(`path_econ'/`fi')
+	capture confirm file "`path_econ'/`fi'.dta"
+	if (_rc == 0) {
+		test_file, path(`path_econ'/`fi')
+	}
+	else {
+		di as text "Skipping missing file: `path_econ'/`fi'.dta"
+	}
 }
 
 
@@ -146,7 +152,13 @@ foreach fi in `files_pandas' {
 local path_econ `test_root'\test_data\econ_data
 local files_econ Table_4_cz_by_cohort_estimates Table_5_national_estimates_by_cohort_primary_outcomes county_population 20zpallagi Fin_Patent_Data_for_Posting.20220403 tm_assignment LLM_match_formulas_all //	tm_assignee
 foreach fi in `files_econ' {
-	test_file, path(`path_econ'/`fi')
+	capture confirm file "`path_econ'/`fi'.dta"
+	if (_rc == 0) {
+		test_file, path(`path_econ'/`fi')
+	}
+	else {
+		di as text "Skipping missing file: `path_econ'/`fi'.dta"
+	}
 }
 
 

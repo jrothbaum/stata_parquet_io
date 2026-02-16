@@ -85,7 +85,7 @@ program pq_merge
 		  NOGENerate			        ///
 		noNOTEs					///
 		  REPLACE				///
-		noREPort				///	
+		noREPort				///
 		  SORTED				///
 		  UPDATE       				///
 		  in(string) 				///
@@ -99,6 +99,8 @@ program pq_merge
 		random_n(integer 0)		///
 		random_share(real 0.0)	///
 		random_seed(integer 0)	///
+		drop(string)			///
+		drop_strl					///
 		]
 
 
@@ -128,7 +130,9 @@ program pq_merge
 												`compress_string_to_numeric'	///
 												random_n(`random_n')			///
 												random_share(`random_share')	///
-												random_seed(`random_seed')
+												random_seed(`random_seed')		///
+												drop(`drop')					///
+												`drop_strl'
 		quietly save `t_save'
 		sum
 	}
@@ -201,6 +205,8 @@ program pq_use_append
 						random_share(real 0.0)	///
 						random_seed(integer 0)	///
 						batch_size(integer 1000000)	///
+						drop(string)			///
+						drop_strl					///
 						append]
 	
 	pq_register_plugin
@@ -275,14 +281,31 @@ program pq_use_append
 	}
 	
 	
+	//	Build drop list from drop_strl flag
+	if "`drop_strl'" == "drop_strl" {
+		local strl_drop_list
+		forvalues i = 1/`n_columns' {
+			if "`type_`i''" == "strl" {
+				local strl_drop_list `strl_drop_list' `name_`i''
+			}
+		}
+		local drop `drop' `strl_drop_list'
+	}
+
 	// If namelist is empty or blank, return the full varlist
 	if "`namelist'" == "" | "`namelist'" == "*" {
-        local matched_vars `vars_in_file'
+		if "`drop'" != "" {
+			pq_match_variables `vars_in_file', against(`vars_in_file') drop(`drop')
+			local matched_vars = r(matched_vars)
+		}
+		else {
+			local matched_vars `vars_in_file'
+		}
 		local match_all = 1
     }
     else {
         // Use function to match the variables from name list to the ones on the file
-        pq_match_variables `namelist', against(`vars_in_file')
+        pq_match_variables `namelist', against(`vars_in_file') drop(`drop')
 
 		local matched_vars = r(matched_vars)
 		local match_all = 0
@@ -665,9 +688,9 @@ end
 
 capture program drop pq_match_variables
 program pq_match_variables, rclass
-    syntax [anything(name=namelist)], against(string)
+    syntax [anything(name=namelist)], against(string) [drop(string)]
 
-	
+
 	// Create local macros
     local vars `"`against'"'
     local matched
@@ -711,6 +734,26 @@ program pq_match_variables, rclass
         di as error "The following variable(s) were not found: `unmatched'"
         error 111
     }
+
+	// Apply drop list - remove any matched vars that match drop patterns
+	if "`drop'" != "" {
+		local after_drop
+		foreach v of local matched {
+			local should_drop = 0
+			foreach dpat of local drop {
+				if strpos("`dpat'", "*") | strpos("`dpat'", "?") {
+					if match("`v'", "`dpat'")  local should_drop = 1
+				}
+				else {
+					if "`v'" == "`dpat'"  local should_drop = 1
+				}
+			}
+			if !`should_drop' {
+				local after_drop `after_drop' `v'
+			}
+		}
+		local matched `after_drop'
+	}
 
     // Return matched vars
     return local matched_vars = `"`matched'"'

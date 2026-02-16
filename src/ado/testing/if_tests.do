@@ -31,10 +31,15 @@ program define in_test_parquet_io_data
 			quietly gen c_`ci' = rnormal() if _n < `n_not_missing'
 		}
 	}
+
+	quietly gen long test_date = td(01jan2024) + mod(_n, 10)
+	format test_date %td
+
+	quietly gen double test_datetime = clock("01jan2024 00:00:00", "DMYhms") + (_n * 1000)
+	format test_datetime %tc
 	
 	
 	tempfile path_save_root
-	local path_save_root C:\Users\jonro\Downloads\test_benchmark
 	pq save "`path_save_root'.parquet", replace
 	
 	
@@ -77,21 +82,39 @@ program define in_test_parquet_io_data
 	local n_if = `n_if' + 1
 	local if_set`n_if' c_2 == "B" & !missing(c_4) & c_5 > 100
 	local assert`n_if' 0
-	
-	
+
+	local n_if = `n_if' + 1
+	local if_set`n_if' test_date == date("04jan2024", "%d%b%Y")
+	local assert`n_if' 0
+	local sql_date_case`n_if' 1
+	local sql_date_target`n_if' = td(04jan2024)
+	local sql_date_n`n_if' = floor(`n_rows'/10)
+
 	forvalues i = 1/`n_if' {
 		di "`i'"
 		pq use "`path_save_root'.parquet", clear 
 		count
 		di `"keep if `if_set`i''"'
 		keep if `if_set`i''
+		sort c_1
 		save "`path_save_root'.dta", replace
 		
 		di "Test if on load"
 		pq use "`path_save_root'.parquet", clear if(`if_set`i'')
 		
-		
-		unab all_vars: *
+		capture unab all_vars: *
+		if (_rc) {
+			assert _N == 0
+			di `"No rows matched for `if_set`i'' (load path)"'
+			di _newline(2)
+			continue
+		}
+		if (0`sql_date_case`i'') {
+			assert _N == `sql_date_n`i''
+			quietly count if test_date != `sql_date_target`i''
+			assert r(N) == 0
+		}
+		sort c_1
 		rename * *_pq
 		quietly merge 1:1 _n using "`path_save_root'.dta", nogen
 
@@ -113,6 +136,19 @@ program define in_test_parquet_io_data
 		pq save "`path_save_root'_subset.parquet", replace if(`if_set`i'')
 		
 		pq use "`path_save_root'_subset.parquet", clear
+		capture unab all_vars: *
+		if (_rc) {
+			assert _N == 0
+			di `"No rows matched for `if_set`i'' (save path)"'
+			di _newline(2)
+			continue
+		}
+		if (0`sql_date_case`i'') {
+			assert _N == `sql_date_n`i''
+			quietly count if test_date != `sql_date_target`i''
+			assert r(N) == 0
+		}
+		sort c_1
 		rename * *_pq
 		quietly merge 1:1 _n using "`path_save_root'.dta", nogen
 

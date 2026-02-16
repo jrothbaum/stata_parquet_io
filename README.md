@@ -64,6 +64,9 @@ pq use var1 var2 var3 using filename.parquet, clear
 * Read with observation filtering (using Stata syntax that will be converted to SQL)
 pq use using filename.parquet, clear if(value > 100)
 
+* Date filtering with explicit SQL date parsing (recommended for readability)
+pq use using test_dates.parquet, clear if(my_date = date('01jan2024','%d%b%Y'))
+
 * Read subset of rows
 pq use using filename.parquet, clear in(1/1000)
 
@@ -184,6 +187,11 @@ pq save using /output/partitioned_data, replace partition_by(year region)
 * Control partition overwrite behavior
 pq save using /output/data, replace partition_by(year) nopartitionoverwrite
 ```
+
+Partition folder names preserve the underlying partition variable type:
+
+- integer partitions: `state=1/data_0.parquet`
+- float/double partitions: `state=1.0/data_0.parquet`
 
 ## Data Type Support
 

@@ -22,3 +22,13 @@ test_data/econ_data
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# Local machine-specific test runner config
+AGENTS.md
+scripts/run-stata.ps1
+scripts/run-reset-code.ps1
+*.parquet
+*.dta
+*.py
+*.json
+*.TAG

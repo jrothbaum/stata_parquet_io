@@ -15,7 +15,7 @@ program define create_data
 end
 
 
-create_data, n_cols(5) n_rows(1E9)
+create_data, n_cols(5) n_rows(1E8)
 tempfile tparquet
 
 pq save "`tparquet'.parquet", replace

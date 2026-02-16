@@ -33,7 +33,6 @@ program define in_test_parquet_io_data
 	
 	
 	tempfile path_save_root
-	local path_save_root C:\Users\jonro\Downloads\test_benchmark
 	pq save "`path_save_root'.parquet", replace
 	
 	

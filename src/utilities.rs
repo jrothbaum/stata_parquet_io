@@ -1,5 +1,6 @@
 use std::thread;
 use std::env;
+use std::sync::OnceLock;
 
 pub const DAY_SHIFT_SAS_STATA: i32 = 3653;
 pub const SEC_SHIFT_SAS_STATA: i64 = 315619200;
@@ -8,7 +9,16 @@ pub const SEC_MILLISECOND: i64 = 1_000;
 pub const SEC_MICROSECOND: i64 = 1_000_000;
 pub const SEC_NANOSECOND: i64 = 1_000_000_000;
 
+static THREAD_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
 
+pub fn get_thread_pool(n_threads: usize) -> &'static rayon::ThreadPool {
+    THREAD_POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(n_threads)
+            .build()
+            .expect("Failed to build global thread pool")
+    })
+}
 
 pub fn get_thread_count() -> usize {
     // First try to get the thread count from POLARS_MAX_THREADS env var

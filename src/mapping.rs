@@ -31,8 +31,8 @@ pub enum StataType {
 impl StataType {
     pub fn to_string(&self) -> &'static str {
         match self {
-            StataType::Byte => "int",
-            StataType::Int => "long",
+            StataType::Byte => "byte",
+            StataType::Int => "int",
             StataType::Long => "long",
             StataType::Float => "float",
             StataType::Double => "double",
@@ -56,8 +56,8 @@ pub fn map_polars_to_stata(
         //  Boolean
         DataType::Boolean => StataType::Byte,
         // Integers
-        DataType::Int8 => StataType::Int,
-        DataType::Int16 => StataType::Long,
+        DataType::Int8 => StataType::Byte,
+        DataType::Int16 => StataType::Int,
         DataType::Int32 => StataType::Long,
         DataType::Int64 => StataType::Double, // Only double can contain the set of possible values
         DataType::UInt8 => StataType::Int, 
