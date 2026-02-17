@@ -29,7 +29,8 @@ use stata_interface::{
 use describe::file_summary;
 use read::{
     data_exists,
-    read_to_stata
+    read_to_stata,
+    write_strl_columns_to_dta
 };
 
 
@@ -214,6 +215,45 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     Err(_e) => 198 as i32
                 };
                 return output as ST_retcode;
+            },
+            "write_strl_dta" => {
+                if !data_exists(&subfunction_args[0]) {
+                    stata_interface::display(&format!("File does not exist ({})",subfunction_args[0]));
+                    return 601 as ST_retcode;
+                }
+
+                let safe_relaxed = match subfunction_args[4] {
+                    "0" => false,
+                    "1" => true,
+                    _ => false
+                };
+
+                let asterisk_to_variable_name = if subfunction_args[5].is_empty() {
+                    None
+                } else {
+                    Some(subfunction_args[5])
+                };
+
+                let result = write_strl_columns_to_dta(
+                    subfunction_args[0],  // parquet path
+                    subfunction_args[1],  // dta output path
+                    subfunction_args[2],  // strl column names (space-separated)
+                    subfunction_args[3].parse::<usize>().unwrap(),  // n_rows
+                    subfunction_args[6].parse::<usize>().unwrap(),  // offset
+                    Some(subfunction_args[7]),  // sql_if
+                    safe_relaxed,
+                    asterisk_to_variable_name,
+                    subfunction_args[8].parse::<f64>().unwrap(),   // random_share
+                    subfunction_args[9].parse::<u64>().unwrap(),   // random_seed
+                );
+
+                match result {
+                    Ok(rc) => { return rc as ST_retcode; },
+                    Err(e) => {
+                        display(&format!("Error writing strL .dta: {:?}", e));
+                        return 198 as ST_retcode;
+                    }
+                }
             },
             "if" => {
                 let sql_if = sql_from_if::stata_to_sql(subfunction_args[0] as &str);

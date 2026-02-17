@@ -42,7 +42,8 @@ program compare_files
 		local var_count = `var_count' + 1
 		quietly count if (`vari' != `vari'_pq) | (missing(`vari'_pq) & !missing(`vari'))
 		local n_disagree = r(N)
-		
+		di `vari'[1]
+		di `vari'_pq[1]
 		if ("`do_assert'" != "") {
 			if (`var_count' == 1)	di "Asserting no disagreements"
 			assert `n_disagree' == 0

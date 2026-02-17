@@ -41,7 +41,7 @@ serde = "1.0.228"
 serde_json = "1.0.145"
 glob = "0.3.3"
 regex = "1.12.2"
-polars-readstat-rs = "0.2.2"
+polars-readstat-rs = { path = "C:/Users/jonro/OneDrive/Documents/Coding/polars_readstat_rs" }
 
 # [profile.release]
 # strip = "symbols"  # Remove debug info but keep symbols needed for performance

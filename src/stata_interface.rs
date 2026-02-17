@@ -147,20 +147,22 @@ pub fn read_string_strl(
                 let reported_size = stata_sys::SF_sdatalen(column as i32, row as i32) as usize;
                 let buffer_size = reported_size + 1;
                 let mut buffer = vec![0u8; buffer_size];
-            
+
                 // Call the unsafe FFI function with our buffer
                 stata_sys::SF_strldata(
-                    column as i32, 
-                    row as i32, 
+                    column as i32,
+                    row as i32,
                     buffer.as_mut_ptr() as *mut std::os::raw::c_char,
                     buffer_size as i32
                 );
 
                 // Find the actual length (excluding null terminator)
                 let actual_length = buffer.iter().position(|&b| b == 0).unwrap_or(buffer_size);
-                
+
                 // Create a string only up to the null terminator
-                Ok(String::from_utf8_lossy(&buffer[0..actual_length]).to_string())
+                let s = String::from_utf8_lossy(&buffer[0..actual_length]).to_string();
+
+                Ok(s)
             }
         };
         

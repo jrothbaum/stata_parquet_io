@@ -330,19 +330,63 @@ program pq_use_append
 	else if (`random_share' > 0)						local row_to_read = floor(`random_share'*`row_to_read')
 
 	//	di "local row_to_read = max(0,min(`n_rows',`last_n') - `offset' + (`offset' > 0))"
-	
-	tempfile temp_strl
-	local temp_strl_stub `temp_strl'
-	
+
 	local n_obs_already = _N
-	//	di "local n_obs_after = `n_obs_already' + `row_to_read'"
-	local n_obs_after = `n_obs_already' + `row_to_read'
-	quietly set obs `n_obs_after'
+
+	//	Build list of strL column names from describe output
+	local strl_col_names
+	local non_strl_matched_vars
+	foreach vari in `matched_vars' {
+		local var_number: list posof "`vari'" in vars_in_file
+		local typei `type_`var_number''
+		if ("`typei'" == "strl") {
+			local strl_col_names `strl_col_names' `vari'
+		}
+		else {
+			local non_strl_matched_vars `non_strl_matched_vars' `vari'
+		}
+	}
+
+	//	Tell polars to concatenate file list with "vertical_relaxed"
+	local vertical_relaxed = "`relaxed'" != ""
+	local offset_for_plugin = max(0,`offset' - 1)
+
+	//	Handle strL columns via .dta if any exist
+	local has_strl = "`strl_col_names'" != ""
+	if (`has_strl') {
+		tempfile temp_strl_tmp
+		// Use Stata tempfile location, but force a .dta extension for writer/read compatibility.
+		local temp_strl_dta : subinstr local temp_strl_tmp ".tmp" ".dta", all
+		if ("`temp_strl_dta'" == "`temp_strl_tmp'") {
+			local temp_strl_dta "`temp_strl_tmp'.dta"
+		}
+
+		//	Write strL columns to temp .dta via plugin
+		//	di `"plugin call polars_parquet_plugin, write_strl_dta "`using'" "`temp_strl_dta'" "`strl_col_names'" `row_to_read' `vertical_relaxed' "`asterisk_to_variable'" `offset_for_plugin' "`sql_if'" `random_share' `random_seed'"'
+		plugin call polars_parquet_plugin, write_strl_dta "`using'" "`temp_strl_dta'" "`strl_col_names'" `row_to_read' `vertical_relaxed' "`asterisk_to_variable'" `offset_for_plugin' `"`sql_if'"' `random_share' `random_seed'
+
+		if (!`b_append') {
+			//	use: load the .dta directly
+			use "`temp_strl_dta'", clear
+		}
+		else {
+			//	append: add strL rows to existing data
+			quietly append using "`temp_strl_dta'"
+		}
+		capture erase "`temp_strl_dta'"
+
+		//	Now _N reflects the strL rows; update n_obs_already for append
+		local n_obs_after = _N
+	}
+	else {
+		//	No strL columns - normal flow
+		local n_obs_after = `n_obs_already' + `row_to_read'
+		quietly set obs `n_obs_after'
+	}
 
 	local match_vars_non_binary
 
 	local dropped_vars = 0
-	local strl_var_indexes
 
 	local var_position = 0
 	local rename_count = 0
@@ -352,13 +396,10 @@ program pq_use_append
 		local var_number: list posof "`vari'" in vars_in_file
 		local type `type_`var_number''
 		local string_length `string_length_`var_number''
-		//	di "var_number: `var_number'"
-		//	di "vari: `vari'"
-		//	di "string_length_`var_number': `string_length'"
-			
+
 		//	Set rename_to to nothing
 		local rename_to
-		
+
 		//	Does it need to be renamed?
 		local name_to_create `vari'
 		forvalues i = 1/`n_renamed' {
@@ -370,18 +411,28 @@ program pq_use_append
 				continue, break
 			}
 		}
-		
 
-		//	di "name: 			`name_to_create'"
-		//	di "type: 			`type'"
-		//	di "string_length: 	`string_length'"
-		//	di "pq_gen_or_recast,	name(`name_to_create')			///"
-		//	di "					type_new(`type')				///"
-		//	di "					str_length(`string_length')"
+		//	Skip strL columns - they were already loaded via .dta
+		if ("`type'" == "strl") {
+			//	Handle renames for strL columns loaded from .dta
+			if ("`rename_to'" != "") {
+				capture confirm variable `vari', exact
+				if (_rc == 0) {
+					rename `vari' `name_to_create'
+				}
+				local rename_list `rename_list' `name_to_create'
+				local rename_count = `rename_count' + 1
+				local rename_from_`rename_count' `vari'
+				label variable `name_to_create' "{parquet_name:`vari'}"
+			}
+			//	Don't add strL to match_vars_non_binary - they're not sent to read plugin
+			continue
+		}
+
 		pq_gen_or_recast,	name(`name_to_create')			///
 							type_new(`type')				///
 							str_length(`string_length')
-		
+
 		local keep = 1
 
 		if ("`type'" == "datetime") {
@@ -402,43 +453,40 @@ program pq_use_append
 			local rename_list `rename_list' `name_to_create'
 			local rename_count = `rename_count' + 1
 			local rename_from_`rename_count' `vari'
-			
+
 			label variable `name_to_create' "{parquet_name:`vari'}"
 		}
 
 		if (`keep') {
-			//	di "keeping `vari'"
 			local match_vars_non_binary `match_vars_non_binary' `vari'
 		}
 	}
 
-	
-	//	Make a list of the loaded variables
-	local strl_var_indexes
+
+	//	Make a list of the loaded variables (excluding strL)
 	local n_matched_vars: word count `match_vars_non_binary'
-	
+
 	local i = 0
 	foreach vari of varlist * {
 		//	Actual variable index
 		local i = `i' + 1
 
-		//	vari is the final name, but if it was renamed, we 
+		//	vari is the final name, but if it was renamed, we
 		//		need to get the original value to get the index
 		//		of the variable in the original list
 		local i_rename : list posof "`vari'" in rename_list
 		if (`i_rename' > 0)		local vari_original `rename_from_`i_rename''
 		else					local vari_original `vari'
-		
+
 
 		//	Index of the actual new variables (possible != i for append)
 		local i_matched : list posof "`vari_original'" in match_vars_non_binary
-		
+
 		if (`i_matched' > 0) {
 			local v_to_read_index_`i_matched' `i'
 			local v_to_read_name_`i_matched' `vari'
 			local v_to_read_type_`i_matched': type `vari'
 			local v_to_read_type_`i_matched' = lower("`v_to_read_type_`i_matched''")
-			//	di "v_to_read_type_`i_matched': `v_to_read_type_`i_matched''"
 			//	For getting the polars and polars assigned stata type and passing back to read
 			local i_original : list posof "`vari'" in vars_in_file
 
@@ -447,62 +495,47 @@ program pq_use_append
 				di "check renames"
 			}
 
-			if ("`v_to_read_type_`i_matched''" == "strl") {
-				local strl_var_indexes `strl_var_indexes' `i'
-			}
-			else {
-				//	Get the originally set stata type
-				local v_to_read_type_`i_matched' `type_`i_original''
-			}
+			//	Get the originally set stata type
+			local v_to_read_type_`i_matched' `type_`i_original''
 			//	Get the polars type from the earlier list
 			local v_to_read_p_type_`i_matched' `polars_type_`i_original''
-			
+
 			//	display "`v_to_read_index_`i_matched'': `v_to_read_name_`i_matched'', `v_to_read_type_`i_matched'', `v_to_read_p_type_`i_matched''"
 		}
 	}
 
-	local offset = max(0,`offset' - 1)
-	//	local n_rows = `offset' + `row_to_read'
-
-	//	Tell polars to concatenate file list with "vertical_relaxed"
-	//		so that it can combine different schema types
-	//		to their supertype 
-	//		i.e. if a is an int8 in file 1 and an int16 in file 2,
-	//			it won't throw an error, but make it an int16 in the final file
-	local vertical_relaxed = "`relaxed'" != ""
+	local offset = `offset_for_plugin'
 
 	//	asterisk_to_variable - for files /file/*.parquet, convert
 	//		* to a variable, so /file/2019.parquet, file/2020.parquet
 	//		will have the item in asterisk_to_variable as 2019 and 2020
 	//		for the records on the file
-	//	di `"plugin call polars_parquet_plugin, read "`using'" "`matched_vars'" `row_to_read' `offset' "`sql_if'" "`mapping'" "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed'"' 
-
 
 	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed' `batch_size'
-	//	macro list _all
-	//	di "strl_var_indexes: `strl_var_indexes'"
-	if ("`strl_var_indexes'" != "") {
-		di "Slowly processing strL variables"
-		foreach i in `strl_var_indexes' {
-			local vari = `v_to_read_name_`i_matched''
 
-			
-			forvalues batchi = 1/`n_batches' {
-				local pathi `strl_path_`i'_`batchi''
-				local namei `strl_name_`i'_`batchi''
-				local starti `strl_start_`i'_`batchi''
-				local endi `strl_end_`i'_`batchi''
-
-				//	local starti = `starti' + `n_obs_already'
-
-				if `batchi' == 1 {
-					di "	`namei'"
+	//	Restore original column order
+	if (`has_strl') {
+		//	Build ordered variable list from matched_vars
+		//	(using renamed names where applicable)
+		local ordered_vars
+		foreach vari in `matched_vars' {
+			local rname
+			forvalues ri = 1/`rename_count' {
+				if ("`vari'" == "`rename_from_`ri''") {
+					local pos : list posof "`rename_from_`ri''" in rename_list
+					if (`pos' > 0) {
+						local rname : word `pos' of `rename_list'
+					}
 				}
-
-				//	di `"pq_process_strl, path(`pathi') name(`namei') var_index(`i') first(`starti') last(`endi')"'
-				pq_process_strl, path(`pathi') name(`namei')  var_index(`i') first(`starti') last(`endi')
+			}
+			if ("`rname'" != "") {
+				local ordered_vars `ordered_vars' `rname'
+			}
+			else {
+				local ordered_vars `ordered_vars' `vari'
 			}
 		}
+		capture order `ordered_vars'
 	}
 end
 
@@ -1015,43 +1048,6 @@ program pq_register_plugin
 end
 
 
-capture program drop pq_process_strl
-program pq_process_strl
-	version 16.0
-
-	syntax , 	path(string)			///
-				name(varname)			///
-				var_index(integer)		///
-				first(integer)			///
-				last(integer)
-
-	local first = max(`first',1)
-	//	di `"mata: read_strl_block("`path'", `var_index', `first', `last')"'
-
-	mata: read_strl_block("`path'", `var_index', `first', `last')
-	capture erase "`pathi'"
-end
-
-mata:
-	void read_strl_block(string scalar path,
-						 real scalar var_index,
-						 real scalar first,
-						 real scalar last) {
-		strl_values = cat(path)
-		//	printf("var_index = %f\n", var_index)
-		//	printf("first = %f\n", first)
-		//	printf("last = %f\n", last)
-		//	printf("Number of rows in strl_values = %f\n", rows(strl_values))
-		
-		// Print first few rows
-		//	for (i=1; i<=min((rows(strl_values), 5)); i++) {
-		//		printf("strl_values[%f] = %s\n", i, strl_values[i])
-		//	}
-
-		st_sstore(first::last,var_index,strl_values)		
-	}
-
-end
 
 
 program define pq_convert_path, rclass

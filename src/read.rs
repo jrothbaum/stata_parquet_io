@@ -1,7 +1,5 @@
 use std::path::Path;
 use std::path::PathBuf;
-use std::fs::File;
-use std::io::{BufWriter, Write};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -871,39 +869,7 @@ fn process_batch_with_strategy(
             }
         }
 
-        // if !special_columns.is_empty() {
-        //     display(&format!("Cannot process strL or binary columns: {:?}",special_columns));
-        // }
-         // Then, process special columns (strl/binary) in parallel threads but with sequential row processing
-        if !special_columns.is_empty() {
-            special_columns.into_par_iter()
-                .try_for_each(|(col_idx, col_info)| {
-                    //  let col = batch.column(&col_info.name)?;
-                    
-                    // Process special column sequentially by row
-                    match col_info.stata_type.as_str() {
-                        "strl" => {
-                            process_strl_column(
-                                batch,
-                                &PlSmallStr::from(&col_info.name),
-                                0 as usize,
-                                batch.height(),
-                                start_index,
-                                n_batch + 1,
-                                col_info.index+1,
-                                stata_offset,
-                            )
-                        },
-                        // "binary" => {
-                        //     process_binary_column(col, 0, batch.height(), start_index, col_idx + 1)
-                        // },
-                        _ => {
-                            // Should never get here due to partition filter
-                            Ok(())
-                        }
-                    }
-                })?;
-        }
+        // strL columns are handled by write_strl_columns_to_dta, skip them here
         
         Ok(())
     };
@@ -1015,36 +981,7 @@ fn process_batch_single_thread(
 
 
 
-    if !special_columns.is_empty() {
-        special_columns.iter()
-            .try_for_each(|(col_idx, col_info)| {
-                //  let col = batch.column(&col_info.name)?;
-                
-                // Process special column sequentially by row
-                match col_info.stata_type.as_str() {
-                    "strl" => {
-                        // Process and propagate any error
-                        process_strl_column(
-                            batch,
-                            &PlSmallStr::from(&col_info.name),
-                            0 as usize,
-                            batch.height(),
-                            start_index,
-                            1 as usize,
-                            col_info.index + 1,
-                            stata_offset,
-                        )
-                    },
-                    // "binary" => {
-                    //     process_binary_column(col, 0, batch.height(), start_index, col_idx + 1)
-                    // },
-                    _ => {
-                        // Should never get here due to partition filter
-                        Ok(())
-                    }
-                }
-            })?;
-    }
+    // strL columns are handled by write_strl_columns_to_dta, skip them here
 
     regular_process_out
 }
@@ -1303,99 +1240,88 @@ fn process_numeric_column(
 
 
 
-fn process_strl_column(
-    batch:&DataFrame,
-    column_name: &PlSmallStr,
-    start_row: usize,
-    end_row: usize,
-    start_index: usize,
-    n_batch:usize,
-    col_idx:usize,
-    stata_offset:usize,
-) -> PolarsResult<()> {
-    let start_row = std::cmp::max(start_row,1);
-    let path_stub = get_macro(
-        &"temp_strl_stub",
-        false,
-        None
-    );
+pub fn write_strl_columns_to_dta(
+    path: &str,
+    dta_output_path: &str,
+    strl_column_names: &str,
+    n_rows: usize,
+    offset: usize,
+    sql_if: Option<&str>,
+    safe_relaxed: bool,
+    asterisk_to_variable_name: Option<&str>,
+    random_share: f64,
+    random_seed: u64,
+) -> Result<i32, Box<dyn Error>> {
+    use polars_readstat_rs::stata::writer::StataWriter;
 
-    let path = format!(
-        "{}_{}_{}.csv",
-        path_stub,
-        col_idx,
-        n_batch,
-    );
-    
-    set_macro(
-        &format!(
-            "strl_path_{}_{}",
-            col_idx,
-            n_batch
-        ),
-        &path,
-        false,
-    );
-    set_macro(
-        &format!(
-            "strl_name_{}_{}",
-            col_idx,
-            n_batch
-        ),
-        &column_name,
-        false,
-    );
-
-    set_macro(
-        &format!(
-            "strl_start_{}_{}",
-            col_idx,
-            n_batch
-        ),
-        &(start_row + start_index + stata_offset).to_string(),
-        false,
-    );
-
-    set_macro(
-        &format!(
-            "strl_end_{}_{}",
-            col_idx,
-            n_batch
-        ),
-        &(end_row + start_index + stata_offset).to_string(),
-        false,
-    );
-    let processed = batch.clone().lazy()
-        .select([
-            col(&column_name.to_string())
-                // Encode internal newlines as visible escape sequences
-                .str().replace_all(lit("\n"), lit("\\n"), false) 
-                .str().replace_all(lit("\r"), lit("\\r"), false)
-                .str().replace_all(lit("\""), lit("'"), false)
-                .alias(&column_name.to_string())
-        ])
-        .collect()?;
-
-    let mut writer = BufWriter::new(File::create(PathBuf::from(path)).map_err(|e| {
-        PolarsError::ComputeError(format!("Strl csv create error for {}: {}", column_name, e).into())
-    })?);
-
-    let str_col = processed
-        .column(column_name.as_str())?
-        .str()?;
-
-    for value in str_col.into_iter() {
-        if let Some(text) = value {
-            writer.write_all(text.as_bytes()).map_err(|e| {
-                PolarsError::ComputeError(format!("Strl csv write error for {}: {}", column_name, e).into())
-            })?;
-        }
-        writer.write_all(b"\n").map_err(|e| {
-            PolarsError::ComputeError(format!("Strl csv newline write error for {}: {}", column_name, e).into())
-        })?;
+    // Parse strL column names
+    let strl_cols: Vec<&str> = strl_column_names.split_whitespace().collect();
+    if strl_cols.is_empty() {
+        display("write_strl_dta: no strL columns specified");
+        return Ok(198);
     }
-    writer.flush().map_err(|e| {
-        PolarsError::ComputeError(format!("Strl csv flush error for {}: {}", column_name, e).into())
-    })?;
-    Ok(())
+
+    // Use scan_lazyframe to properly handle glob patterns and other edge cases
+    let df = match scan_lazyframe(path, safe_relaxed, asterisk_to_variable_name) {
+        Ok(lf) => lf,
+        Err(e) => {
+            display(&format!("write_strl_dta: error scanning parquet: {:?}", e));
+            return Ok(198);
+        }
+    };
+
+    // Select only the strL columns (filter to just the columns we need)
+    let strl_exprs: Vec<Expr> = strl_cols.iter().map(|s| col(*s)).collect();
+    let mut df = df.select(strl_exprs);
+
+    // Apply SQL if filter if provided
+    if let Some(sql_filter) = sql_if {
+        if !sql_filter.is_empty() {
+            let mut ctx = SQLContext::new();
+            ctx.register("df", df.clone());
+            df = match ctx.execute(&format!("SELECT * FROM df WHERE {}", sql_filter)) {
+                Ok(lf) => lf,
+                Err(e) => {
+                    display(&format!("write_strl_dta: error in SQL filter: {:?}", e));
+                    return Ok(198);
+                }
+            };
+        }
+    }
+
+    // Apply offset and limit (n_rows)
+    if offset > 0 {
+        df = df.slice(offset as i64, n_rows as u32);
+    } else if n_rows > 0 {
+        df = df.limit(n_rows as u32);
+    }
+
+    // TODO: Apply random sampling if requested (random_share, random_seed)
+
+    // Collect to DataFrame
+    let result_df = df.collect();
+
+    let result_df = match result_df {
+        Ok(df) => df,
+        Err(e) => {
+            display(&format!("write_strl_dta: error collecting dataframe: {:?}", e));
+            return Ok(198);
+        }
+    };
+
+    let n_rows_written = result_df.height();
+
+    // Write FULL dataframe to .dta via StataWriter with explicit settings
+    let writer = StataWriter::new(dta_output_path)
+        .with_compress(false);  // Disable compression to match Python behavior
+
+    if let Err(e) = writer.write_df(&result_df) {
+        display(&format!("write_strl_dta: error writing .dta: {:?}", e));
+        return Ok(198);
+    }
+
+    // Set macro with number of rows written for ado to use
+    set_macro("strl_dta_n_rows", &n_rows_written.to_string(), false);
+
+    Ok(0)
 }

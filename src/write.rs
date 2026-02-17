@@ -1119,11 +1119,11 @@ fn read_single_batch(
     };
     
     let columns = columns_result?;
-    
+
     // Return the DataFrame built from columns
     let columns: Vec<Column> = columns.into_iter().map(Column::from).collect();
     let mut df = DataFrame::new_infer_height(columns)?.lazy();
-    
+
     if let Some(sql_if) = &sds.sql_if {
         if !sql_if.is_empty() {
             let mut ctx = SQLContext::new();
