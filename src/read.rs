@@ -1325,3 +1325,87 @@ pub fn write_strl_columns_to_dta(
 
     Ok(0)
 }
+
+pub fn write_overflow_batch_to_dta(
+    path: &str,
+    dta_output_path: &str,
+    columns: Option<&str>,
+    n_rows: usize,
+    offset: usize,
+    sql_if: Option<&str>,
+    safe_relaxed: bool,
+    asterisk_to_variable_name: Option<&str>,
+    random_share: f64,
+    random_seed: u64,
+) -> Result<i32, Box<dyn Error>> {
+    use polars_readstat_rs::stata::writer::StataWriter;
+
+    // Use scan_lazyframe to properly handle glob patterns and other edge cases
+    let mut df = match scan_lazyframe(path, safe_relaxed, asterisk_to_variable_name) {
+        Ok(lf) => lf,
+        Err(e) => {
+            display(&format!("write_overflow_dta: error scanning parquet: {:?}", e));
+            return Ok(198);
+        }
+    };
+
+    // Select columns if specified
+    if let Some(col_names) = columns {
+        if !col_names.is_empty() {
+            let cols: Vec<&str> = col_names.split_whitespace().collect();
+            let col_exprs: Vec<Expr> = cols.iter().map(|s| col(*s)).collect();
+            df = df.select(col_exprs);
+        }
+    }
+
+    // Apply SQL if filter if provided
+    if let Some(sql_filter) = sql_if {
+        if !sql_filter.is_empty() {
+            let mut ctx = SQLContext::new();
+            ctx.register("df", df.clone());
+            df = match ctx.execute(&format!("SELECT * FROM df WHERE {}", sql_filter)) {
+                Ok(lf) => lf,
+                Err(e) => {
+                    display(&format!("write_overflow_dta: error in SQL filter: {:?}", e));
+                    return Ok(198);
+                }
+            };
+        }
+    }
+
+    // Apply offset and limit (n_rows)
+    if offset > 0 {
+        df = df.slice(offset as i64, n_rows as u32);
+    } else if n_rows > 0 {
+        df = df.limit(n_rows as u32);
+    }
+
+    // TODO: Apply random sampling if requested (random_share, random_seed)
+
+    // Collect to DataFrame
+    let result_df = df.collect();
+
+    let result_df = match result_df {
+        Ok(df) => df,
+        Err(e) => {
+            display(&format!("write_overflow_dta: error collecting dataframe: {:?}", e));
+            return Ok(198);
+        }
+    };
+
+    let n_rows_written = result_df.height();
+
+    // Write FULL dataframe to .dta via StataWriter with explicit settings
+    let writer = StataWriter::new(dta_output_path)
+        .with_compress(false);  // Disable compression to match Python behavior
+
+    if let Err(e) = writer.write_df(&result_df) {
+        display(&format!("write_overflow_dta: error writing .dta: {:?}", e));
+        return Ok(198);
+    }
+
+    // Set macro with number of rows written for ado to use
+    set_macro("overflow_dta_n_rows", &n_rows_written.to_string(), false);
+
+    Ok(0)
+}

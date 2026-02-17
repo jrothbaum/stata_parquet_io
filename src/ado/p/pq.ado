@@ -205,6 +205,7 @@ program pq_use_append
 						random_share(real 0.0)	///
 						random_seed(integer 0)	///
 						batch_size(integer 1000000)	///
+						max_obs_per_batch(integer 0)	///
 						drop(string)			///
 						drop_strl					///
 						append]
@@ -232,7 +233,12 @@ program pq_use_append
 		display as error `"Acceptable options for parallelize are "columns", "rows", and "", passed "`parallelize'""'
 		exit 198
 	}
-	
+
+	// Set default for max_obs_per_batch if not specified
+	if (`max_obs_per_batch' == 0) {
+		local max_obs_per_batch = 2147483647  // i32::MAX
+	}
+
 	if ("`in'" != "") {
 		local offset = substr("`in'", 1, strpos("`in'", "/") -1)
 		local offset = max(`offset',0)
@@ -350,6 +356,20 @@ program pq_use_append
 	//	Tell polars to concatenate file list with "vertical_relaxed"
 	local vertical_relaxed = "`relaxed'" != ""
 	local offset_for_plugin = max(0,`offset' - 1)
+
+	//	Check if batching is needed due to observation limit
+	local needs_batching = (`row_to_read' > `max_obs_per_batch')
+
+	if (`needs_batching') {
+		//	Large dataset detected - split into two batches
+		display as text "Large dataset detected: `row_to_read' rows > `max_obs_per_batch' limit"
+		display as text "Processing in 2 batches..."
+
+		//	BATCH 1: First max_obs_per_batch rows via normal flow
+		local row_to_read_first = `max_obs_per_batch'
+		local original_row_to_read = `row_to_read'
+		local row_to_read = `row_to_read_first'
+	}
 
 	//	Handle strL columns via .dta if any exist
 	local has_strl = "`strl_col_names'" != ""
@@ -536,6 +556,46 @@ program pq_use_append
 			}
 		}
 		capture order `ordered_vars'
+	}
+
+	//	BATCH 2: Overflow rows via .dta append (if batching was needed)
+	if (`needs_batching') {
+		display as text "Batch 1 complete. Processing overflow batch..."
+
+		//	Calculate overflow parameters
+		local overflow_offset = `offset_for_plugin' + `max_obs_per_batch'
+		local overflow_count = `original_row_to_read' - `max_obs_per_batch'
+
+		//	Create temp file for overflow .dta
+		tempfile temp_overflow_tmp
+		local temp_overflow_dta : subinstr local temp_overflow_tmp ".tmp" ".dta", all
+		if ("`temp_overflow_dta'" == "`temp_overflow_tmp'") {
+			local temp_overflow_dta "`temp_overflow_tmp'.dta"
+		}
+
+		//	Build column list for overflow (all matched vars, including strL)
+		local overflow_columns `matched_vars'
+
+		//	Set up relax option for overflow call
+		if ("`relaxed'" != "") {
+			local relax_opt "relax"
+		}
+		else {
+			local relax_opt ""
+		}
+
+		//	Call helper to write overflow batch to .dta
+		pq_write_overflow_dta, using("`using'") output("`temp_overflow_dta'") ///
+			offset(`overflow_offset') n_rows(`overflow_count') ///
+			columns("`overflow_columns'") if_clause(`"`sql_if'"') ///
+			`relax_opt' asterisk_to_variable("`asterisk_to_variable'") ///
+			random_share(`random_share') random_seed(`random_seed')
+
+		//	Append the overflow .dta
+		quietly append using "`temp_overflow_dta'"
+		capture erase "`temp_overflow_dta'"
+
+		display as text "Overflow batch complete. Total rows loaded: `=_N'"
 	}
 end
 
@@ -1009,6 +1069,25 @@ program pq_save
 end
 
 
+capture program drop pq_write_overflow_dta
+program pq_write_overflow_dta
+	syntax, using(string) output(string) offset(integer) n_rows(integer) ///
+	        columns(string) [if_clause(string) relax asterisk_to_variable(string) ///
+	        random_share(real 0) random_seed(integer 0)]
+
+	// Set up relax flag
+	if ("`relax'" != "") {
+		local b_relax 1
+	}
+	else {
+		local b_relax 0
+	}
+
+	// Call plugin to write overflow rows to .dta
+	// This writes ALL columns (both strL and non-strL) for the overflow slice
+	// Args: parquet_path, dta_output, columns, n_rows, offset, sql_if, relax, asterisk_to_variable, random_share, random_seed
+	plugin call polars_parquet_plugin, write_overflow_dta "`using'" "`output'" "`columns'" `n_rows' `offset' `"`if_clause'"' `b_relax' "`asterisk_to_variable'" `random_share' `random_seed'
+end
 
 
 capture program drop pq_register_plugin
