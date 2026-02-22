@@ -1,22 +1,21 @@
 clear all
 
+tempfile tparquet
+
 // Create a test dataset with 2500 rows
 set obs 2500
 gen id = _n
 gen value = "row_" + string(id)
 gen number = id * 1.5
 
-// Show first few rows
-list in 1/5
-
 // Save to parquet
-pq save "test_batching.parquet", replace
+pq save "`tparquet'.parquet", replace
 
 // Test loading with batching (max_obs_per_batch = 1000)
 clear
 di ""
 di "Testing batch loading with max_obs_per_batch(1000)..."
-pq use "test_batching.parquet", clear max_obs_per_batch(1000)
+pq use "`tparquet'.parquet", clear max_obs_per_batch(1000)
 
 // Verify all rows loaded
 di ""

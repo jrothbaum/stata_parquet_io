@@ -140,4 +140,18 @@ assert_stats, n(10000) sum_c1(50005000) sum_year(`ref_sum_year') sum_c5(`ref_sum
 	label("Test 3b: stream do_not_reload + directory use")
 
 
+//	----------------------------------------------------------------------
+//	Test 4: stream (without do_not_reload) → data reloaded after chunks
+//	----------------------------------------------------------------------
+//	Re-create reference data with the same seed so stats are identical.
+set seed 20240101
+create_data, n_rows(10000) n_cols(6)
+
+pq save "`tparquet'.parquet", replace chunk(1000) stream
+
+//	After stream without do_not_reload, dataset should be reloaded intact.
+assert_stats, n(10000) sum_c1(50005000) sum_year(`ref_sum_year') sum_c5(`ref_sum_c5') ///
+	label("Test 4: stream (reload) + data intact after write")
+
+
 di as result "All tests PASSED"
