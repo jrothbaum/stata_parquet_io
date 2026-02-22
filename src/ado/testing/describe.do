@@ -50,6 +50,14 @@ program define test_file
 	
 	local n_columns = r(n_columns)
 	local n_rows = r(n_rows)
+	if `n_columns' != `n_columns_stata' {
+		di as error "pq describe: column count mismatch: `n_columns' (pq) vs `n_columns_stata' (stata)"
+		exit 9
+	}
+	if `n_rows' != `n_rows_stata' {
+		di as error "pq describe: row count mismatch: `n_rows' (pq) vs `n_rows_stata' (stata)"
+		exit 9
+	}
 	// Define column widths
 	local col1width 25
 	local col2width 25

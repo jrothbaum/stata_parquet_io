@@ -23,14 +23,11 @@ use std::ptr;
 use stata_interface::{
     display,
     ST_retcode,
-    ST_plugin,
-    SD_PLUGINVER
 };
 use describe::file_summary;
 use read::{
     data_exists,
     read_to_stata,
-    write_strl_columns_to_dta,
     write_overflow_batch_to_dta
 };
 
@@ -124,6 +121,9 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     Some(subfunction_args[8])
                 };
 
+                let strl_col_names = if subfunction_args.len() > 14 { subfunction_args[14] } else { "" };
+                let strl_dta_path  = if subfunction_args.len() > 15 { subfunction_args[15] } else { "" };
+
                 let read_result = read_to_stata(
                     subfunction_args[0],
                     subfunction_args[1],
@@ -139,12 +139,18 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     subfunction_args[11].parse::<f64>().unwrap(),
                     subfunction_args[12].parse::<u64>().unwrap(),
                     subfunction_args[13].parse::<usize>().unwrap(),
+                    strl_col_names,
+                    strl_dta_path,
                 );
         
                 // Use match to handle the Result
                 match read_result {
-                    Ok(_) => {
-                        //  Do nothing
+                    Ok(0) => {
+                        //  Success — do nothing
+                    },
+                    Ok(rc) => {
+                        //  Non-zero Ok means a recoverable error was already displayed
+                        return rc as ST_retcode;
                     },
                     Err(e) => {
                         display(&format!("Error reading the file = {:?}",e));
@@ -196,6 +202,8 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
 
                 let compress = subfunction_args[10].parse::<u8>().unwrap() != 0;
                 let compress_string = subfunction_args[11].parse::<u8>().unwrap() != 0;
+                let quietly = subfunction_args[12].parse::<u8>().unwrap() != 0;
+                let append_to_partition = subfunction_args[13].parse::<u8>().unwrap() != 0;
                 
                 let output = match write::write_from_stata(
                     path,
@@ -210,51 +218,14 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     compression_level,
                     overwrite_partition,
                     compress,
-                    compress_string
+                    compress_string,
+                    quietly,
+                    append_to_partition
                 ) {
                     Ok(_) => 0 as i32,
                     Err(_e) => 198 as i32
                 };
                 return output as ST_retcode;
-            },
-            "write_strl_dta" => {
-                if !data_exists(&subfunction_args[0]) {
-                    stata_interface::display(&format!("File does not exist ({})",subfunction_args[0]));
-                    return 601 as ST_retcode;
-                }
-
-                let safe_relaxed = match subfunction_args[4] {
-                    "0" => false,
-                    "1" => true,
-                    _ => false
-                };
-
-                let asterisk_to_variable_name = if subfunction_args[5].is_empty() {
-                    None
-                } else {
-                    Some(subfunction_args[5])
-                };
-
-                let result = write_strl_columns_to_dta(
-                    subfunction_args[0],  // parquet path
-                    subfunction_args[1],  // dta output path
-                    subfunction_args[2],  // strl column names (space-separated)
-                    subfunction_args[3].parse::<usize>().unwrap(),  // n_rows
-                    subfunction_args[6].parse::<usize>().unwrap(),  // offset
-                    Some(subfunction_args[7]),  // sql_if
-                    safe_relaxed,
-                    asterisk_to_variable_name,
-                    subfunction_args[8].parse::<f64>().unwrap(),   // random_share
-                    subfunction_args[9].parse::<u64>().unwrap(),   // random_seed
-                );
-
-                match result {
-                    Ok(rc) => { return rc as ST_retcode; },
-                    Err(e) => {
-                        display(&format!("Error writing strL .dta: {:?}", e));
-                        return 198 as ST_retcode;
-                    }
-                }
             },
             "write_overflow_dta" => {
                 if !data_exists(&subfunction_args[0]) {
@@ -302,13 +273,41 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     }
                 }
             },
+            "clean_path" => {
+                let path = subfunction_args[0];
+                let create_dir = subfunction_args[1].parse::<i32>().unwrap() == 1;
+                let overwrite_partition = true;
+
+                let delete_error = write::delete_existing_files(path, overwrite_partition);
+                if delete_error > 0 {
+                    return delete_error as ST_retcode;
+                }
+
+                if create_dir {
+                    if let Err(e) = std::fs::create_dir_all(path) {
+                        display(&format!("Failed to create directory {}: {}", path, e));
+                        return 198 as ST_retcode;
+                    }
+                }
+            },
+            "consolidate" => {
+                let path = subfunction_args[0];
+                let output = match write::consolidate_parquet_dir(path) {
+                    Ok(rc) => rc,
+                    Err(e) => {
+                        display(&format!("Error consolidating parquet directory: {:?}", e));
+                        198
+                    }
+                };
+                return output as ST_retcode;
+            },
             "if" => {
                 let sql_if = sql_from_if::stata_to_sql(subfunction_args[0] as &str);
                 stata_interface::set_macro("sql_if", &sql_if, false);
                 
             },
             _ => {
-                stata_interface::display(&format!("Error: Unknown subfunction '{}'\n\0", subfunction_name));
+                stata_interface::display(&format!("Error: Unknown subfunction '{}'", subfunction_name));
                 return 198 as ST_retcode;
             },
         }

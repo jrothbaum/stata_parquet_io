@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::fs::File;
 use polars::prelude::{NamedFrom, TimeUnit};
 use polars::prelude::*;
-use polars::io::parquet::write::BatchedWriter;
 use polars_sql::SQLContext;
 use rayon::prelude::*;
 use std::error::Error;
@@ -31,6 +30,7 @@ use crate::utilities::{
     determine_parallelization_strategy,
 };
 
+#[allow(dead_code)]
 fn adaptive_write_batch_size(requested_rows: usize, n_cols: usize, n_rows: usize) -> usize {
     if n_rows == 0 {
         return 1;
@@ -58,6 +58,8 @@ pub fn write_from_stata(
     overwrite_partition: bool,
     compress:bool,
     compress_string: bool,
+    quietly: bool,
+    append_to_partition: bool,
 ) -> Result<i32,Box<dyn Error>> {
     let variables_as_str = if variables_as_str == "" || variables_as_str == "from_macro" {
         &get_macro("varlist", false,  Some(1024 * 1024 * 10))
@@ -161,19 +163,10 @@ pub fn write_from_stata(
             compression_level,
             &partition_by,
             compress,
-            compress_string
+            compress_string,
+            quietly,
+            append_to_partition
         )
-        // save_partitioned(
-        //     path, 
-        //     lf_unwrapped, 
-        //     compression,
-        //     compression_level,
-        //     &partition_by,
-        //     compress,
-        //     compress_string,
-        // )
-        // display("Error: hive partition not implemented yet");
-        // return Ok(198);
     } else {
         save_no_partition(
             path, 
@@ -182,6 +175,7 @@ pub fn write_from_stata(
             compression_level,
             compress,
             compress_string,
+            quietly
         )
     }
 }
@@ -195,6 +189,8 @@ fn save_partitioned(
     partition_by:&Vec<PlSmallStr>,
     compress:bool,
     compress_string: bool,
+    quietly: bool,
+    append_to_partition: bool,
 )  -> Result<i32,Box<dyn Error>> {
     let mut df = match lf.collect() {
         Err(e) => {
@@ -238,6 +234,8 @@ fn save_partitioned(
         partition_by,
         false,
         false,
+        quietly,
+        append_to_partition,
     )
 
     // let partition_variant = PartitionVariant::ByKey {
@@ -289,6 +287,22 @@ fn format_partition_float(value: f64) -> String {
 }
 
 
+fn next_partition_file_index(partition_dir: &PathBuf) -> usize {
+    let mut max_idx: Option<usize> = None;
+    if let Ok(entries) = std::fs::read_dir(partition_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str().map(|s| s.to_string()) {
+                if let Some(stem) = name.strip_prefix("data_").and_then(|s| s.strip_suffix(".parquet")) {
+                    if let Ok(n) = stem.parse::<usize>() {
+                        max_idx = Some(max_idx.map_or(n, |m: usize| m.max(n)));
+                    }
+                }
+            }
+        }
+    }
+    max_idx.map_or(0, |m| m + 1)
+}
+
 fn save_partitioned_sequential(
     path: &str,
     lf: LazyFrame,
@@ -297,6 +311,8 @@ fn save_partitioned_sequential(
     partition_by: &Vec<PlSmallStr>,
     compress: bool,
     compress_string: bool,
+    quietly: bool,
+    append_to_partition: bool,
 ) -> Result<i32, Box<dyn Error>> {
     let pqo = parquet_options(compression, compression_level);
     
@@ -311,8 +327,9 @@ fn save_partitioned_sequential(
         })?;
     
     let total_partitions = partition_values_df.height();
-    display(&format!("Processing {} partitions sequentially", total_partitions));
-    
+    if !quietly {
+        _ = display(&format!("Processing {} partitions sequentially", total_partitions));
+    }
     // Process each partition sequentially
     for partition_idx in 0..total_partitions {
         // Get the partition values for this row
@@ -347,9 +364,8 @@ fn save_partitioned_sequential(
                 AnyValue::Int64(i) => col(col_name.clone()).eq(lit(i)),
                 AnyValue::Float64(f) => col(col_name.clone()).eq(lit(f)),
                 AnyValue::Float32(f) => col(col_name.clone()).eq(lit(f)),
-                AnyValue::Boolean(b) => col(col_name.clone()).eq(lit(b)),
                 AnyValue::Date(d) => col(col_name.clone()).eq(lit(d)),
-                AnyValue::Datetime(dt, tu, tz) => col(col_name.clone()).eq(lit(dt)),
+                AnyValue::Datetime(dt, _tu, _tz) => col(col_name.clone()).eq(lit(dt)),
                 _ => {
                     return Err(format!("Unsupported partition value type for column {}: {:?}", col_name, value).into());
                 }
@@ -382,22 +398,29 @@ fn save_partitioned_sequential(
         // Build the full partition path
         let partition_dir = PathBuf::from(path).join(partition_path_parts.join("/"));
         
-        // Delete existing partition directory if it exists
-        if partition_dir.exists() {
-            display(&format!("Removing existing partition: {}", partition_dir.display()));
-            std::fs::remove_dir_all(&partition_dir)
+        if append_to_partition {
+            // Just ensure the directory exists; keep existing files
+            std::fs::create_dir_all(&partition_dir)
                 .map_err(|e| {
-                    display(&format!("Failed to remove partition directory {}: {}", partition_dir.display(), e));
+                    display(&format!("Failed to create partition directory {}: {}", partition_dir.display(), e));
+                    e
+                })?;
+        } else {
+            // Delete existing partition directory if it exists
+            if partition_dir.exists() {
+                display(&format!("Removing existing partition: {}", partition_dir.display()));
+                std::fs::remove_dir_all(&partition_dir)
+                    .map_err(|e| {
+                        display(&format!("Failed to remove partition directory {}: {}", partition_dir.display(), e));
+                        e
+                    })?;
+            }
+            std::fs::create_dir_all(&partition_dir)
+                .map_err(|e| {
+                    display(&format!("Failed to create partition directory {}: {}", partition_dir.display(), e));
                     e
                 })?;
         }
-        
-        // Create partition directory
-        std::fs::create_dir_all(&partition_dir)
-            .map_err(|e| {
-                display(&format!("Failed to create partition directory {}: {}", partition_dir.display(), e));
-                e
-            })?;
         
         // Filter data for this partition
         let mut partition_lf = lf.clone();
@@ -429,7 +452,8 @@ fn save_partitioned_sequential(
         }
         
         // Generate a unique filename for this partition
-        let partition_file = partition_dir.join("data_0.parquet");
+        let file_idx = if append_to_partition { next_partition_file_index(&partition_dir) } else { 0 };
+        let partition_file = partition_dir.join(format!("data_{}.parquet", file_idx));
         let file = File::create(&partition_file).map_err(|e| {
             display(&format!("Partition file create error for {}: {}", partition_dir.display(), e));
             e
@@ -439,18 +463,23 @@ fn save_partitioned_sequential(
             e
         })?;
         
-        display(&format!("Saved partition {}/{}: {}", 
-                        partition_idx + 1, 
-                        total_partitions, 
-                        partition_dir.display()));
+        if !quietly {
+            _ = display(&format!("Saved partition {}/{}: {}", 
+                            partition_idx + 1, 
+                            total_partitions, 
+                            partition_dir.display()));
+        }
     }
     
-    display(&format!("All {} partitions saved to {}", total_partitions, path));
+    if !quietly {
+        _ = display(&format!("All {} partitions saved to {}", total_partitions, path));
+    }
+    
     Ok(0)
 }
 
 
-fn delete_existing_files(
+pub fn delete_existing_files(
     path:&str,
     overwrite_partition: bool,
 ) -> i32 {
@@ -486,6 +515,52 @@ fn delete_existing_files(
     0
 }
 
+
+pub fn consolidate_parquet_dir(path: &str) -> Result<i32, Box<dyn Error>> {
+    let dir_path = Path::new(path);
+    if !dir_path.is_dir() {
+        display(&format!("Error: {} is not a directory", path));
+        return Ok(198);
+    }
+
+    let glob_pattern = format!("{}/*.parquet", path.replace('\\', "/"));
+
+    let scan_args = ScanArgsParquet::default();
+    let lf = match LazyFrame::scan_parquet(glob_pattern.as_str().into(), scan_args) {
+        Ok(lf) => lf,
+        Err(e) => {
+            display(&format!("Error scanning parquet files in {}: {}", path, e));
+            return Ok(198);
+        }
+    };
+
+    // Write to a temp file next to the directory, then swap
+    let temp_path = format!("{}_consolidating.parquet", path);
+
+    let pqo = parquet_options("zstd", None);
+    let mut df = match lf.collect() {
+        Ok(df) => df,
+        Err(e) => {
+            display(&format!("Error collecting parquet data: {}", e));
+            return Ok(198);
+        }
+    };
+
+    let file = File::create(&temp_path)?;
+    if let Err(e) = pqo.to_writer(file).finish(&mut df) {
+        let _ = std::fs::remove_file(&temp_path);
+        display(&format!("Error writing consolidated parquet: {}", e));
+        return Ok(198);
+    }
+
+    // Remove the directory
+    std::fs::remove_dir_all(dir_path)?;
+
+    // Rename temp file to the original path
+    std::fs::rename(&temp_path, path)?;
+
+    Ok(0)
+}
 
 fn is_hive_style_parquet_directory(path: &Path) -> bool {
     fn check_recursive(dir: &Path) -> Result<bool, std::io::Error> {
@@ -530,10 +605,11 @@ fn save_no_partition(
     compression_level:Option<usize>,
     compress:bool,
     compress_string: bool,
+    quietly: bool,
 ) -> Result<i32,Box<dyn Error>> {
 
     if compress | compress_string {
-        let mut df = match lf.collect() {
+        let df = match lf.collect() {
             Ok(df_ok) => df_ok,
             Err(e) => {
                 display(&format!("Parquet collect error: {}", e));
@@ -579,7 +655,10 @@ fn save_no_partition(
                 display(&format!("Parquet write error: {}", e));
                 return Ok(198);
             }
-            display(&format!("File saved to {}", path));
+
+            if !quietly {
+                let _ = display(&format!("File saved to {}", path));
+            }
             Ok(0)
         }
     }
@@ -810,6 +889,7 @@ where
 pub struct StataDataScan {
     current_offset: Arc<Mutex<usize>>,
     n_rows: usize,
+    #[allow(dead_code)]
     batch_size: usize,
     schema: Schema,
     column_info:Vec<mapping::StataColumnInfo>,

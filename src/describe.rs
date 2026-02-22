@@ -61,7 +61,7 @@ pub fn file_summary(
             downcast_config
         ) {
             Ok(lf) => lf,
-            Err(e) => {
+            Err(_e) => {
                 display("Error on compress");
                 return 198;
             }

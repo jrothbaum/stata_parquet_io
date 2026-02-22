@@ -2028,7 +2028,7 @@ dependencies = [
 
 [[package]]
 name = "polars-readstat-rs"
-version = "0.2.5"
+version = "0.2.8"
 dependencies = [
  "byteorder",
  "chrono",
@@ -2866,12 +2866,11 @@ version = "1.0.0"
 dependencies = [
  "bindgen",
  "cc",
- "libc",
 ]
 
 [[package]]
 name = "stata_parquet_io"
-version = "1.9.1"
+version = "2.0.0"
 dependencies = [
  "env_logger",
  "glob",

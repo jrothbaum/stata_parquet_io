@@ -55,7 +55,7 @@ fn main() {
             "macos" => "-DSYSTEM=APPLEMAC",
             _ => "-DSYSTEM=OPUNIX"
         })
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks))
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()
         .expect("Unable to generate bindings");
     

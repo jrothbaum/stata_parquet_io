@@ -1,5 +1,6 @@
 *! pq - read/write parquet files with stata
-*! Version 1.9.1 - Fix parquet->stata integer cast overflow bug
+*! Version 2.0.0 - Fix float32 compress, improve strL (string) load, allow large file load/save
+*! 		   1.9.1 - Fix parquet->stata integer cast overflow bug
 *!         1.9.0 - Vastly simplified use/append code to make it easier to manage and debug.  No change to API/function signature or functionality
 *! 		   1.8.0 - Fix pq append for subsets of variables, add settable batch_size *
 *! 		   1.7.4 - fix str length bug for special characters (str lengths is number of bytes not characters) *
@@ -251,6 +252,17 @@ program pq_use_append
 	
 	//	Process the if statement, if passed
 	if (`"`if'"' != "") {
+		//	Detect Stata date functions: parquet stores dates as Unix epoch
+		//	(01jan1970) but td(), tc(), etc. use Stata epoch (01jan1960).
+		//	Passing them raw to SQL produces silently wrong results (issue #37).
+		if (regexm(`"`if'"', "t[cdwmqhC]\(")) {
+			di as error "if() expression contains a Stata date function (td, tc, tC, tw, tm, tq, or th)."
+			di as error "Parquet dates use Unix epoch (01jan1970); Stata date functions use 01jan1960."
+			di as error "Use Polars date/datetime literals instead, e.g.:"
+			di as error `"  %td (daily date): if(date_col >= date('01jan2020','%d%b%Y'))"'
+			di as error `"  %tc (datetime):   if(dt_col >= TIMESTAMP '2020-01-01 00:00:00')"'
+			exit 198
+		}
 		local greater_than = strpos(`"`if'"', ">") > 0
 		if (`greater_than') {
 			di as error "pq will interpret > as in SQL, which is different than Stata."
@@ -339,13 +351,26 @@ program pq_use_append
 
 	local n_obs_already = _N
 
-	//	Build list of strL column names from describe output
+	//	Build list of strL column names from describe output.
+	//	A column is treated as strL if ANY of:
+	//	  (a) parquet describe says type is "strl"
+	//	  (b) parquet max string length > 2045 bytes (DTA_MAX_STR)
+	//	  (c) the existing Stata variable is already strL (for append)
 	local strl_col_names
 	local non_strl_matched_vars
 	foreach vari in `matched_vars' {
 		local var_number: list posof "`vari'" in vars_in_file
 		local typei `type_`var_number''
-		if ("`typei'" == "strl") {
+		local str_len_i `string_length_`var_number''
+
+		//	Check if existing Stata variable is strL (Stata returns "strL" with capital L)
+		local ti
+		capture confirm variable `vari', exact
+		if _rc == 0 {
+			local ti : type `vari'
+		}
+
+		if (("`typei'" == "strl") | (`str_len_i' > 2045) | (lower("`ti'") == "strl")) {
 			local strl_col_names `strl_col_names' `vari'
 		}
 		else {
@@ -360,6 +385,11 @@ program pq_use_append
 	//	Check if batching is needed due to observation limit
 	local needs_batching = (`row_to_read' > `max_obs_per_batch')
 
+	if (`needs_batching' & `random_share' > 0) {
+		di as error "random_n/random_share is not supported when the dataset exceeds `max_obs_per_batch' rows (overflow batching)."
+		exit 198
+	}
+
 	if (`needs_batching') {
 		//	Large dataset detected - split into two batches
 		display as text "Large dataset detected: `row_to_read' rows > `max_obs_per_batch' limit"
@@ -372,35 +402,28 @@ program pq_use_append
 	}
 
 	//	Handle strL columns via .dta if any exist
+	//	The strl .dta is written as a side effect of the read plugin call below,
+	//	so sampling is guaranteed consistent between strl and non-strl columns.
 	local has_strl = "`strl_col_names'" != ""
+	local temp_strl_dta
 	if (`has_strl') {
 		tempfile temp_strl_tmp
-		// Use Stata tempfile location, but force a .dta extension for writer/read compatibility.
 		local temp_strl_dta : subinstr local temp_strl_tmp ".tmp" ".dta", all
 		if ("`temp_strl_dta'" == "`temp_strl_tmp'") {
 			local temp_strl_dta "`temp_strl_tmp'.dta"
 		}
-
-		//	Write strL columns to temp .dta via plugin
-		//	di `"plugin call polars_parquet_plugin, write_strl_dta "`using'" "`temp_strl_dta'" "`strl_col_names'" `row_to_read' `vertical_relaxed' "`asterisk_to_variable'" `offset_for_plugin' "`sql_if'" `random_share' `random_seed'"'
-		plugin call polars_parquet_plugin, write_strl_dta "`using'" "`temp_strl_dta'" "`strl_col_names'" `row_to_read' `vertical_relaxed' "`asterisk_to_variable'" `offset_for_plugin' `"`sql_if'"' `random_share' `random_seed'
-
-		if (!`b_append') {
-			//	use: load the .dta directly
-			use "`temp_strl_dta'", clear
-		}
-		else {
-			//	append: add strL rows to existing data
-			quietly append using "`temp_strl_dta'"
-		}
-		capture erase "`temp_strl_dta'"
-
-		//	Now _N reflects the strL rows; update n_obs_already for append
-		local n_obs_after = _N
 	}
-	else {
-		//	No strL columns - normal flow
-		local n_obs_after = `n_obs_already' + `row_to_read'
+
+	//	Detect all-strL append: when every matched variable is strL, the plugin
+	//	writes only temp_strl_dta (no Stata matrix writes) so we skip `set obs'.
+	//	Blob collision is prevented by the Rust writer using n_obs_already as an
+	//	offset for the `o` identifier, so the new blobs start at n_obs_already+1.
+	local n_strl_matched: word count `strl_col_names'
+	local n_matched_total: word count `matched_vars'
+	local all_strl_append = (`b_append' & `n_matched_total' > 0 & `n_matched_total' == `n_strl_matched')
+
+	local n_obs_after = `n_obs_already' + `row_to_read'
+	if (!`all_strl_append') {
 		quietly set obs `n_obs_after'
 	}
 
@@ -432,8 +455,10 @@ program pq_use_append
 			}
 		}
 
-		//	Skip strL columns - they were already loaded via .dta
-		if ("`type'" == "strl") {
+		//	Skip columns designated as strL - they are loaded via .dta.
+		//	This includes parquet type "strl" and promoted long strings.
+		local is_strl_col : list posof "`vari'" in strl_col_names
+		if ("`type'" == "strl" | `is_strl_col' > 0) {
 			//	Handle renames for strL columns loaded from .dta
 			if ("`rename_to'" != "") {
 				capture confirm variable `vari', exact
@@ -487,7 +512,7 @@ program pq_use_append
 	local n_matched_vars: word count `match_vars_non_binary'
 
 	local i = 0
-	foreach vari of varlist * {
+	if `n_matched_vars' > 0 foreach vari of varlist * {
 		//	Actual variable index
 		local i = `i' + 1
 
@@ -510,10 +535,6 @@ program pq_use_append
 			//	For getting the polars and polars assigned stata type and passing back to read
 			local i_original : list posof "`vari'" in vars_in_file
 
-			if (`i_original' == 0) {
-				//	Check renames
-				di "check renames"
-			}
 
 			//	Get the originally set stata type
 			local v_to_read_type_`i_matched' `type_`i_original''
@@ -531,12 +552,43 @@ program pq_use_append
 	//		will have the item in asterisk_to_variable as 2019 and 2020
 	//		for the records on the file
 
-	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed' `batch_size'
+	//	strl col names and dta path are passed so the plugin writes the strl .dta
+	//	in the same scan as the non-strl columns (consistent sampling)
+	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed' `batch_size' "`strl_col_names'" "`temp_strl_dta'"
 
-	//	Restore original column order
+	//	Merge strL columns from .dta written by plugin into the current dataset
+	//	The .dta always contains _pq_strl_key (1-based row index) added by Rust.
 	if (`has_strl') {
-		//	Build ordered variable list from matched_vars
-		//	(using renamed names where applicable)
+		if (`n_matched_vars' == 0) {
+			//	All variables are strL; `set obs' was skipped for the append path.
+			if (!`b_append') {
+				//	Non-append: dataset is empty, load the strL .dta directly.
+				quietly use "`temp_strl_dta'", clear
+			}
+			else {
+				//	All-strL append: blob `o` values in temp_strl_dta are offset by
+				//	n_obs_already (done in Rust), so they can't collide with the master.
+				quietly append using "`temp_strl_dta'"
+			}
+			capture erase "`temp_strl_dta'"
+		}
+		else if (!`b_append') {
+			//	Mixed strL + non-strL, non-append: gen key=_n, merge, drop key.
+			quietly capture drop _pq_strl_key
+			quietly gen long _pq_strl_key = _n
+			quietly merge 1:1 _pq_strl_key using "`temp_strl_dta'", nogen
+		}
+		else {
+			//	Mixed strL + non-strL, append: gen key=_n, merge update, drop key.
+			quietly capture drop _pq_strl_key
+			quietly gen long _pq_strl_key = _n
+			quietly merge 1:1 _pq_strl_key using "`temp_strl_dta'", update nogen
+		}
+		//	Drop the key column that Rust added (present in all paths after use/merge/append)
+		quietly capture drop _pq_strl_key
+		capture erase "`temp_strl_dta'"
+
+		//	Restore original column order
 		local ordered_vars
 		foreach vari in `matched_vars' {
 			local rname
@@ -887,6 +939,10 @@ program pq_save
 						   NOPARTITIONOVERWRITE				///
 						   compress							///
 						   compress_string_to_numeric		///
+						   chunk(integer 2147483647)		///
+						   stream							///
+						   CONSolidate						///
+						   DO_not_reload					///
 						   label 							///	
 						   ]	//	in(string) 
         
@@ -899,6 +955,10 @@ program pq_save
 		exit 198
 	}
 	
+	if "`do_not_reload'" != "" & "`stream'" == "" {
+		di as text "note: do_not_reload ignored without stream"
+	}
+
 	if `compression_level' != -1 {
 		local check_compression_level = 0
 		if inlist("`compression'", "", "zstd") {
@@ -984,7 +1044,7 @@ program pq_save
 		local str_length 0
 		
 		
-		if ((substr("`typei'",1,3) == "str") & ("`typei'" != "strl")) {
+		if ((substr("`typei'",1,3) == "str") & (lower("`typei'") != "strl")) {
 			local str_length = substr("`typei'",4,.)
 			local typei String
 		}
@@ -1043,18 +1103,104 @@ program pq_save
 	else {
 		local sql_if
 	}
-	
-	
-	
+
+
+
 	local offset = max(0,`offset' - 1)
 	
 	local overwrite_partition = "`nopartitionoverwrite'" == ""
 	local b_compress = "`compress'" != ""
 	local b_compress_string_to_numeric = "`compress_string_to_numeric'" != ""
 	
-	//	di `"plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' "`sql_if'" "`StataColumnInfo'" "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric'"'
-	plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' `"`sql_if'"' `"`StataColumnInfo'"' "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric'
 
+
+	local n_rows = _N
+
+	if (`n_rows' > `chunk') {
+		if ("`partition_by'" != "") & (`b_compress' | `b_compress_string_to_numeric') {
+			di "Compression disabled for chunked writing as the schema could vary for each chunk"
+			di "	which can cause errors for parquet reads"
+
+			local b_compress = 0
+			local b_compress_string_to_numeric = 0
+		}
+
+
+		* check and delete file
+		local needs_dir = "`partition_by'" == ""
+		plugin call polars_parquet_plugin, clean_path "`using'" `needs_dir'
+		
+		local n_chunks = ceil(`n_rows'/`chunk')
+		di "Writing file in `n_chunks' chunks of up to `=strtrim(string(`chunk',"%20.0gc"))' rows"
+
+		if ("`stream'" != "") {
+			di "	streaming, save temporary file"
+			tempfile save_for_chunks
+			quietly save "`save_for_chunks'"
+		}
+		else {
+			tempname save_for_chunks
+			capture frame drop `save_for_chunks'
+			quietly frame
+			local original_frame = r(currentframe)
+		}
+
+		local chunk_suffix
+		
+		local end_row = `offset'
+		forvalues i = 1/`n_chunks' {
+			if ("`partition_by'" == "")	local chunk_suffix /data_`i'.parquet
+
+			local overwrite_partition = `overwrite_partition' & (`i' == 1)
+
+			local start_row = `end_row' + 1
+			local end_row = `start_row' + `chunk' - 1
+			local end_row = min(`end_row', `n_rows')
+			local rows_to_read = `end_row' - `start_row' + 1
+
+			if ("`stream'" != "") {
+				di "	chunk `i': loading rows `start_row'-`end_row'
+				quietly use `varlist' in `start_row'/`end_row' using "`save_for_chunks'" 
+			}
+			else {
+				di "	chunk `i': creating frame with rows `start_row'-`end_row'
+				frame put `varlist' in `start_row'/`end_row', into(`save_for_chunks')
+
+				frame change `save_for_chunks'
+			}
+
+			//	di "`using'`chunk_suffix'"
+			plugin call polars_parquet_plugin, save "`using'`chunk_suffix'" "from_macro" `rows_to_read' 0 `"`sql_if'"' `"`StataColumnInfo'"' "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric' 1 `overwrite_partition'
+
+
+			if ("`stream'" == "") {
+				frame change `original_frame'
+				capture frame drop `save_for_chunks'
+			}
+			
+		}
+
+		if ("`partition_by'" == "") & ("`consolidate'" != "") {
+			di "	consolidating chunked file into a single file"
+			plugin call polars_parquet_plugin, consolidate "`using'"
+		}
+		if ("`stream'" != "") {
+			if ("`do_not_reload'" == "") {
+				di "	streaming finished, reload data"
+				quietly use "`save_for_chunks'", clear
+			}
+			else {
+				clear
+				di "	streaming finished, do_not_reload set, so data not reloaded"
+			}
+			capture erase `save_for_chunks'.dta
+		}
+
+	}
+	else {
+		//	di `"plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' "`sql_if'" "`StataColumnInfo'" "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric' 0"'
+		plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' `"`sql_if'"' `"`StataColumnInfo'"' "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric' 0 0
+	}
 
 
 	//	Reset the labeled variables to their original value

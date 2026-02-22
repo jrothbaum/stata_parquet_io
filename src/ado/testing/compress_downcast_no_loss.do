@@ -28,3 +28,5 @@ foreach v in byte_candidate int_candidate long_candidate double_candidate {
 }
 
 assert (abs(frac_candidate - frac_candidate_pq) < 1e-12) | (missing(frac_candidate) & missing(frac_candidate_pq))
+
+describe

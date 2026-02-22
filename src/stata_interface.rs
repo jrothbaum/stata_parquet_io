@@ -1,7 +1,4 @@
-use std::io::{
-    Error,
-    ErrorKind
-};
+use std::io::Error;
 
 pub use stata_sys::{
     _stata_,

@@ -56,20 +56,34 @@ timer clear
 timer on 1
 pq use "`tparquet'.parquet", clear parallelize(columns) compress
 timer off 1
+assert _N == 100000
 
 clear
 timer on 2
 pq use "`tparquet'.parquet", clear parallelize(rows)
 timer off 2
+assert _N == 100000
 
 di "1:	Columns"
 di "2:	Rows"
 timer list
 
-pq use * using "`tparquet'.parquet", clear 
+pq use * using "`tparquet'.parquet", clear
+assert _N == 100000
+confirm variable c_1
+confirm variable c_10
 sum
 pq use c_* using "`tparquet'.parquet", clear
+assert _N == 100000
+confirm variable c_1
+confirm variable c_10
 pq use c_1* c_4 using "`tparquet'.parquet", clear
+assert _N == 100000
+confirm variable c_1
+confirm variable c_10
+confirm variable c_4
+capture confirm variable c_2
+assert _rc != 0
 
 sum
 
@@ -79,16 +93,21 @@ forvalues i=1/10 {
 	di c_1[`i']
 	di c_2[`i']
 }
+assert c_2[1] == "A"
 
 pq use "`tparquet'.parquet", clear sort(-c_2 -c_1)
 forvalues i=1/10 {
 	di c_1[`i']
 	di c_2[`i']
 }
+assert c_2[1] == "E"
 
 
 
 pq use * using "`tparquet'.parquet", clear compress
+assert _N == 100000
+local c4type: type c_4
+assert "`c4type'" == "byte"
 describe
 sum
 
@@ -113,12 +132,16 @@ clear
 pq describe "`tparquet'_*.parquet", asterisk_to_variable(year)
 return list
 pq use "`tparquet'_*.parquet", clear asterisk_to_variable(year)
+assert _N == 200
+confirm variable year
 
 sum
 pq use "`tparquet'_2018.parquet", clear
+assert _N == 100
 sum
 describe
 pq append "`tparquet'_2019.parquet", compress
+assert _N == 200
 sum
 describe
 
@@ -133,9 +156,11 @@ pq save "`tparquet'_merge.parquet", replace
 
 pq use "`tparquet'_2018.parquet", clear
 pq merge 1:1 c_1 using "`tparquet'_merge.parquet"
+assert _N == 100
 
 pq use "`tparquet'_2018.parquet", clear
 pq merge 1:1 _n using "`tparquet'_merge.parquet", compress
+assert _N == 100
 
 
 

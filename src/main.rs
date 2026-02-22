@@ -3,9 +3,12 @@
 // static GLOBAL: Jemalloc = Jemalloc;
 
 //  use log::{debug, info, warn, error};
-use log::debug;
+
+#[cfg(debug_assertions)]
 use env_logger::Builder;
-use std::{env, io::Write};
+
+#[cfg(debug_assertions)]
+use std::io::Write;
 
 
 pub mod read;
@@ -19,13 +22,8 @@ pub mod downcast;
 #[cfg(debug_assertions)]
 mod sql_from_if;
 
-
-use describe::file_summary; 
-use crate::read::{  
-    scan_lazyframe,
-    read_to_stata,
-    data_exists
-};
+#[cfg(debug_assertions)]
+use crate::read::data_exists;
  
 
 

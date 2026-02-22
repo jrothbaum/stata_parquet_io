@@ -39,6 +39,7 @@ use crate::downcast::apply_cast;
 
 // Trait for converting Polars values to Stata values
 
+#[allow(dead_code)]
 trait ToStataValue {
     fn to_stata_value(&self) -> Option<f64>;
 }
@@ -122,6 +123,7 @@ impl ToStataValue for f64 {
 }
 
 // Special type for handling dates
+#[allow(dead_code)]
 struct DateValue(i32);
 impl ToStataValue for DateValue {
     #[inline(always)]
@@ -131,6 +133,7 @@ impl ToStataValue for DateValue {
 }
 
 // Special type for handling time
+#[allow(dead_code)]
 struct TimeValue(i64);
 
 impl ToStataValue for TimeValue {
@@ -142,6 +145,7 @@ impl ToStataValue for TimeValue {
 
 
 // Special type for handling datetime
+#[allow(dead_code)]
 struct DatetimeValue(i64, TimeUnit);
 
 impl ToStataValue for DatetimeValue {
@@ -227,12 +231,12 @@ fn has_parquet_files_in_hive_structure(dir_path: &str) -> bool {
         if let Ok(mut paths) = glob(&pattern) {
             if let Some(first_file) = paths.next() {
                 match first_file {
-                    Ok(file_path) => {
-                        //  display(&format!("=== DEBUG: Found hive file: {:?}", file_path));
+                    Ok(_file_path) => {
+                        //  display(&format!("=== DEBUG: Found hive file: {:?}", _file_path));
                         return true;
                     },
-                    Err(e) => {
-                        //  display(&format!("=== DEBUG: Error reading file in pattern {}: {:?}", pattern, e));
+                    Err(_e) => {
+                        //  display(&format!("=== DEBUG: Error reading file in pattern {}: {:?}", pattern, _e));
                     }
                 }
             }
@@ -278,9 +282,9 @@ fn is_valid_glob_pattern(glob_path: &str) -> bool {
             
             !found_files.is_empty()
         },
-        Err(e) => {
+        Err(_e) => {
             #[cfg(debug_assertions)]
-            println!("Glob error for pattern '{}': {:?}", normalized_pattern, e);
+            println!("Glob error for pattern '{}': {:?}", normalized_pattern, _e);
             false
         }
     }
@@ -541,13 +545,15 @@ pub fn read_to_stata(
     sql_if: Option<&str>,
     mapping: &str,
     parallel_strategy: Option<ParallelizationStrategy>,
-    safe_relaxed: bool, 
+    safe_relaxed: bool,
     asterisk_to_variable_name: Option<&str>,
     sort:&str,
     stata_offset:usize,
     random_share:f64,
     random_seed:u64,
     batch_size:usize,
+    strl_col_names: &str,
+    strl_dta_path: &str,
 ) -> Result<i32, Box<dyn Error>> {
 
     // Handle empty variable list by getting from macros
@@ -716,6 +722,67 @@ pub fn read_to_stata(
     };
     
     //  display(&format!("Processing with strategy: {:?}, threads: {}", strategy, n_threads));
+    // When strl columns are present, collect the full frame once so that strl and
+    // non-strl see exactly the same rows (including any random sampling already applied).
+    // The strl columns are written to a .dta file; non-strl continue via sink_batches.
+    let has_strl = !strl_col_names.is_empty() && !strl_dta_path.is_empty();
+    let (write_lf, write_slice_offset, write_slice_n_rows): (LazyFrame, i64, u32) = if has_strl {
+        let strl_col_vec: Vec<&str> = strl_col_names.split_whitespace().collect();
+
+        let full_df = match df.clone()
+            .slice(offset as i64, n_rows as u32)
+            .collect()
+        {
+            Ok(d) => d,
+            Err(e) => {
+                display(&format!("Error collecting frame for strl write: {:?}", e));
+                return Ok(198);
+            }
+        };
+
+        let strl_only = match full_df.select(strl_col_vec.as_slice()) {
+            Ok(d) => d,
+            Err(e) => {
+                display(&format!("Error selecting strl columns: {:?}", e));
+                return Ok(198);
+            }
+        };
+
+        // Add absolute row-index key (stata_offset+1 .. stata_offset+n_strl) so
+        // Stata can do `gen _pq_strl_key = _n` in memory and merge 1:1 without
+        // any negative-key tricks.  For pq use (stata_offset=0) keys are 1..N;
+        // for pq append (stata_offset=n_obs_already) keys are n_obs_already+1..n_obs_after.
+        let n_strl = strl_only.height() as i32;
+        let key_start = stata_offset as i32 + 1;
+        let key_series = Series::new(
+            "_pq_strl_key".into(),
+            (key_start..=key_start + n_strl - 1).collect::<Vec<i32>>(),
+        );
+        let strl_with_key = match strl_only.hstack(&[key_series.into_column()]) {
+            Ok(d) => d,
+            Err(e) => {
+                display(&format!("Error adding key column to strl frame: {:?}", e));
+                return Ok(198);
+            }
+        };
+
+        {
+            use polars_readstat_rs::stata::writer::StataWriter;
+            let writer = StataWriter::new(strl_dta_path)
+                .with_compress(false);
+            if let Err(e) = writer.write_df(&strl_with_key) {
+                display(&format!("Error writing strl .dta: {:?}", e));
+                return Ok(198);
+            }
+        }
+        set_macro("strl_dta_n_rows", &full_df.height().to_string(), false);
+
+        // Non-strl: already sliced, so pass 0 / MAX through to sink_batches
+        (full_df.lazy(), 0i64, u32::MAX)
+    } else {
+        (df, offset as i64, n_rows as u32)
+    };
+
     let all_columns_ref = Arc::new(all_columns);
     let row_offset = Arc::new(AtomicUsize::new(0));
     let batch_counter = Arc::new(AtomicUsize::new(0));
@@ -726,9 +793,9 @@ pub fn read_to_stata(
     let read_pool_cb = thread_pool;
     let chunk_size = NonZeroUsize::new(effective_batch_size);
 
-    let sink_lf = match df
+    let sink_lf = match write_lf
         .select(&columns)
-        .slice(offset as i64, n_rows as u32)
+        .slice(write_slice_offset, write_slice_n_rows)
         .sink_batches(
             PlanCallback::new(move |batch: DataFrame| {
                 let start_index = row_offset_cb.fetch_add(batch.height(), Ordering::SeqCst);
@@ -828,7 +895,7 @@ fn process_batch_with_strategy(
     all_columns: &Vec<ColumnInfo>,
     strategy: ParallelizationStrategy,
     n_threads: usize,
-    n_batch:usize,
+    _n_batch:usize,
     stata_offset:usize,
     thread_pool: Option<&rayon::ThreadPool>,
 ) -> PolarsResult<()> {
@@ -842,13 +909,13 @@ fn process_batch_with_strategy(
     }
 
     // Partition columns into special (strl/binary) and regular columns
-    let (special_columns, 
+    let (_special_columns,
          regular_columns): (Vec<_>, Vec<_>) = all_columns.iter().enumerate()
         .partition(|(_, col_info)| {
             col_info.stata_type == "strl" || col_info.stata_type == "binary"
         });
 
-    
+
     let run = || -> PolarsResult<()> {
         // First, process regular columns with the chosen strategy
         if !regular_columns.is_empty() {
@@ -869,8 +936,8 @@ fn process_batch_with_strategy(
             }
         }
 
-        // strL columns are handled by write_strl_columns_to_dta, skip them here
-        
+        // strL columns are written to .dta inside read_to_stata, skip them here
+
         Ok(())
     };
 
@@ -916,7 +983,7 @@ fn process_regular_by_column(
 ) -> PolarsResult<()> {
     // Process columns in parallel
     columns.par_iter().enumerate()
-        .try_for_each(|(col_idx, col_info)| {
+        .try_for_each(|(_col_idx, col_info)| {
             // Get the column by name
             let col = match batch.column(&col_info.name) {
                 Ok(c) => c,
@@ -969,11 +1036,11 @@ fn process_batch_single_thread(
     // Process all rows for all columns in a single thread
     set_macro("n_batches", "1", false);
 
-    let (special_columns, regular_columns): (Vec<_>, Vec<_>) = all_columns.iter().enumerate()
+    let (_special_columns, regular_columns): (Vec<_>, Vec<_>) = all_columns.iter().enumerate()
         .partition(|(_, col_info)| {
             col_info.stata_type == "strl" || col_info.stata_type == "binary"
         });
-        
+
     let regular_column_infos: Vec<ColumnInfo> = regular_columns.iter()
                 .map(|(_, col_info)| (*col_info).clone())
                 .collect();
@@ -981,7 +1048,7 @@ fn process_batch_single_thread(
 
 
 
-    // strL columns are handled by write_strl_columns_to_dta, skip them here
+    // strL columns are written to .dta inside read_to_stata, skip them here
 
     regular_process_out
 }
@@ -996,7 +1063,7 @@ fn process_row_range(
     stata_offset: usize,
 ) -> PolarsResult<()> {
     // Iterate through each column
-    for (col_idx, col_info) in all_columns.iter().enumerate() {
+    for (_col_idx, col_info) in all_columns.iter().enumerate() {
         // Get the column by name
         let col = batch.column(&col_info.name)?;
         
@@ -1114,7 +1181,7 @@ fn process_numeric_column(
     col_idx: usize,
     stata_offset: usize,
 ) -> PolarsResult<()> {
-    let mut write_number = |row_idx: usize, value: Option<f64>| {
+    let write_number = |row_idx: usize, value: Option<f64>| {
         let global_row_idx = row_idx + start_index;
         replace_number(value, global_row_idx + 1 + stata_offset, col_idx);
     };
@@ -1240,92 +1307,6 @@ fn process_numeric_column(
 
 
 
-pub fn write_strl_columns_to_dta(
-    path: &str,
-    dta_output_path: &str,
-    strl_column_names: &str,
-    n_rows: usize,
-    offset: usize,
-    sql_if: Option<&str>,
-    safe_relaxed: bool,
-    asterisk_to_variable_name: Option<&str>,
-    random_share: f64,
-    random_seed: u64,
-) -> Result<i32, Box<dyn Error>> {
-    use polars_readstat_rs::stata::writer::StataWriter;
-
-    // Parse strL column names
-    let strl_cols: Vec<&str> = strl_column_names.split_whitespace().collect();
-    if strl_cols.is_empty() {
-        display("write_strl_dta: no strL columns specified");
-        return Ok(198);
-    }
-
-    // Use scan_lazyframe to properly handle glob patterns and other edge cases
-    let df = match scan_lazyframe(path, safe_relaxed, asterisk_to_variable_name) {
-        Ok(lf) => lf,
-        Err(e) => {
-            display(&format!("write_strl_dta: error scanning parquet: {:?}", e));
-            return Ok(198);
-        }
-    };
-
-    // Select only the strL columns (filter to just the columns we need)
-    let strl_exprs: Vec<Expr> = strl_cols.iter().map(|s| col(*s)).collect();
-    let mut df = df.select(strl_exprs);
-
-    // Apply SQL if filter if provided
-    if let Some(sql_filter) = sql_if {
-        if !sql_filter.is_empty() {
-            let mut ctx = SQLContext::new();
-            ctx.register("df", df.clone());
-            df = match ctx.execute(&format!("SELECT * FROM df WHERE {}", sql_filter)) {
-                Ok(lf) => lf,
-                Err(e) => {
-                    display(&format!("write_strl_dta: error in SQL filter: {:?}", e));
-                    return Ok(198);
-                }
-            };
-        }
-    }
-
-    // Apply offset and limit (n_rows)
-    if offset > 0 {
-        df = df.slice(offset as i64, n_rows as u32);
-    } else if n_rows > 0 {
-        df = df.limit(n_rows as u32);
-    }
-
-    // TODO: Apply random sampling if requested (random_share, random_seed)
-
-    // Collect to DataFrame
-    let result_df = df.collect();
-
-    let result_df = match result_df {
-        Ok(df) => df,
-        Err(e) => {
-            display(&format!("write_strl_dta: error collecting dataframe: {:?}", e));
-            return Ok(198);
-        }
-    };
-
-    let n_rows_written = result_df.height();
-
-    // Write FULL dataframe to .dta via StataWriter with explicit settings
-    let writer = StataWriter::new(dta_output_path)
-        .with_compress(false);  // Disable compression to match Python behavior
-
-    if let Err(e) = writer.write_df(&result_df) {
-        display(&format!("write_strl_dta: error writing .dta: {:?}", e));
-        return Ok(198);
-    }
-
-    // Set macro with number of rows written for ado to use
-    set_macro("strl_dta_n_rows", &n_rows_written.to_string(), false);
-
-    Ok(0)
-}
-
 pub fn write_overflow_batch_to_dta(
     path: &str,
     dta_output_path: &str,
@@ -1335,8 +1316,8 @@ pub fn write_overflow_batch_to_dta(
     sql_if: Option<&str>,
     safe_relaxed: bool,
     asterisk_to_variable_name: Option<&str>,
-    random_share: f64,
-    random_seed: u64,
+    _random_share: f64,
+    _random_seed: u64,
 ) -> Result<i32, Box<dyn Error>> {
     use polars_readstat_rs::stata::writer::StataWriter;
 

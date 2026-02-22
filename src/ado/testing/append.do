@@ -161,12 +161,42 @@ foreach typei in `var_types' {
 	}
 }
 
+assert _N == 2 * `n_rows'
+di as text "Row count: PASSED (_N = `=_N')"
+
+//	Expected string lengths per type
+local len_strL  = 3000		//	two 1500-char ralpha strings concatenated
+local len_str1  = 1
+local len_str10 = 10
+
 foreach typei in `var_types_str' {
 	foreach typej in `var_types_str' {
+		//	No missing values
 		quietly count if missing(`typei'_`typej')
-		di "`typei'_`typej': " r(N)
+		if r(N) != 0 {
+			di as error "`typei'_`typej': `=r(N)' missing values — FAILED"
+			exit 9
+		}
+
+		//	Correct length in pq1 rows (rows 1..n_rows, type determined by typei)
+		quietly count if strlen(`typei'_`typej') != `len_`typei'' & _n <= `n_rows'
+		if r(N) != 0 {
+			di as error "`typei'_`typej': `=r(N)' pq1 rows have wrong length (expected `len_`typei'') — FAILED"
+			exit 9
+		}
+
+		//	Correct length in pq2 rows (rows n_rows+1..2*n_rows, type determined by typej)
+		quietly count if strlen(`typei'_`typej') != `len_`typej'' & _n > `n_rows'
+		if r(N) != 0 {
+			di as error "`typei'_`typej': `=r(N)' pq2 rows have wrong length (expected `len_`typej'') — FAILED"
+			exit 9
+		}
+
+		di as text "`typei'_`typej': PASSED (no missing; len_pq1=`len_`typei''; len_pq2=`len_`typej'')"
 	}
 }
+
+di as result "All append string tests PASSED"
 
 
 capture erase "`t_save'.parquet"
