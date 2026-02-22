@@ -44,11 +44,11 @@ regex = "1.12.2"
 polars-readstat-rs = "0.2.8"
 # polars-readstat-rs = { path = "C:/Users/jonro/OneDrive/Documents/Coding/polars_readstat_rs" }
 
-# [profile.release]
-# strip = "symbols"  # Remove debug info but keep symbols needed for performance
-# panic = "unwind"     # Default panic behavior (often better for libraries)
-# lto = "fat"         # More aggressive link-time optimization for speed
-# codegen-units = 1   # Fewer codegen units allow more optimization
+[profile.release]
+strip = "symbols"  # Remove debug info but keep symbols needed for performance
+panic = "unwind"     # Default panic behavior (often better for libraries)
+lto = "fat"         # More aggressive link-time optimization for speed
+codegen-units = 1   # Fewer codegen units allow more optimization
 
 [profile.dev]
 split-debuginfo = "packed"
