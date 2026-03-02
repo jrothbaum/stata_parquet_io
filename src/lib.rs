@@ -26,6 +26,7 @@ use stata_interface::{
 };
 use describe::file_summary;
 use read::{
+    InputFormat,
     data_exists,
     read_to_stata,
     write_overflow_batch_to_dta
@@ -123,6 +124,14 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
 
                 let strl_col_names = if subfunction_args.len() > 14 { subfunction_args[14] } else { "" };
                 let strl_dta_path  = if subfunction_args.len() > 15 { subfunction_args[15] } else { "" };
+                let format_arg = if subfunction_args.len() > 16 { subfunction_args[16] } else { "parquet" };
+                let input_format = match InputFormat::from_str(format_arg) {
+                    Some(f) => f,
+                    None => {
+                        display(&format!("Unsupported input format: {}", format_arg));
+                        return 198 as ST_retcode;
+                    }
+                };
 
                 let read_result = read_to_stata(
                     subfunction_args[0],
@@ -141,6 +150,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     subfunction_args[13].parse::<usize>().unwrap(),
                     strl_col_names,
                     strl_dta_path,
+                    input_format,
                 );
         
                 // Use match to handle the Result
@@ -169,6 +179,14 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 } else {
                     Some(subfunction_args[4])
                 };
+                let format_arg = if subfunction_args.len() > 7 { subfunction_args[7] } else { "parquet" };
+                let input_format = match InputFormat::from_str(format_arg) {
+                    Some(f) => f,
+                    None => {
+                        display(&format!("Unsupported input format: {}", format_arg));
+                        return 198 as ST_retcode;
+                    }
+                };
                 return file_summary(
                         subfunction_args[0],
                         subfunction_args[1].parse::<u8>().unwrap() != 0,
@@ -178,6 +196,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                         asterisk_to_variable_name,
                         subfunction_args[5].parse::<u8>().unwrap() != 0,
                         subfunction_args[6].parse::<u8>().unwrap() != 0,
+                        input_format,
                     ) as ST_retcode;
             },
             "save" => {
@@ -204,6 +223,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 let compress_string = subfunction_args[11].parse::<u8>().unwrap() != 0;
                 let quietly = subfunction_args[12].parse::<u8>().unwrap() != 0;
                 let append_to_partition = subfunction_args[13].parse::<u8>().unwrap() != 0;
+                let output_format = if subfunction_args.len() > 14 { subfunction_args[14] } else { "parquet" };
                 
                 let output = match write::write_from_stata(
                     path,
@@ -220,7 +240,8 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     compress,
                     compress_string,
                     quietly,
-                    append_to_partition
+                    append_to_partition,
+                    output_format,
                 ) {
                     Ok(_) => 0 as i32,
                     Err(_e) => 198 as i32
@@ -244,6 +265,14 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 } else {
                     Some(subfunction_args[7])
                 };
+                let format_arg = if subfunction_args.len() > 10 { subfunction_args[10] } else { "parquet" };
+                let input_format = match InputFormat::from_str(format_arg) {
+                    Some(f) => f,
+                    None => {
+                        display(&format!("Unsupported input format: {}", format_arg));
+                        return 198 as ST_retcode;
+                    }
+                };
 
                 // Handle columns parameter (may be empty)
                 let columns = if subfunction_args[2].is_empty() {
@@ -263,6 +292,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     asterisk_to_variable_name,
                     subfunction_args[8].parse::<f64>().unwrap(),   // random_share
                     subfunction_args[9].parse::<u64>().unwrap(),   // random_seed
+                    input_format,
                 );
 
                 match result {

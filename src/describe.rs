@@ -1,5 +1,7 @@
 use polars::prelude::*;
 use polars_sql::SQLContext;
+use polars_readstat_rs::{readstat_metadata_json, ReadStatFormat};
+use serde_json::Value;
 
 
 use crate::mapping::schema_with_stata_types;
@@ -10,6 +12,7 @@ use crate::stata_interface:: {
 };
 
 use crate::read::{
+    InputFormat,
     cast_catenum_to_string, 
     scan_lazyframe    
 };
@@ -28,12 +31,14 @@ pub fn file_summary(
     asterisk_to_variable_name: Option<&str>,
     compress: bool,
     compress_string_to_numeric: bool,
+    input_format: InputFormat,
 ) -> i32 {
     
     let mut df = match scan_lazyframe(
         &path,
         safe_relaxed,
         asterisk_to_variable_name,
+        input_format,
     ) {
         Ok(df) => df,
         Err(e) => {
@@ -76,7 +81,8 @@ pub fn file_summary(
     };
     
     //  display(&format!("schema: {:?}", schema));
-    if let Some(sql) = sql_if.filter(|s| !s.trim().is_empty()) {
+    let sql_filter = sql_if.filter(|s| !s.trim().is_empty());
+    if let Some(sql) = sql_filter {
         let mut ctx = SQLContext::new();
         ctx.register("df", df);
         
@@ -102,7 +108,11 @@ pub fn file_summary(
 
     
     let n_vars = schema.len();
-    let n_rows = get_row_count(&df).unwrap();
+    let n_rows = if sql_filter.is_none() {
+        get_metadata_row_count(path, input_format).unwrap_or_else(|| get_row_count(&df).unwrap())
+    } else {
+        get_row_count(&df).unwrap()
+    };
     
     //  Return scalars of the number of columns and rows 
     let _ = set_macro("n_columns", &(format!("{}",n_vars)), false);
@@ -115,7 +125,25 @@ pub fn file_summary(
     }
 
     return 0 as ST_retcode;
-} 
+}
+
+fn readstat_format_for_input(input_format: InputFormat) -> Option<ReadStatFormat> {
+    match input_format {
+        InputFormat::Sas => Some(ReadStatFormat::Sas),
+        InputFormat::Spss => Some(ReadStatFormat::Spss),
+        _ => None,
+    }
+}
+
+fn get_metadata_row_count(path: &str, input_format: InputFormat) -> Option<usize> {
+    let format = readstat_format_for_input(input_format)?;
+    let metadata_json = readstat_metadata_json(path, Some(format)).ok()?;
+    let metadata: Value = serde_json::from_str(&metadata_json).ok()?;
+    metadata
+        .get("row_count")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+}
 
 pub fn get_schema(path:&str) -> PolarsResult<Schema> {
     let mut scan_args = ScanArgsParquet::default();

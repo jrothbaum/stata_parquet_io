@@ -60,6 +60,7 @@ pub fn write_from_stata(
     compress_string: bool,
     quietly: bool,
     append_to_partition: bool,
+    output_format: &str,
 ) -> Result<i32,Box<dyn Error>> {
     let variables_as_str = if variables_as_str == "" || variables_as_str == "from_macro" {
         &get_macro("varlist", false,  Some(1024 * 1024 * 10))
@@ -147,37 +148,126 @@ pub fn write_from_stata(
     let lf_unwrapped = lf.unwrap();
 
 
-    let delete_error = delete_existing_files(
-        path,
-        overwrite_partition,
-    );
+    let output_format_normalized = output_format.to_ascii_lowercase();
 
-    if delete_error > 0 {
-        return Ok(delete_error);
-    }
-    if partition_by.len() > 0 {
-        save_partitioned(
+    if output_format_normalized == "parquet" {
+        let delete_error = delete_existing_files(
             path,
-            lf_unwrapped,
-            compression,
-            compression_level,
-            &partition_by,
-            compress,
-            compress_string,
-            quietly,
-            append_to_partition
-        )
+            overwrite_partition,
+        );
+
+        if delete_error > 0 {
+            return Ok(delete_error);
+        }
+        if partition_by.len() > 0 {
+            save_partitioned(
+                path,
+                lf_unwrapped,
+                compression,
+                compression_level,
+                &partition_by,
+                compress,
+                compress_string,
+                quietly,
+                append_to_partition
+            )
+        } else {
+            save_no_partition(
+                path, 
+                lf_unwrapped, 
+                compression,
+                compression_level,
+                compress,
+                compress_string,
+                quietly
+            )
+        }
     } else {
-        save_no_partition(
-            path, 
-            lf_unwrapped, 
-            compression,
-            compression_level,
-            compress,
-            compress_string,
-            quietly
-        )
+        if !partition_by.is_empty() {
+            display("partition_by() is only supported for parquet output");
+            return Ok(198);
+        }
+
+        let delete_error = delete_existing_non_parquet(path);
+        if delete_error > 0 {
+            return Ok(delete_error);
+        }
+
+        let mut df = match lf_unwrapped.collect() {
+            Ok(df) => df,
+            Err(e) => {
+                display(&format!("Collect error before {} write: {}", output_format_normalized, e));
+                return Ok(198);
+            }
+        };
+
+        if compress || compress_string {
+            let mut down_config = downcast::DowncastConfig::default();
+            down_config.check_strings = compress_string;
+            down_config.prefer_int_over_float = compress;
+            df = match downcast::intelligent_downcast_df(df, None, None, down_config) {
+                Ok(df_ok) => df_ok,
+                Err(e) => {
+                    display(&format!("Downcast/compress error before {} write: {}", output_format_normalized, e));
+                    return Ok(198);
+                }
+            };
+        }
+
+        match output_format_normalized.as_str() {
+            "spss" => {
+                let writer = polars_readstat_rs::SpssWriter::new(path);
+                if let Err(e) = writer.write_df(&df) {
+                    display(&format!("SPSS write error: {}", e));
+                    return Ok(198);
+                }
+            }
+            "csv" => {
+                let mut file = match File::create(path) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        display(&format!("CSV file create error: {}", e));
+                        return Ok(198);
+                    }
+                };
+
+                if let Err(e) = CsvWriter::new(&mut file).include_header(true).finish(&mut df) {
+                    display(&format!("CSV write error: {}", e));
+                    return Ok(198);
+                }
+            }
+            _ => {
+                display(&format!("Unsupported output format: {}", output_format));
+                return Ok(198);
+            }
+        }
+
+        if !quietly {
+            let _ = display(&format!("File saved to {}", path));
+        }
+        Ok(0)
     }
+}
+
+fn delete_existing_non_parquet(path: &str) -> i32 {
+    let path_obj = Path::new(path);
+    if !path_obj.exists() {
+        return 0;
+    }
+
+    if path_obj.is_dir() {
+        display(&format!("Error: {} is a directory; expected a file path", path));
+        return 198;
+    }
+
+    if let Err(e) = std::fs::remove_file(path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            display(&format!("Failed to remove existing file {}: {}", path, e));
+            return 198;
+        }
+    }
+
+    0
 }
 
 

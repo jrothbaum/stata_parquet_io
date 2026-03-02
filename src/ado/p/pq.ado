@@ -19,6 +19,15 @@ program define pq
 		//	pq_use_append `0'
 		pq_use_append `0'
     }
+	else if ("`todo'" == "use_sas") {
+		pq_use_sas `0'
+	}
+	else if ("`todo'" == "use_spss") {
+		pq_use_spss `0'
+	}
+	else if ("`todo'" == "use_csv") {
+		pq_use_csv `0'
+	}
 	else if ("`todo'" == "append") {
 		//	di `"pq_use_append `0' append"'
 		if strpos(`"`0'"', ",") > 0 {
@@ -38,6 +47,12 @@ program define pq
 		//	di `"pq_save `0'"'
         pq_save `0'
     }
+    else if ("`todo'" == "save_spss") {
+        pq_save_spss `0'
+    }
+    else if ("`todo'" == "save_csv") {
+        pq_save_csv `0'
+    }
     else if ("`todo'" == "describe") {
 		//	di `"pq_describe `0'"'
         pq_describe `0'
@@ -50,6 +65,56 @@ program define pq
         disp as err `"Unknown sub-comand `todo'"'
         exit 198
     }
+end
+
+capture program drop pq_use_sas
+program define pq_use_sas
+	if strpos(`"`0'"', ",") > 0 {
+		pq_use_append `0' format(sas)
+	}
+	else {
+		pq_use_append `0', format(sas)
+	}
+end
+
+capture program drop pq_use_spss
+program define pq_use_spss
+	if strpos(`"`0'"', ",") > 0 {
+		pq_use_append `0' format(spss)
+	}
+	else {
+		pq_use_append `0', format(spss)
+	}
+end
+
+capture program drop pq_use_csv
+program define pq_use_csv
+	if strpos(`"`0'"', ",") > 0 {
+		pq_use_append `0' format(csv)
+	}
+	else {
+		pq_use_append `0', format(csv)
+	}
+end
+
+capture program drop pq_save_spss
+program define pq_save_spss
+	if strpos(`"`0'"', ",") > 0 {
+		pq_save `0' format(spss)
+	}
+	else {
+		pq_save `0', format(spss)
+	}
+end
+
+capture program drop pq_save_csv
+program define pq_save_csv
+	if strpos(`"`0'"', ",") > 0 {
+		pq_save `0' format(csv)
+	}
+	else {
+		pq_save `0', format(csv)
+	}
 end
 
 
@@ -102,6 +167,7 @@ program pq_merge
 		random_seed(integer 0)	///
 		drop(string)			///
 		drop_strl					///
+		format(string)			///
 		]
 
 
@@ -115,12 +181,14 @@ program pq_merge
 	else {
 		local using_vars
 	}
+	local format_opt
+	if ("`format'" != "") local format_opt format(`format')
 
 	tempfile t_save
 	tempname f_pq
 	frame create `f_pq'
 	frame `f_pq' {
-		di "Loading parquet file and saving to temporary dta"
+		di "Loading source file and saving to temporary dta"
 		pq use `using_vars' using `"`using'"', 	clear in(`in') 					///
 												if(`if') 						///
 												`relaxed' 						///
@@ -132,6 +200,7 @@ program pq_merge
 												random_n(`random_n')			///
 												random_share(`random_share')	///
 												random_seed(`random_seed')		///
+												`format_opt'					///
 												drop(`drop')					///
 												`drop_strl'
 		quietly save `t_save'
@@ -209,19 +278,26 @@ program pq_use_append
 						max_obs_per_batch(integer 0)	///
 						drop(string)			///
 						drop_strl					///
+						format(string)			///
 						append]
 	
 	pq_register_plugin
 	
 	pq_convert_path `"`using'"'
 	local using = r(fullpath)
+	local source_format = lower("`format'")
+	if ("`source_format'" == "") local source_format parquet
+	if !inlist("`source_format'", "parquet", "sas", "spss", "csv") {
+		display as error `"Unsupported format(`format'): expected parquet, sas, spss, or csv"'
+		exit 198
+	}
 	
 	local b_append = "`append'" != ""
 
 	
 	if (!`b_append' & "`clear'" != "")	clear
 	if (`=_N' > 0 & !`b_append') {
-		display as error "There is already data loaded, pass clear if you want to load a parquet file"
+		display as error "There is already data loaded, pass clear if you want to load a file"
 		exit 2000
 	}
 
@@ -233,6 +309,17 @@ program pq_use_append
 	if (!inlist("`parallelize'", "", "columns", "rows")) {
 		display as error `"Acceptable options for parallelize are "columns", "rows", and "", passed "`parallelize'""'
 		exit 198
+	}
+
+	if ("`source_format'" != "parquet") {
+		if ("`relaxed'" != "") {
+			display as error "relaxed is only supported for parquet input"
+			exit 198
+		}
+		if ("`asterisk_to_variable'" != "") {
+			display as error "asterisk_to_variable() is only supported for parquet input"
+			exit 198
+		}
 	}
 
 	// Set default for max_obs_per_batch if not specified
@@ -252,16 +339,16 @@ program pq_use_append
 	
 	//	Process the if statement, if passed
 	if (`"`if'"' != "") {
-		//	Detect Stata date functions: parquet stores dates as Unix epoch
-		//	(01jan1970) but td(), tc(), etc. use Stata epoch (01jan1960).
-		//	Passing them raw to SQL produces silently wrong results (issue #37).
-		if (regexm(`"`if'"', "t[cdwmqhC]\(")) {
-			di as error "if() expression contains a Stata date function (td, tc, tC, tw, tm, tq, or th)."
-			di as error "Parquet dates use Unix epoch (01jan1970); Stata date functions use 01jan1960."
-			di as error "Use Polars date/datetime literals instead, e.g.:"
-			di as error `"  %td (daily date): if(date_col >= date('01jan2020','%d%b%Y'))"'
-			di as error `"  %tc (datetime):   if(dt_col >= TIMESTAMP '2020-01-01 00:00:00')"'
-			exit 198
+		//	Detect Stata date functions for parquet only.
+		if ("`source_format'" == "parquet") {
+			if (regexm(`"`if'"', "t[cdwmqhC]\(")) {
+				di as error "if() expression contains a Stata date function (td, tc, tC, tw, tm, tq, or th)."
+				di as error "Parquet dates use Unix epoch (01jan1970); Stata date functions use 01jan1960."
+				di as error "Use Polars date/datetime literals instead, e.g.:"
+				di as error `"  %td (daily date): if(date_col >= date('01jan2020','%d%b%Y'))"'
+				di as error `"  %tc (datetime):   if(dt_col >= TIMESTAMP '2020-01-01 00:00:00')"'
+				exit 198
+			}
 		}
 		local greater_than = strpos(`"`if'"', ">") > 0
 		if (`greater_than') {
@@ -270,6 +357,9 @@ program pq_use_append
 		}
 		//	di `"plugin call polars_parquet_plugin, if "`if'""'
 		plugin call polars_parquet_plugin, if `"`if'"'
+		if ("`sql_if'" != "" & inlist("`source_format'", "sas", "spss", "csv")) {
+			di as text "note: sql_if on `source_format' currently scans source data twice (describe + read); this can be slow on large files."
+		}
 	}
 	else {
 		local sql_if
@@ -283,7 +373,7 @@ program pq_use_append
 	local b_compress_string_to_numeric = "`compress_string_to_numeric'" != ""
 	//	di `"plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "`sql_if'" "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric'"'
 	
-	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric'
+	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric' "`source_format'"
 	
 	local vars_in_file
 	local n_renamed = 0
@@ -554,7 +644,7 @@ program pq_use_append
 
 	//	strl col names and dta path are passed so the plugin writes the strl .dta
 	//	in the same scan as the non-strl columns (consistent sampling)
-	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed' `batch_size' "`strl_col_names'" "`temp_strl_dta'"
+	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed' `batch_size' "`strl_col_names'" "`temp_strl_dta'" "`source_format'"
 
 	//	Merge strL columns from .dta written by plugin into the current dataset
 	//	The .dta always contains _pq_strl_key (1-based row index) added by Rust.
@@ -641,7 +731,7 @@ program pq_use_append
 			offset(`overflow_offset') n_rows(`overflow_count') ///
 			columns("`overflow_columns'") if_clause(`"`sql_if'"') ///
 			`relax_opt' asterisk_to_variable("`asterisk_to_variable'") ///
-			random_share(`random_share') random_seed(`random_seed')
+			random_share(`random_share') random_seed(`random_seed') format(`source_format')
 
 		//	Append the overflow .dta
 		quietly append using "`temp_overflow_dta'"
@@ -802,7 +892,8 @@ program pq_describe, rclass
     syntax  using/, 					///
 			[quietly					///
 			 detailed					///
-			 asterisk_to_variable(string)]
+			 asterisk_to_variable(string) ///
+			 format(string)]
 
 	pq_register_plugin
 	local b_quiet = ("`quietly'" != "")
@@ -810,9 +901,19 @@ program pq_describe, rclass
 	
 	pq_convert_path `"`using'"'
 	local using = r(fullpath)
+	local source_format = lower("`format'")
+	if ("`source_format'" == "") local source_format parquet
+	if !inlist("`source_format'", "parquet", "sas", "spss", "csv") {
+		display as error `"Unsupported format(`format'): expected parquet, sas, spss, or csv"'
+		exit 198
+	}
+	if ("`source_format'" != "parquet" & "`asterisk_to_variable'" != "") {
+		display as error "asterisk_to_variable() is only supported for parquet input"
+		exit 198
+	}
 
 	//	Trailing zeros are compress indicators
-	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "" "`asterisk_to_variable'" 0 0
+	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "" "`asterisk_to_variable'" 0 0 "`source_format'"
 
 	
 	local macros_to_return n_rows n_columns //	mapping
@@ -944,6 +1045,7 @@ program pq_save
 						   CONSolidate						///
 						   DO_not_reload					///
 						   label 							///	
+						   format(string)					///
 						   ]	//	in(string) 
         
 	//	if "`partition_by'" != "" {
@@ -992,6 +1094,12 @@ program pq_save
 	
 	pq_convert_path `"`using'"'
 	local using = r(fullpath)
+	local source_format = lower("`format'")
+	if ("`source_format'" == "") local source_format parquet
+	if !inlist("`source_format'", "parquet", "spss", "csv") {
+		display as error `"Unsupported save format(`format'): expected parquet, spss, or csv"'
+		exit 198
+	}
 
 	if "`replace'" == "" {
 		//	Check if file exists as file or path
@@ -1111,6 +1219,24 @@ program pq_save
 	local overwrite_partition = "`nopartitionoverwrite'" == ""
 	local b_compress = "`compress'" != ""
 	local b_compress_string_to_numeric = "`compress_string_to_numeric'" != ""
+	if ("`source_format'" != "parquet") {
+		if ("`partition_by'" != "") {
+			di as error "partition_by() is only supported for parquet output"
+			exit 198
+		}
+		if ("`nopartitionoverwrite'" != "") {
+			di as error "nopartitionoverwrite is only supported for parquet output"
+			exit 198
+		}
+		if ("`compression'" != "" | `compression_level' != -1) {
+			di as error "compression() and compression_level() are only supported for parquet output"
+			exit 198
+		}
+		if ("`stream'" != "" | "`consolidate'" != "" | `chunk' != 2147483647) {
+			di as error "stream/chunk/consolidate are only supported for parquet output"
+			exit 198
+		}
+	}
 	
 
 
@@ -1170,7 +1296,7 @@ program pq_save
 			}
 
 			//	di "`using'`chunk_suffix'"
-			plugin call polars_parquet_plugin, save "`using'`chunk_suffix'" "from_macro" `rows_to_read' 0 `"`sql_if'"' `"`StataColumnInfo'"' "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric' 1 `overwrite_partition'
+			plugin call polars_parquet_plugin, save "`using'`chunk_suffix'" "from_macro" `rows_to_read' 0 `"`sql_if'"' `"`StataColumnInfo'"' "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric' 1 `overwrite_partition' "`source_format'"
 
 
 			if ("`stream'" == "") {
@@ -1199,7 +1325,7 @@ program pq_save
 	}
 	else {
 		//	di `"plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' "`sql_if'" "`StataColumnInfo'" "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric' 0"'
-		plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' `"`sql_if'"' `"`StataColumnInfo'"' "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric' 0 0
+		plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' `"`sql_if'"' `"`StataColumnInfo'"' "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric' 0 0 "`source_format'"
 	}
 
 
@@ -1219,7 +1345,14 @@ capture program drop pq_write_overflow_dta
 program pq_write_overflow_dta
 	syntax, using(string) output(string) offset(integer) n_rows(integer) ///
 	        columns(string) [if_clause(string) relax asterisk_to_variable(string) ///
-	        random_share(real 0) random_seed(integer 0)]
+	        random_share(real 0) random_seed(integer 0) format(string)]
+
+	local source_format = lower("`format'")
+	if ("`source_format'" == "") local source_format parquet
+	if !inlist("`source_format'", "parquet", "sas", "spss", "csv") {
+		display as error `"Unsupported format(`format'): expected parquet, sas, spss, or csv"'
+		exit 198
+	}
 
 	// Set up relax flag
 	if ("`relax'" != "") {
@@ -1232,7 +1365,7 @@ program pq_write_overflow_dta
 	// Call plugin to write overflow rows to .dta
 	// This writes ALL columns (both strL and non-strL) for the overflow slice
 	// Args: parquet_path, dta_output, columns, n_rows, offset, sql_if, relax, asterisk_to_variable, random_share, random_seed
-	plugin call polars_parquet_plugin, write_overflow_dta "`using'" "`output'" "`columns'" `n_rows' `offset' `"`if_clause'"' `b_relax' "`asterisk_to_variable'" `random_share' `random_seed'
+	plugin call polars_parquet_plugin, write_overflow_dta "`using'" "`output'" "`columns'" `n_rows' `offset' `"`if_clause'"' `b_relax' "`asterisk_to_variable'" `random_share' `random_seed' "`source_format'"
 end
 
 

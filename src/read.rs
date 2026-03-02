@@ -13,6 +13,7 @@ use serde_json;
 use std::collections::HashSet;
 use glob::glob;
 use regex::Regex;
+use polars_readstat_rs::{readstat_batch_iter, readstat_scan, ReadStatFormat, ScanOptions as ReadStatScanOptions};
 
 use crate::mapping::ColumnInfo;
 use crate::stata_interface::{
@@ -173,6 +174,26 @@ fn adaptive_batch_size(requested_rows: usize, n_cols: usize, n_rows: usize) -> u
     requested.min(adaptive).min(n_rows)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputFormat {
+    Parquet,
+    Sas,
+    Spss,
+    Csv,
+}
+
+impl InputFormat {
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "" | "parquet" => Some(Self::Parquet),
+            "sas" | "sas7bdat" => Some(Self::Sas),
+            "spss" | "sav" | "zsav" => Some(Self::Spss),
+            "csv" => Some(Self::Csv),
+            _ => None,
+        }
+    }
+}
+
 pub fn data_exists(path: &str) -> bool {
     let path_obj = Path::new(path);
     
@@ -295,6 +316,20 @@ pub fn scan_lazyframe(
     path: &str, 
     safe_relaxed: bool, 
     asterisk_to_variable_name: Option<&str>,
+    input_format: InputFormat,
+) -> Result<LazyFrame, PolarsError> {
+    match input_format {
+        InputFormat::Parquet => scan_lazyframe_parquet(path, safe_relaxed, asterisk_to_variable_name),
+        InputFormat::Sas => scan_lazyframe_readstat(path, ReadStatFormat::Sas),
+        InputFormat::Spss => scan_lazyframe_readstat(path, ReadStatFormat::Spss),
+        InputFormat::Csv => scan_lazyframe_csv(path),
+    }
+}
+
+fn scan_lazyframe_parquet(
+    path: &str,
+    safe_relaxed: bool,
+    asterisk_to_variable_name: Option<&str>,
 ) -> Result<LazyFrame, PolarsError> {
     let path_obj = Path::new(path);
     
@@ -328,6 +363,80 @@ pub fn scan_lazyframe(
     }
 
     
+}
+
+fn scan_lazyframe_readstat(path: &str, format: ReadStatFormat) -> Result<LazyFrame, PolarsError> {
+    if Path::new(path).is_dir() {
+        return Err(PolarsError::ComputeError(
+            "Directory inputs are not supported for this input format".into(),
+        ));
+    }
+
+    let has_glob = path.contains('*') || path.contains('?') || path.contains('[');
+    if has_glob {
+        let mut normalized_pattern = if cfg!(windows) {
+            path.replace('\\', "/")
+        } else {
+            path.to_string()
+        };
+
+        // Fix "**.ext" to "**/*.ext"
+        if normalized_pattern.contains("**.") {
+            normalized_pattern = normalized_pattern.replace("**.", "**/*.");
+        }
+
+        let paths = glob(&normalized_pattern).map_err(|e| {
+            PolarsError::ComputeError(format!("Invalid glob pattern: {}", e).into())
+        })?;
+        let file_paths: Result<Vec<PathBuf>, _> = paths.collect();
+        let mut file_paths = file_paths.map_err(|e| {
+            PolarsError::ComputeError(format!("Failed to read glob results: {}", e).into())
+        })?;
+
+        if file_paths.is_empty() {
+            return Err(PolarsError::ComputeError(
+                format!("No files found matching pattern: {}", normalized_pattern).into(),
+            ));
+        }
+
+        file_paths.sort();
+        let mut frames = Vec::with_capacity(file_paths.len());
+        for file_path in file_paths {
+            let options = ReadStatScanOptions::default();
+            frames.push(readstat_scan(&file_path, Some(options), Some(format))?);
+        }
+
+        return concat(
+            frames,
+            UnionArgs {
+                parallel: true,
+                rechunk: false,
+                to_supertypes: true,
+                diagonal: true,
+                strict: false,
+                from_partitioned_ds: true,
+                maintain_order: true,
+            },
+        );
+    }
+
+    let options = ReadStatScanOptions::default();
+    readstat_scan(path, Some(options), Some(format))
+}
+
+fn scan_lazyframe_csv(path: &str) -> Result<LazyFrame, PolarsError> {
+    let normalized_path = if cfg!(windows) {
+        path.replace('\\', "/")
+    } else {
+        path.to_string()
+    };
+
+    LazyCsvReader::new(PlRefPath::new(normalized_path.as_str()))
+        .with_has_header(true)
+        .with_glob(true)
+        .with_cache(false)
+        .with_try_parse_dates(true)
+        .finish()
 }
 
 fn scan_hive_partitioned(dir_path: &str) -> Result<LazyFrame, PolarsError> {
@@ -537,6 +646,176 @@ fn smart_lit(value: &str) -> Expr {
     lit(value)
 }
 
+fn readstat_format_for_input(input_format: InputFormat) -> Option<ReadStatFormat> {
+    match input_format {
+        InputFormat::Sas => Some(ReadStatFormat::Sas),
+        InputFormat::Spss => Some(ReadStatFormat::Spss),
+        _ => None,
+    }
+}
+
+fn apply_sql_filter_to_batch(batch: DataFrame, sql_if: Option<&str>) -> PolarsResult<DataFrame> {
+    let Some(sql_if) = sql_if.filter(|s| !s.trim().is_empty()) else {
+        return Ok(batch);
+    };
+
+    let mut ctx = SQLContext::new();
+    ctx.register("df", batch.lazy());
+    ctx.execute(&format!("SELECT * FROM df WHERE {}", sql_if))?.collect()
+}
+
+fn apply_cast_to_batch(batch: DataFrame, cast_json: &str) -> PolarsResult<DataFrame> {
+    if cast_json.is_empty() {
+        return Ok(batch);
+    }
+
+    apply_cast(batch.lazy(), cast_json)?.collect()
+}
+
+fn read_to_stata_from_readstat_batches(
+    path: &str,
+    input_format: InputFormat,
+    selected_columns_ordered: &Vec<String>,
+    all_columns: &Vec<ColumnInfo>,
+    n_rows: usize,
+    offset: usize,
+    sql_if: Option<&str>,
+    cast_json: &str,
+    parallel_strategy: Option<ParallelizationStrategy>,
+    stata_offset: usize,
+    batch_size: usize,
+) -> Result<i32, Box<dyn Error>> {
+    if all_columns.is_empty() {
+        set_macro("n_batches", "0", false);
+        return Ok(0);
+    }
+
+    let readstat_format = match readstat_format_for_input(input_format) {
+        Some(fmt) => fmt,
+        None => return Ok(198),
+    };
+
+    let effective_batch_size = adaptive_batch_size(batch_size, all_columns.len(), n_rows);
+    let n_threads = if n_rows < 1_000 { 1 } else { get_thread_count() };
+    let strategy = parallel_strategy.unwrap_or_else(|| {
+        determine_parallelization_strategy(all_columns.len(), n_rows, n_threads)
+    });
+    let thread_pool = if n_threads > 1 {
+        Some(get_thread_pool(n_threads))
+    } else {
+        None
+    };
+
+    let mut scan_opts = ReadStatScanOptions::default();
+    scan_opts.threads = Some(n_threads);
+    scan_opts.chunk_size = Some(effective_batch_size);
+    scan_opts.preserve_order = Some(true);
+
+    let sql_filter = sql_if.filter(|s| !s.trim().is_empty());
+    let reader_n_rows = if sql_filter.is_some() {
+        None
+    } else {
+        Some(offset.saturating_add(n_rows))
+    };
+
+    // Keep all columns available when SQL filtering is used, so predicates can
+    // reference columns outside the requested varlist.
+    let selected_cols = if sql_filter.is_some() || selected_columns_ordered.is_empty() {
+        None
+    } else {
+        Some(selected_columns_ordered.clone())
+    };
+
+    let mut iter = match readstat_batch_iter(
+        path,
+        Some(scan_opts),
+        Some(readstat_format),
+        selected_cols,
+        reader_n_rows,
+        Some(effective_batch_size),
+    ) {
+        Ok(it) => it,
+        Err(e) => {
+            display(&format!("Error creating readstat batch iterator: {}", e));
+            return Ok(198);
+        }
+    };
+
+    let mut rows_to_skip = offset;
+    let mut rows_remaining = n_rows;
+    let mut rows_written = 0usize;
+    let mut n_batches = 0usize;
+
+    while rows_remaining > 0 {
+        let Some(batch_result) = iter.next() else {
+            break;
+        };
+
+        let mut batch = match batch_result {
+            Ok(df) => df,
+            Err(e) => {
+                display(&format!("Error reading readstat batch: {}", e));
+                return Ok(198);
+            }
+        };
+
+        batch = match apply_cast_to_batch(batch, cast_json) {
+            Ok(df) => df,
+            Err(e) => {
+                display(&format!("Cast failed with error: {}", e));
+                return Ok(198);
+            }
+        };
+
+        batch = match apply_sql_filter_to_batch(batch, sql_filter) {
+            Ok(df) => df,
+            Err(e) => {
+                display(&format!("Error in SQL if statement: {}", e));
+                return Ok(198);
+            }
+        };
+
+        if rows_to_skip > 0 {
+            let skip_now = rows_to_skip.min(batch.height());
+            rows_to_skip -= skip_now;
+            if skip_now > 0 {
+                batch = batch.slice(skip_now as i64, batch.height() - skip_now);
+            }
+            if batch.height() == 0 {
+                continue;
+            }
+        }
+
+        if batch.height() > rows_remaining {
+            batch = batch.slice(0, rows_remaining);
+        }
+        if batch.height() == 0 {
+            continue;
+        }
+
+        if let Err(e) = process_batch_with_strategy(
+            &batch,
+            rows_written,
+            all_columns,
+            strategy,
+            n_threads,
+            n_batches,
+            stata_offset,
+            thread_pool,
+        ) {
+            display(&format!("Error processing streamed readstat batch: {:?}", e));
+            return Ok(198);
+        }
+
+        rows_written += batch.height();
+        rows_remaining = rows_remaining.saturating_sub(batch.height());
+        n_batches += 1;
+    }
+
+    set_macro("n_batches", &n_batches.to_string(), false);
+    Ok(0)
+}
+
 pub fn read_to_stata(
     path: &str,
     variables_as_str: &str,
@@ -554,6 +833,7 @@ pub fn read_to_stata(
     batch_size:usize,
     strl_col_names: &str,
     strl_dta_path: &str,
+    input_format: InputFormat,
 ) -> Result<i32, Box<dyn Error>> {
 
     // Handle empty variable list by getting from macros
@@ -579,6 +859,11 @@ pub fn read_to_stata(
     };
 
 
+    let selected_columns_ordered: Vec<String> = variables_as_str
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
+
     // First, create a HashSet of column names from variables_as_str for efficient lookups
     let selected_column_names: HashSet<&str> = variables_as_str.split_whitespace().collect();
 
@@ -590,11 +875,42 @@ pub fn read_to_stata(
 
     //  display(&format!("Column information: {:?}", all_columns));
 
+    //  Set cast macro to empty
+    let cast_json = get_macro(
+        &"cast_json",
+        false,
+        None,
+    );
+
+    let has_strl = !strl_col_names.is_empty() && !strl_dta_path.is_empty();
+    let has_glob = path.contains('*') || path.contains('?') || path.contains('[');
+    let can_use_readstat_batch_iter = matches!(input_format, InputFormat::Sas | InputFormat::Spss)
+        && !has_strl
+        && !has_glob
+        && sort.is_empty()
+        && random_share <= 0.0;
+    if can_use_readstat_batch_iter {
+        return read_to_stata_from_readstat_batches(
+            path,
+            input_format,
+            &selected_columns_ordered,
+            &all_columns,
+            n_rows,
+            offset,
+            sql_if,
+            &cast_json,
+            parallel_strategy,
+            stata_offset,
+            batch_size,
+        );
+    }
+
     // Scan the parquet file to get a LazyFrame
     let mut df = match scan_lazyframe(
         path,
         safe_relaxed,
         asterisk_to_variable_name,
+        input_format,
     ) {
         Ok(df) => df,
         Err(e) => {
@@ -602,13 +918,6 @@ pub fn read_to_stata(
             return Ok(198);
         },
     };
-
-    //  Set cast macro to empty
-    let cast_json = get_macro(
-        &"cast_json",
-        false,
-        None,
-    );
 
     //  display(&format!("Cast: {}", cast_json));
     if !cast_json.is_empty() {
@@ -725,7 +1034,6 @@ pub fn read_to_stata(
     // When strl columns are present, collect the full frame once so that strl and
     // non-strl see exactly the same rows (including any random sampling already applied).
     // The strl columns are written to a .dta file; non-strl continue via sink_batches.
-    let has_strl = !strl_col_names.is_empty() && !strl_dta_path.is_empty();
     let (write_lf, write_slice_offset, write_slice_n_rows): (LazyFrame, i64, u32) = if has_strl {
         let strl_col_vec: Vec<&str> = strl_col_names.split_whitespace().collect();
 
@@ -1318,14 +1626,15 @@ pub fn write_overflow_batch_to_dta(
     asterisk_to_variable_name: Option<&str>,
     _random_share: f64,
     _random_seed: u64,
+    input_format: InputFormat,
 ) -> Result<i32, Box<dyn Error>> {
     use polars_readstat_rs::stata::writer::StataWriter;
 
     // Use scan_lazyframe to properly handle glob patterns and other edge cases
-    let mut df = match scan_lazyframe(path, safe_relaxed, asterisk_to_variable_name) {
+    let mut df = match scan_lazyframe(path, safe_relaxed, asterisk_to_variable_name, input_format) {
         Ok(lf) => lf,
         Err(e) => {
-            display(&format!("write_overflow_dta: error scanning parquet: {:?}", e));
+            display(&format!("write_overflow_dta: error scanning source data: {:?}", e));
             return Ok(198);
         }
     };
