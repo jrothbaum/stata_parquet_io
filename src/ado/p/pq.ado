@@ -61,6 +61,15 @@ program define pq
 		//	di `"pq_describe `0'"'
         pq_describe `0'
     }
+	else if ("`todo'" == "describe_sas") {
+		pq_describe_sas `0'
+	}
+	else if ("`todo'" == "describe_spss") {
+		pq_describe_spss `0'
+	}
+	else if ("`todo'" == "describe_csv") {
+		pq_describe_csv `0'
+	}
 	else if ("`todo'" == "path") {
 		//	di `"pq_convert_path `0'"'
 		pq_convert_path `0'
@@ -121,6 +130,36 @@ program define pq_save_csv
 	}
 end
 
+capture program drop pq_describe_sas
+program define pq_describe_sas
+	if strpos(`"`0'"', ",") > 0 {
+		pq_describe `0' format(sas)
+	}
+	else {
+		pq_describe `0', format(sas)
+	}
+end
+
+capture program drop pq_describe_spss
+program define pq_describe_spss
+	if strpos(`"`0'"', ",") > 0 {
+		pq_describe `0' format(spss)
+	}
+	else {
+		pq_describe `0', format(spss)
+	}
+end
+
+capture program drop pq_describe_csv
+program define pq_describe_csv
+	if strpos(`"`0'"', ",") > 0 {
+		pq_describe `0' format(csv)
+	}
+	else {
+		pq_describe `0', format(csv)
+	}
+end
+
 
 
 capture program drop pq_merge
@@ -170,7 +209,7 @@ program pq_merge
 			random_share(real 0.0)	///
 			random_seed(integer 0)	///
 			batch_size(integer 1000000)	///
-			infer_schema_length(integer 100)	///
+			infer_schema_length(integer 10000)	///
 			preserve_order			///
 			drop(string)			///
 			drop_strl					///
@@ -284,7 +323,7 @@ program pq_use_append
 						random_n(integer 0)		///
 						random_share(real 0.0)	///
 						random_seed(integer 0)	///
-						infer_schema_length(integer 100)	///
+						infer_schema_length(integer 10000)	///
 						batch_size(integer 1000000)	///
 						max_obs_per_batch(integer 0)	///
 						preserve_order			///
@@ -345,10 +384,10 @@ program pq_use_append
 	}
 	local infer_schema_length_for_plugin = `infer_schema_length'
 	if ("`source_format'" != "csv") {
-		if (`infer_schema_length' != 100) {
+		if (`infer_schema_length' != 10000) {
 			di as text "note: infer_schema_length() ignored for format(`source_format'); only used for csv reads."
 		}
-		local infer_schema_length_for_plugin = 100
+		local infer_schema_length_for_plugin = 10000
 	}
 
 	// Set default for max_obs_per_batch if not specified
@@ -402,7 +441,7 @@ program pq_use_append
 	local b_compress_string_to_numeric = "`compress_string_to_numeric'" != ""
 	//	di `"plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "`sql_if'" "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric'"'
 	
-	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric' "`source_format'"
+	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric' "`source_format'" `infer_schema_length_for_plugin'
 	
 	local vars_in_file
 	local n_renamed = 0
@@ -923,7 +962,8 @@ program pq_describe, rclass
 			[quietly					///
 			 detailed					///
 			 asterisk_to_variable(string) ///
-			 format(string)]
+			 format(string)				///
+			 infer_schema_length(integer 10000)]
 
 	pq_register_plugin
 	local b_quiet = ("`quietly'" != "")
@@ -941,9 +981,20 @@ program pq_describe, rclass
 		display as error "asterisk_to_variable() is only supported for parquet input"
 		exit 198
 	}
+	if (`infer_schema_length' < 0) {
+		display as error `"infer_schema_length() must be >= 0, passed `infer_schema_length'"'
+		exit 198
+	}
+	local infer_schema_length_for_plugin = `infer_schema_length'
+	if ("`source_format'" != "csv") {
+		if (`infer_schema_length' != 10000) {
+			di as text "note: infer_schema_length() ignored for format(`source_format'); only used for csv reads."
+		}
+		local infer_schema_length_for_plugin = 10000
+	}
 
 	//	Trailing zeros are compress indicators
-	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "" "`asterisk_to_variable'" 0 0 "`source_format'"
+	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "" "`asterisk_to_variable'" 0 0 "`source_format'" `infer_schema_length_for_plugin'
 
 	
 	local macros_to_return n_rows n_columns //	mapping
@@ -1376,7 +1427,7 @@ program pq_write_overflow_dta
 	syntax, using(string) output(string) offset(integer) n_rows(integer) ///
 	        columns(string) [if_clause(string) relax asterisk_to_variable(string) ///
 	        random_share(real 0) random_seed(integer 0) format(string) ///
-	        infer_schema_length(integer 100)]
+	        infer_schema_length(integer 10000)]
 
 	if (`infer_schema_length' < 0) {
 		display as error `"infer_schema_length() must be >= 0, passed `infer_schema_length'"'

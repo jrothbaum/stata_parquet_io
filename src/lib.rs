@@ -127,9 +127,9 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 let format_arg = if subfunction_args.len() > 16 { subfunction_args[16] } else { "parquet" };
                 let preserve_order = if subfunction_args.len() > 17 { subfunction_args[17] == "1" } else { false };
                 let infer_schema_length = if subfunction_args.len() > 18 {
-                    subfunction_args[18].parse::<usize>().unwrap_or(100)
+                    subfunction_args[18].parse::<usize>().unwrap_or(10000)
                 } else {
-                    100
+                    10000
                 };
                 let input_format = match InputFormat::from_str(format_arg) {
                     Some(f) => f,
@@ -188,6 +188,11 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     Some(subfunction_args[4])
                 };
                 let format_arg = if subfunction_args.len() > 7 { subfunction_args[7] } else { "parquet" };
+                let infer_schema_length = if subfunction_args.len() > 8 {
+                    subfunction_args[8].parse::<usize>().unwrap_or(10000)
+                } else {
+                    10000
+                };
                 let input_format = match InputFormat::from_str(format_arg) {
                     Some(f) => f,
                     None => {
@@ -205,6 +210,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                         subfunction_args[5].parse::<u8>().unwrap() != 0,
                         subfunction_args[6].parse::<u8>().unwrap() != 0,
                         input_format,
+                        infer_schema_length,
                     ) as ST_retcode;
             },
             "save" => {
@@ -275,9 +281,9 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 };
                 let format_arg = if subfunction_args.len() > 10 { subfunction_args[10] } else { "parquet" };
                 let infer_schema_length = if subfunction_args.len() > 11 {
-                    subfunction_args[11].parse::<usize>().unwrap_or(100)
+                    subfunction_args[11].parse::<usize>().unwrap_or(10000)
                 } else {
-                    100
+                    10000
                 };
                 let input_format = match InputFormat::from_str(format_arg) {
                     Some(f) => f,

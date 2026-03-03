@@ -15,7 +15,7 @@ use crate::read::{
     InputFormat,
     cast_catenum_to_string, 
     filtered_row_count_readstat_with_sql,
-    scan_lazyframe    
+    scan_lazyframe_with_options,
 };
 
 use crate::downcast::{
@@ -33,13 +33,25 @@ pub fn file_summary(
     compress: bool,
     compress_string_to_numeric: bool,
     input_format: InputFormat,
+    infer_schema_length: usize,
 ) -> i32 {
+    let csv_infer_schema_length = if matches!(input_format, InputFormat::Csv) {
+        if infer_schema_length == 0 {
+            None
+        } else {
+            Some(infer_schema_length)
+        }
+    } else {
+        None
+    };
     
-    let mut df = match scan_lazyframe(
+    let mut df = match scan_lazyframe_with_options(
         &path,
         safe_relaxed,
         asterisk_to_variable_name,
         input_format,
+        false,
+        csv_infer_schema_length,
     ) {
         Ok(df) => df,
         Err(e) => {

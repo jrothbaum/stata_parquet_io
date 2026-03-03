@@ -178,8 +178,6 @@ fn adaptive_batch_size(requested_rows: usize, n_cols: usize, n_rows: usize) -> u
     requested.min(adaptive).min(n_rows)
 }
 
-const DEFAULT_CSV_INFER_SCHEMA_LENGTH: usize = 100;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputFormat {
     Parquet,
@@ -330,7 +328,7 @@ pub fn scan_lazyframe(
         asterisk_to_variable_name,
         input_format,
         false,
-        Some(DEFAULT_CSV_INFER_SCHEMA_LENGTH),
+        None,
     )
 }
 
@@ -1097,7 +1095,7 @@ pub fn read_to_stata(
             Some(infer_schema_length)
         }
     } else {
-        Some(DEFAULT_CSV_INFER_SCHEMA_LENGTH)
+        None
     };
     let can_use_readstat_batch_iter = matches!(input_format, InputFormat::Sas | InputFormat::Spss)
         && !has_strl
@@ -1870,7 +1868,7 @@ pub fn write_overflow_batch_to_dta(
             Some(infer_schema_length)
         }
     } else {
-        Some(DEFAULT_CSV_INFER_SCHEMA_LENGTH)
+        None
     };
 
     // Use scan_lazyframe to properly handle glob patterns and other edge cases
