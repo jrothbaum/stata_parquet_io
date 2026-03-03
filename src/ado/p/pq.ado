@@ -1,6 +1,8 @@
 *! pq - read/write parquet files with stata
 *! Version 3.0.0 - Add robust SPSS/CSV round-trip support, faster CSV read/write than native stata CSV
-*! 				   faster SAS reads
+*! 				   faster SAS reads.
+*!				   Better handling reads of strl columns, handle datasets that exceed the limit
+*!				   of Stata's C plugin API.  Better options for low-memory parquet writes
 *!         2.0.0 - Fix float32 compress, improve strL (string) load, allow large file load/save
 *! 		   1.9.1 - Fix parquet->stata integer cast overflow bug
 *!         1.9.0 - Vastly simplified use/append code to make it easier to manage and debug.  No change to API/function signature or functionality
