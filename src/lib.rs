@@ -125,6 +125,12 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 let strl_col_names = if subfunction_args.len() > 14 { subfunction_args[14] } else { "" };
                 let strl_dta_path  = if subfunction_args.len() > 15 { subfunction_args[15] } else { "" };
                 let format_arg = if subfunction_args.len() > 16 { subfunction_args[16] } else { "parquet" };
+                let preserve_order = if subfunction_args.len() > 17 { subfunction_args[17] == "1" } else { false };
+                let infer_schema_length = if subfunction_args.len() > 18 {
+                    subfunction_args[18].parse::<usize>().unwrap_or(100)
+                } else {
+                    100
+                };
                 let input_format = match InputFormat::from_str(format_arg) {
                     Some(f) => f,
                     None => {
@@ -151,6 +157,8 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     strl_col_names,
                     strl_dta_path,
                     input_format,
+                    preserve_order,
+                    infer_schema_length,
                 );
         
                 // Use match to handle the Result
@@ -266,6 +274,11 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     Some(subfunction_args[7])
                 };
                 let format_arg = if subfunction_args.len() > 10 { subfunction_args[10] } else { "parquet" };
+                let infer_schema_length = if subfunction_args.len() > 11 {
+                    subfunction_args[11].parse::<usize>().unwrap_or(100)
+                } else {
+                    100
+                };
                 let input_format = match InputFormat::from_str(format_arg) {
                     Some(f) => f,
                     None => {
@@ -293,6 +306,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     subfunction_args[8].parse::<f64>().unwrap(),   // random_share
                     subfunction_args[9].parse::<u64>().unwrap(),   // random_seed
                     input_format,
+                    infer_schema_length,
                 );
 
                 match result {

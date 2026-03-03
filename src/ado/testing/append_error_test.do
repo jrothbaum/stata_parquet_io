@@ -54,15 +54,19 @@ if _N != `expected_n' {
 	di as error "Test 1: expected `expected_n' rows, got `=_N'"
 	exit 9
 }
+assert _N == `expected_n'
 quietly sum nr
 if r(sum) != `expected_sum_nr' {
 	di as error "Test 1: sum(nr) `=r(sum)' != `expected_sum_nr'"
 	exit 9
 }
+assert r(sum) == `expected_sum_nr'
 quietly sum open
 local t1_sum_open = r(sum)
 quietly sum high
 local t1_sum_high = r(sum)
+assert abs(`t1_sum_open' - `expected_sum_open') <= 0.01
+assert abs(`t1_sum_high' - `expected_sum_high') <= 0.01
 di as text "Test 1 (explicit varlist use + append): PASSED (_N=`=_N', sum(nr)=`=r(sum)-r(sum)+`expected_sum_nr'')"
 
 
@@ -80,16 +84,19 @@ if _N != `expected_n' {
 	di as error "Test 2: expected `expected_n' rows, got `=_N'"
 	exit 9
 }
+assert _N == `expected_n'
 quietly sum nr
 if r(sum) != `expected_sum_nr' {
 	di as error "Test 2: sum(nr) `=r(sum)' != `expected_sum_nr'"
 	exit 9
 }
+assert r(sum) == `expected_sum_nr'
 quietly sum open
 if abs(r(sum) - `t1_sum_open') > 0.01 {
 	di as error "Test 2: sum(open) `=r(sum)' differs from Test 1 (`t1_sum_open')"
 	exit 9
 }
+assert abs(r(sum) - `t1_sum_open') <= 0.01
 di as text "Test 2 (pq use all + explicit append): PASSED"
 
 
@@ -107,21 +114,25 @@ if _N != `expected_n' {
 	di as error "Test 3: expected `expected_n' rows, got `=_N'"
 	exit 9
 }
+assert _N == `expected_n'
 quietly sum nr
 if r(sum) != `expected_sum_nr' {
 	di as error "Test 3: sum(nr) `=r(sum)' != `expected_sum_nr'"
 	exit 9
 }
+assert r(sum) == `expected_sum_nr'
 quietly sum open
 if abs(r(sum) - `t1_sum_open') > 0.01 {
 	di as error "Test 3: sum(open) `=r(sum)' differs from Test 1 (`t1_sum_open')"
 	exit 9
 }
+assert abs(r(sum) - `t1_sum_open') <= 0.01
 quietly sum high
 if abs(r(sum) - `t1_sum_high') > 0.01 {
 	di as error "Test 3: sum(high) `=r(sum)' differs from Test 1 (`t1_sum_high')"
 	exit 9
 }
+assert abs(r(sum) - `t1_sum_high') <= 0.01
 di as text "Test 3 (pq use all + full append): PASSED"
 
 
@@ -143,11 +154,13 @@ if r(sum) != `a1_sum_nr' {
 	di as error "Consistency: f_append2 sum(nr) differs"
 	exit 9 
 }
+assert r(sum) == `a1_sum_nr'
 quietly sum open
 if abs(r(sum) - `a1_sum_open') > 0.01 { 
 	di as error "Consistency: f_append2 sum(open) differs"
 	exit 9 
 }
+assert abs(r(sum) - `a1_sum_open') <= 0.01
 
 use "`f_append3'.dta", clear
 quietly sum nr
@@ -155,16 +168,19 @@ if r(sum) != `a1_sum_nr' {
 	di as error "Consistency: f_append3 sum(nr) differs"
 	exit 9 
 }
+assert r(sum) == `a1_sum_nr'
 quietly sum open
 if abs(r(sum) - `a1_sum_open') > 0.01 { 
 	di as error "Consistency: f_append3 sum(open) differs"
 	exit 9 
 }
+assert abs(r(sum) - `a1_sum_open') <= 0.01
 quietly sum high
 if abs(r(sum) - `a1_sum_high') > 0.01 { 
 	di as error "Consistency: f_append3 sum(high) differs"
 	exit 9
 }
+assert abs(r(sum) - `a1_sum_high') <= 0.01
 
 di as text "Consistency (all three append methods agree): PASSED"
 

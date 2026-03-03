@@ -54,17 +54,20 @@ local ref_sum_c4 = r(sum)
 pq save "`pq_label'.parquet", replace
 
 pq use "`pq_label'.parquet", clear
+assert _N == 1000
 
 if _N != 1000 {
 	di as error "Test 1: expected 1000 rows, got `=_N'"
 	exit 9
 }
 capture confirm numeric variable c_4
+assert _rc == 0
 if _rc {
 	di as error "Test 1: c_4 should be numeric when saved without label option"
 	exit 9
 }
 quietly sum c_4
+assert abs(r(sum) - `ref_sum_c4') <= 0.5
 if abs(r(sum) - `ref_sum_c4') > 0.5 {
 	di as error "Test 1: c_4 sum changed on reload (`=r(sum)' != `ref_sum_c4')"
 	exit 9
@@ -84,22 +87,26 @@ label values c_4 lbl_str
 pq save "`pq_label'.parquet", replace label
 
 pq use "`pq_label'.parquet", clear
+assert _N == 1000
 
 if _N != 1000 {
 	di as error "Test 2: expected 1000 rows, got `=_N'"
 	exit 9
 }
 capture confirm string variable c_4
+assert _rc == 0
 if _rc {
 	di as error "Test 2: c_4 should be string after pq save with label"
 	exit 9
 }
 quietly tab c_4
+assert r(r) == 4
 if r(r) != 4 {
 	di as error "Test 2: expected 4 distinct label values, got `=r(r)'"
 	exit 9
 }
 quietly count if c_4 == "This" | c_4 == "That" | c_4 == "The Other" | c_4 == "Anything"
+assert r(N) == 1000
 if r(N) != 1000 {
 	di as error "Test 2: `=1000 - r(N)' rows have unexpected label values"
 	exit 9
@@ -120,22 +127,26 @@ label values c_4 lbl_num
 pq save "`pq_label'.parquet", replace label
 
 pq use "`pq_label'.parquet", clear
+assert _N == 1000
 
 if _N != 1000 {
 	di as error "Test 3: expected 1000 rows, got `=_N'"
 	exit 9
 }
 capture confirm string variable c_4
+assert _rc == 0
 if _rc {
 	di as error "Test 3: c_4 should be string after pq save with numeric-text label"
 	exit 9
 }
 quietly tab c_4
+assert r(r) == 4
 if r(r) != 4 {
 	di as error "Test 3: expected 4 distinct label values, got `=r(r)'"
 	exit 9
 }
 quietly count if c_4 == "100" | c_4 == "200" | c_4 == "300" | c_4 == "400"
+assert r(N) == 1000
 if r(N) != 1000 {
 	di as error "Test 3: `=1000 - r(N)' rows have unexpected label values"
 	exit 9

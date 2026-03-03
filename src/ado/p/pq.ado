@@ -162,12 +162,15 @@ program pq_merge
 		sort(string)			///
 		compress				///
 		compress_string_to_numeric	///
-		random_n(integer 0)		///
-		random_share(real 0.0)	///
-		random_seed(integer 0)	///
-		drop(string)			///
-		drop_strl					///
-		format(string)			///
+			random_n(integer 0)		///
+			random_share(real 0.0)	///
+			random_seed(integer 0)	///
+			batch_size(integer 1000000)	///
+			infer_schema_length(integer 100)	///
+			preserve_order			///
+			drop(string)			///
+			drop_strl					///
+			format(string)			///
 		]
 
 
@@ -200,6 +203,9 @@ program pq_merge
 												random_n(`random_n')			///
 												random_share(`random_share')	///
 												random_seed(`random_seed')		///
+												batch_size(`batch_size')		///
+												infer_schema_length(`infer_schema_length')	///
+												`preserve_order'				///
 												`format_opt'					///
 												drop(`drop')					///
 												`drop_strl'
@@ -274,8 +280,10 @@ program pq_use_append
 						random_n(integer 0)		///
 						random_share(real 0.0)	///
 						random_seed(integer 0)	///
+						infer_schema_length(integer 100)	///
 						batch_size(integer 1000000)	///
 						max_obs_per_batch(integer 0)	///
+						preserve_order			///
 						drop(string)			///
 						drop_strl					///
 						format(string)			///
@@ -310,6 +318,10 @@ program pq_use_append
 		display as error `"Acceptable options for parallelize are "columns", "rows", and "", passed "`parallelize'""'
 		exit 198
 	}
+	if (`infer_schema_length' < 0) {
+		display as error `"infer_schema_length() must be >= 0, passed `infer_schema_length'"'
+		exit 198
+	}
 
 	if ("`source_format'" != "parquet") {
 		if ("`relaxed'" != "") {
@@ -320,6 +332,19 @@ program pq_use_append
 			display as error "asterisk_to_variable() is only supported for parquet input"
 			exit 198
 		}
+	}
+
+	local b_preserve_order = "`preserve_order'" != ""
+	if (`b_preserve_order' & !inlist("`source_format'", "sas", "spss")) {
+		di as text "note: preserve_order ignored for format(`source_format'); only used for sas/spss reads."
+		local b_preserve_order = 0
+	}
+	local infer_schema_length_for_plugin = `infer_schema_length'
+	if ("`source_format'" != "csv") {
+		if (`infer_schema_length' != 100) {
+			di as text "note: infer_schema_length() ignored for format(`source_format'); only used for csv reads."
+		}
+		local infer_schema_length_for_plugin = 100
 	}
 
 	// Set default for max_obs_per_batch if not specified
@@ -644,7 +669,7 @@ program pq_use_append
 
 	//	strl col names and dta path are passed so the plugin writes the strl .dta
 	//	in the same scan as the non-strl columns (consistent sampling)
-	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed' `batch_size' "`strl_col_names'" "`temp_strl_dta'" "`source_format'"
+	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed' `batch_size' "`strl_col_names'" "`temp_strl_dta'" "`source_format'" `b_preserve_order' `infer_schema_length_for_plugin'
 
 	//	Merge strL columns from .dta written by plugin into the current dataset
 	//	The .dta always contains _pq_strl_key (1-based row index) added by Rust.
@@ -731,7 +756,8 @@ program pq_use_append
 			offset(`overflow_offset') n_rows(`overflow_count') ///
 			columns("`overflow_columns'") if_clause(`"`sql_if'"') ///
 			`relax_opt' asterisk_to_variable("`asterisk_to_variable'") ///
-			random_share(`random_share') random_seed(`random_seed') format(`source_format')
+			random_share(`random_share') random_seed(`random_seed') format(`source_format') ///
+			infer_schema_length(`infer_schema_length_for_plugin')
 
 		//	Append the overflow .dta
 		quietly append using "`temp_overflow_dta'"
@@ -1345,7 +1371,13 @@ capture program drop pq_write_overflow_dta
 program pq_write_overflow_dta
 	syntax, using(string) output(string) offset(integer) n_rows(integer) ///
 	        columns(string) [if_clause(string) relax asterisk_to_variable(string) ///
-	        random_share(real 0) random_seed(integer 0) format(string)]
+	        random_share(real 0) random_seed(integer 0) format(string) ///
+	        infer_schema_length(integer 100)]
+
+	if (`infer_schema_length' < 0) {
+		display as error `"infer_schema_length() must be >= 0, passed `infer_schema_length'"'
+		exit 198
+	}
 
 	local source_format = lower("`format'")
 	if ("`source_format'" == "") local source_format parquet
@@ -1365,7 +1397,7 @@ program pq_write_overflow_dta
 	// Call plugin to write overflow rows to .dta
 	// This writes ALL columns (both strL and non-strL) for the overflow slice
 	// Args: parquet_path, dta_output, columns, n_rows, offset, sql_if, relax, asterisk_to_variable, random_share, random_seed
-	plugin call polars_parquet_plugin, write_overflow_dta "`using'" "`output'" "`columns'" `n_rows' `offset' `"`if_clause'"' `b_relax' "`asterisk_to_variable'" `random_share' `random_seed' "`source_format'"
+	plugin call polars_parquet_plugin, write_overflow_dta "`using'" "`output'" "`columns'" `n_rows' `offset' `"`if_clause'"' `b_relax' "`asterisk_to_variable'" `random_share' `random_seed' "`source_format'" `infer_schema_length'
 end
 
 

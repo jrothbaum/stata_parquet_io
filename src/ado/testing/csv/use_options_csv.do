@@ -57,6 +57,14 @@ clear
 pq use_csv "`tcsv'.csv", clear parallelize(rows)
 assert _N == 100000
 
+clear
+pq use_csv "`tcsv'.csv", clear batch_size(64)
+assert _N == 100000
+
+clear
+pq use_csv "`tcsv'.csv", clear infer_schema_length(0)
+assert _N == 100000
+
 pq use_csv * using "`tcsv'.csv", clear
 assert _N == 100000
 confirm variable c_1

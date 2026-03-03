@@ -64,6 +64,10 @@ pq use "`tparquet'.parquet", clear parallelize(rows)
 timer off 2
 assert _N == 100000
 
+clear
+pq use "`tparquet'.parquet", clear batch_size(64)
+assert _N == 100000
+
 di "1:	Columns"
 di "2:	Rows"
 timer list

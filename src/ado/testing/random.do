@@ -55,6 +55,7 @@ pq save "`pq_random'.parquet", replace
 //	Full load
 //	----------------------------------------------------------------------
 pq use "`pq_random'.parquet", clear
+assert _N == `n_full'
 
 if _N != `n_full' {
 	di as error "Full load: expected `n_full' rows, got `=_N'"
@@ -63,6 +64,7 @@ if _N != `n_full' {
 //	c_1 = _n, so sum = n*(n+1)/2
 quietly sum c_1
 local expected_sum_c1 = `n_full' * (`n_full' + 1) / 2
+assert r(sum) == `expected_sum_c1'
 if r(sum) != `expected_sum_c1' {
 	di as error "Full load: c_1 sum `=r(sum)' != `expected_sum_c1'"
 	exit 9
@@ -74,6 +76,7 @@ di as text "Full load: PASSED (_N=`=_N')"
 //	random_n without seed — two calls must give different row sets
 //	----------------------------------------------------------------------
 pq use "`pq_random'.parquet", clear random_n(`random_n')
+assert _N == `random_n'
 if _N != `random_n' {
 	di as error "random_n (no seed): expected `random_n' rows, got `=_N'"
 	exit 9
@@ -82,6 +85,7 @@ quietly sum c_1
 local sum1 = r(sum)
 
 pq use "`pq_random'.parquet", clear random_n(`random_n')
+assert _N == `random_n'
 if _N != `random_n' {
 	di as error "random_n (no seed, repeat): expected `random_n' rows, got `=_N'"
 	exit 9
@@ -101,6 +105,7 @@ di as text "random_n (no seed): PASSED (draw1 sum(c_1)=`sum1', draw2 sum(c_1)=`s
 //	random_n with seed — two calls must give the SAME row set
 //	----------------------------------------------------------------------
 pq use "`pq_random'.parquet", clear random_n(`random_n') random_seed(`seed')
+assert _N == `random_n'
 if _N != `random_n' {
 	di as error "random_n (seed): expected `random_n' rows, got `=_N'"
 	exit 9
@@ -109,6 +114,7 @@ quietly sum c_1
 local seed_sum1 = r(sum)
 
 pq use "`pq_random'.parquet", clear random_n(`random_n') random_seed(`seed')
+assert _N == `random_n'
 if _N != `random_n' {
 	di as error "random_n (seed, repeat): expected `random_n' rows, got `=_N'"
 	exit 9
@@ -129,6 +135,7 @@ di as text "random_n (seed): PASSED (both draws sum(c_1)=`seed_sum1')"
 local expected_n_share = floor(`random_share' * `n_full')
 
 pq use "`pq_random'.parquet", clear random_share(`random_share')
+assert _N == `expected_n_share'
 if _N != `expected_n_share' {
 	di as error "random_share (no seed): expected `expected_n_share' rows, got `=_N'"
 	exit 9
@@ -137,6 +144,7 @@ quietly sum c_1
 local share_sum1 = r(sum)
 
 pq use "`pq_random'.parquet", clear random_share(`random_share')
+assert _N == `expected_n_share'
 if _N != `expected_n_share' {
 	di as error "random_share (no seed, repeat): expected `expected_n_share' rows, got `=_N'"
 	exit 9
@@ -155,6 +163,7 @@ di as text "random_share (no seed): PASSED (draw1 sum(c_1)=`share_sum1', draw2 s
 //	random_share with seed — two calls must give the SAME row set
 //	----------------------------------------------------------------------
 pq use "`pq_random'.parquet", clear random_share(`random_share') random_seed(`seed')
+assert _N == `expected_n_share'
 if _N != `expected_n_share' {
 	di as error "random_share (seed): expected `expected_n_share' rows, got `=_N'"
 	exit 9
@@ -163,6 +172,7 @@ quietly sum c_1
 local sseed_sum1 = r(sum)
 
 pq use "`pq_random'.parquet", clear random_share(`random_share') random_seed(`seed')
+assert _N == `expected_n_share'
 if _N != `expected_n_share' {
 	di as error "random_share (seed, repeat): expected `expected_n_share' rows, got `=_N'"
 	exit 9
@@ -214,6 +224,7 @@ check_strl_alignment "strL full load"
 
 //	random_n with seed — alignment + reproducibility
 pq use "`pq_strl'.parquet", clear random_n(`random_n') random_seed(`seed')
+assert _N == `random_n'
 if _N != `random_n' {
 	di as error "strL random_n: expected `random_n' rows, got `=_N'"
 	exit 9
@@ -233,6 +244,7 @@ di as text "strL random_n seed reproducibility: PASSED"
 
 //	random_share with seed — alignment + reproducibility
 pq use "`pq_strl'.parquet", clear random_share(`random_share') random_seed(`seed')
+assert _N == `expected_n_share'
 if _N != `expected_n_share' {
 	di as error "strL random_share: expected `expected_n_share' rows, got `=_N'"
 	exit 9

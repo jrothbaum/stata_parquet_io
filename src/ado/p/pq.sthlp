@@ -3,44 +3,65 @@
 {title:Title}
 
 {phang}
-{bf:pq} {hline 2} Read, write, and manage Parquet files in Stata
+{bf:pq} {hline 2} Read, write, and manage Parquet, SAS, SPSS, and CSV files in Stata
 
 {marker syntax}{...}
 {title:Syntax}
 
 {phang}
-Import a Parquet file into Stata:
+Import a file into Stata (default is Parquet):
 
 {p 8 17 2}
-{cmd:pq use} [{varlist}] {cmd:using} {it:filename} [, {opt clear} {opt append} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)}
-{opt compress} {opt compress_string_to_numeric} {opt random_n(integer 0)}
-{opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt drop(varlist)} {opt drop_strl}]
+{cmd:pq use} [{varlist}] {cmd:using} {it:filename} [, {opt clear} {opt append} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} {opt preserve_order}
+{opt compress} {opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer 1000000)}
+{opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 100)} {opt drop(varlist)} {opt drop_strl}]
+
+{phang}
+Format-specific shortcuts for import:
+
+{p 8 17 2}
+{cmd:pq use_sas} [{varlist}] {cmd:using} {it:filename} [, {it:use_options}]
+
+{p 8 17 2}
+{cmd:pq use_spss} [{varlist}] {cmd:using} {it:filename} [, {it:use_options}]
+
+{p 8 17 2}
+{cmd:pq use_csv} [{varlist}] {cmd:using} {it:filename} [, {it:use_options} {opt infer_schema_length(integer 100)}]
 
 {phang}
 Append a Parquet file to existing data:
 
 {p 8 17 2}
-{cmd:pq append} [{varlist}] {cmd:using} {it:filename} [, {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} {opt compress}
-{opt compress_string_to_numeric} {opt random_n(integer 0)}
-{opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt drop(varlist)} {opt drop_strl}]
+{cmd:pq append} [{varlist}] {cmd:using} {it:filename} [, {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} {opt preserve_order} {opt compress}
+{opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer 1000000)}
+{opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 100)} {opt drop(varlist)} {opt drop_strl}]
 
 {phang}
 Merge a Parquet file with existing data:
 
 {p 8 17 2}
-{cmd:pq merge} {it:merge_type} [{varlist}] {cmd:using} {it:filename} [, {merge_options} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} {opt compress}
-{opt compress_string_to_numeric} {opt random_n(integer 0)}
-{opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt drop(varlist)} {opt drop_strl}]
+{cmd:pq merge} {it:merge_type} [{varlist}] {cmd:using} {it:filename} [, {merge_options} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} {opt preserve_order} {opt compress}
+{opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer 1000000)}
+{opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 100)} {opt drop(varlist)} {opt drop_strl}]
 
 {phang}
-Save Stata data as a Parquet file:
+Save Stata data to a file (default is Parquet):
 
 {p 8 17 2}
 {cmd:pq save} [{varlist}] {cmd:using} {it:filename} [, {opt replace} {opt if(expression)} {opt noautorename} {opt partition_by(varlist)} {opt compression(string)} {opt compression_level(integer)} {opt nopartitionoverwrite} {opt compress} 
 {opt compress_string_to_numeric} {opt label} ]
 
 {phang}
-Describe contents of a Parquet file:
+Format-specific shortcuts for save:
+
+{p 8 17 2}
+{cmd:pq save_spss} [{varlist}] {cmd:using} {it:filename} [, {it:save_options}]
+
+{p 8 17 2}
+{cmd:pq save_csv} [{varlist}] {cmd:using} {it:filename} [, {it:save_options}]
+
+{phang}
+Describe contents of a file:
 
 {p 8 17 2}
 {cmd:pq describe} {cmd:using} {it:filename} [, {opt quietly} {opt detailed} 
@@ -50,14 +71,16 @@ Describe contents of a Parquet file:
 {title:Description}
 
 {pstd}
-{cmd:pq} provides commands for working with Apache Parquet files in Stata. Parquet is a columnar storage file format 
+{cmd:pq} provides commands for working with Apache Parquet, SAS, SPSS, and CSV files in Stata. Parquet is a columnar storage file format 
 designed to efficiently store and process large datasets. This package allows Stata users to directly read from
-and write to Parquet files, making it easier to work with other data science tools and platforms that support
+and write files used in other data science tools and platforms that support
 this format, such as Python (pandas, polars), R, Spark, duckdb, and many others.
 
 {pstd}
 The package supports five main operations: {cmd:use} (load data), {cmd:append} (add to existing data), 
 {cmd:merge} (join with existing data), {cmd:save} (write data), and {cmd:describe} (examine file structure).
+Shortcuts {cmd:use_sas}, {cmd:use_spss}, {cmd:use_csv}, {cmd:save_spss}, and {cmd:save_csv} are provided for common
+non-Parquet workflows.
 
 {pstd}
 {bf:IMPORTANT NOTE FOR MAC ARM USERS}:
@@ -118,6 +141,11 @@ sorting after loading all data into memory.  Again, per SQL and not Stata standa
 not treated as greater than values.
 
 {phang}
+{opt preserve_order} preserves source row order while reading SAS and SPSS files (for example via
+{cmd:pq use_sas} and {cmd:pq use_spss}).
+This can be useful for deterministic ordering across runs. For parquet/csv input, this option is ignored (with a note).
+
+{phang}
 {opt compress} enables compression of data during the read operation to reduce memory usage.
 This is the equivalent of Stata's compress, but should be much faster. 
 
@@ -141,6 +169,15 @@ Overridden by {opt random_n()} if both are set.
 {opt random_share()}. If not specified (or set to 0), sampling will use a different random seed each time,
 resulting in different samples. Specify a positive integer to ensure the same random sample is selected
 across multiple runs.
+
+{phang}
+{opt batch_size(integer 1000000)} controls the reader batch size used while importing. Smaller values can
+reduce memory pressure and are useful for testing deterministic row-order behavior with {opt preserve_order}.
+
+{phang}
+{opt infer_schema_length(integer 100)} is available for CSV reads and controls how many rows are used to infer
+column types. If set to {cmd:0}, Rust receives {cmd:None} and infers schema from the full file. For non-CSV
+formats, this option is ignored.
 
 {phang}
 {opt drop(varlist)} specifies variables to exclude from the import. Supports Stata-style wildcard patterns
@@ -199,7 +236,7 @@ variables.
 {opt update} specifies that missing values in the master dataset be replaced with values from the using dataset.
 
 {phang}
-All read options ({opt in()}, {opt if()}, {opt relaxed}, {opt asterisk_to_variable()}, {opt parallelize()}, {opt sort()}, {opt compress}, {opt compress_string_to_numeric}, {opt random_n}, {opt random_share}, {opt random_seed}, {opt drop()}, {opt drop_strl})
+All read options ({opt in()}, {opt if()}, {opt relaxed}, {opt asterisk_to_variable()}, {opt parallelize()}, {opt sort()}, {opt preserve_order}, {opt compress}, {opt compress_string_to_numeric}, {opt random_n}, {opt random_share}, {opt random_seed}, {opt batch_size()}, {opt infer_schema_length()}, {opt drop()}, {opt drop_strl})
 are also available with {cmd:pq merge}.
 This will load the data using {cmd:pq use} in a temporary frame, {cmd:save} it to a temporary dta file, and then run the specified {cmd:merge}.
 

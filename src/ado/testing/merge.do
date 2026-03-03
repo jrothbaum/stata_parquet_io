@@ -64,22 +64,26 @@ pq save "`tparquet'_merge.parquet", replace
 //	----------------------------------------------------------------------
 pq use "`tparquet'.parquet", clear
 pq merge 1:1 c_1 using "`tparquet'_merge.parquet"
+assert _N == 100
 
 if _N != 100 {
 	di as error "Test 1: expected 100 rows, got `=_N'"
 	exit 9
 }
 quietly sum c_1
+assert r(sum) == `ref_sum_c1'
 if r(sum) != `ref_sum_c1' {
 	di as error "Test 1: c_1 sum `=r(sum)' != `ref_sum_c1'"
 	exit 9
 }
 capture confirm variable c_12
+assert _rc == 0
 if _rc {
 	di as error "Test 1: c_12 not found in merged result"
 	exit 9
 }
 quietly count if _merge == 3
+assert r(N) == 100
 if r(N) != 100 {
 	di as error "Test 1: expected all 100 rows matched (_merge==3), got `=r(N)'"
 	exit 9
@@ -93,28 +97,33 @@ drop _merge
 //	----------------------------------------------------------------------
 pq use "`tparquet'.parquet", clear
 pq merge 1:1 _n using "`tparquet'_merge.parquet", compress compress_string_to_numeric
+assert _N == 100
 
 if _N != 100 {
 	di as error "Test 2: expected 100 rows, got `=_N'"
 	exit 9
 }
 quietly sum c_1
+assert r(sum) == `ref_sum_c1'
 if r(sum) != `ref_sum_c1' {
 	di as error "Test 2: c_1 sum `=r(sum)' != `ref_sum_c1'"
 	exit 9
 }
 capture confirm variable c_12
+assert _rc == 0
 if _rc {
 	di as error "Test 2: c_12 not found in merged result"
 	exit 9
 }
 //	c_14 was tostring'd integers (0-99); compress_string_to_numeric should convert back
 capture confirm numeric variable c_14
+assert _rc == 0
 if _rc {
 	di as error "Test 2: c_14 should be numeric after compress_string_to_numeric"
 	exit 9
 }
 quietly count if _merge == 3
+assert r(N) == 100
 if r(N) != 100 {
 	di as error "Test 2: expected all 100 rows matched, got `=r(N)'"
 	exit 9
@@ -130,27 +139,32 @@ drop _merge
 //	----------------------------------------------------------------------
 pq use "`tparquet'.parquet", clear
 pq merge 1:1 _n using "`tparquet'_merge.parquet", compress random_n(50)
+assert _N == 100
 
 if _N != 100 {
 	di as error "Test 3: expected 100 rows, got `=_N'"
 	exit 9
 }
 quietly sum c_1
+assert r(sum) == `ref_sum_c1'
 if r(sum) != `ref_sum_c1' {
 	di as error "Test 3: c_1 sum `=r(sum)' != `ref_sum_c1'"
 	exit 9
 }
 capture confirm variable c_12
+assert _rc == 0
 if _rc {
 	di as error "Test 3: c_12 not found in merged result"
 	exit 9
 }
 quietly count if _merge == 3
+assert r(N) == 50
 if r(N) != 50 {
 	di as error "Test 3: expected 50 matched rows (_merge==3), got `=r(N)'"
 	exit 9
 }
 quietly count if _merge == 1
+assert r(N) == 50
 if r(N) != 50 {
 	di as error "Test 3: expected 50 master-only rows (_merge==1), got `=r(N)'"
 	exit 9
@@ -165,27 +179,32 @@ drop _merge
 //	----------------------------------------------------------------------
 pq use "`tparquet'.parquet", clear
 pq merge 1:1 _n using "`tparquet'_merge.parquet", compress in(1/90)
+assert _N == 100
 
 if _N != 100 {
 	di as error "Test 4: expected 100 rows, got `=_N'"
 	exit 9
 }
 quietly sum c_1
+assert r(sum) == `ref_sum_c1'
 if r(sum) != `ref_sum_c1' {
 	di as error "Test 4: c_1 sum `=r(sum)' != `ref_sum_c1'"
 	exit 9
 }
 capture confirm variable c_12
+assert _rc == 0
 if _rc {
 	di as error "Test 4: c_12 not found in merged result"
 	exit 9
 }
 quietly count if _merge == 3
+assert r(N) == 90
 if r(N) != 90 {
 	di as error "Test 4: expected 90 matched rows, got `=r(N)'"
 	exit 9
 }
 quietly count if _merge == 1
+assert r(N) == 10
 if r(N) != 10 {
 	di as error "Test 4: expected 10 master-only rows, got `=r(N)'"
 	exit 9

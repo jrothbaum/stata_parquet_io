@@ -92,41 +92,29 @@ impl StataToSqlRegexConverter {
     }
     
     pub fn convert(&self, input: &str) -> String {
-        // Split input into parts: quoted strings and non-quoted parts
-        let parts = self.split_preserving_quotes(input);
-        
-        let mut result = String::new();
-        for (content, is_quoted) in parts {
-            if is_quoted {
-                // Keep quoted content unchanged
-                result.push_str(&content);
-            } else {
-                // Apply replacements to non-quoted content
-                let mut processed = content;
-                for (regex, replacement) in &self.replacements {
-                    processed = regex.replace_all(&processed, replacement.as_str()).to_string();
-                }
-                result.push_str(&processed);
-            }
-        }
-        
-        result.replace('"', "'")
-    }
-    
+        // Protect quoted string literals so replacements do not touch their contents.
+        let (mut processed, quoted_literals) = self.extract_quoted_literals(input);
 
-    fn split_preserving_quotes(&self, input: &str) -> Vec<(String, bool)> {
-        let mut parts = Vec::new();
+        for (regex, replacement) in &self.replacements {
+            processed = regex.replace_all(&processed, replacement.as_str()).to_string();
+        }
+
+        self.restore_quoted_literals(&processed, &quoted_literals)
+    }
+
+    fn extract_quoted_literals(&self, input: &str) -> (String, Vec<String>) {
+        let mut protected = String::new();
+        let mut quoted_literals = Vec::new();
         let mut current = String::new();
         let mut in_quote = false;
         let mut quote_char = None;
-        let mut chars = input.chars().peekable();
+        let chars = input.chars();
         
-        while let Some(ch) = chars.next() {
+        for ch in chars {
             match ch {
                 '"' | '\'' if !in_quote => {
-                    // Starting a quoted section
                     if !current.is_empty() {
-                        parts.push((current.clone(), false));
+                        protected.push_str(&current);
                         current.clear();
                     }
                     current.push(ch);
@@ -134,9 +122,10 @@ impl StataToSqlRegexConverter {
                     quote_char = Some(ch);
                 }
                 ch if in_quote && Some(ch) == quote_char => {
-                    // Ending a quoted section
                     current.push(ch);
-                    parts.push((current.clone(), true));
+                    let token = format!("__Q{}__", quoted_literals.len());
+                    quoted_literals.push(current.clone());
+                    protected.push_str(&token);
                     current.clear();
                     in_quote = false;
                     quote_char = None;
@@ -147,12 +136,23 @@ impl StataToSqlRegexConverter {
             }
         }
         
-        // Add any remaining content
-        if !current.is_empty() {
-            parts.push((current, in_quote));
+        // If quote is unclosed, keep trailing text as-is.
+        if in_quote {
+            protected.push_str(&current);
+        } else if !current.is_empty() {
+            protected.push_str(&current);
         }
-        
-        parts
+
+        (protected, quoted_literals)
+    }
+
+    fn restore_quoted_literals(&self, input: &str, quoted_literals: &[String]) -> String {
+        let mut output = input.to_string();
+        for (idx, literal) in quoted_literals.iter().enumerate() {
+            let token = format!("__Q{}__", idx);
+            output = output.replace(&token, literal);
+        }
+        output
     }
 }
 

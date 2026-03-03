@@ -14,6 +14,7 @@ use crate::stata_interface:: {
 use crate::read::{
     InputFormat,
     cast_catenum_to_string, 
+    filtered_row_count_readstat_with_sql,
     scan_lazyframe    
 };
 
@@ -108,10 +109,15 @@ pub fn file_summary(
 
     
     let n_vars = schema.len();
-    let n_rows = if sql_filter.is_none() {
-        get_metadata_row_count(path, input_format).unwrap_or_else(|| get_row_count(&df).unwrap())
+    let n_rows = if let Some(sql) = sql_filter {
+        if matches!(input_format, InputFormat::Sas | InputFormat::Spss) {
+            filtered_row_count_readstat_with_sql(path, input_format, sql)
+                .unwrap_or_else(|| get_row_count(&df).unwrap())
+        } else {
+            get_row_count(&df).unwrap()
+        }
     } else {
-        get_row_count(&df).unwrap()
+        get_metadata_row_count(path, input_format).unwrap_or_else(|| get_row_count(&df).unwrap())
     };
     
     //  Return scalars of the number of columns and rows 

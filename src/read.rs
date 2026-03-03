@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 use std::num::NonZeroUsize;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use rayon::prelude::*;
@@ -14,6 +15,9 @@ use std::collections::HashSet;
 use glob::glob;
 use regex::Regex;
 use polars_readstat_rs::{readstat_batch_iter, readstat_scan, ReadStatFormat, ScanOptions as ReadStatScanOptions};
+use sqlparser::ast::{Expr as SqlExpr, Visit, Visitor};
+use sqlparser::dialect::GenericDialect;
+use sqlparser::parser::Parser;
 
 use crate::mapping::ColumnInfo;
 use crate::stata_interface::{
@@ -174,6 +178,8 @@ fn adaptive_batch_size(requested_rows: usize, n_cols: usize, n_rows: usize) -> u
     requested.min(adaptive).min(n_rows)
 }
 
+const DEFAULT_CSV_INFER_SCHEMA_LENGTH: usize = 100;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputFormat {
     Parquet,
@@ -318,11 +324,29 @@ pub fn scan_lazyframe(
     asterisk_to_variable_name: Option<&str>,
     input_format: InputFormat,
 ) -> Result<LazyFrame, PolarsError> {
+    scan_lazyframe_with_options(
+        path,
+        safe_relaxed,
+        asterisk_to_variable_name,
+        input_format,
+        false,
+        Some(DEFAULT_CSV_INFER_SCHEMA_LENGTH),
+    )
+}
+
+pub fn scan_lazyframe_with_options(
+    path: &str,
+    safe_relaxed: bool,
+    asterisk_to_variable_name: Option<&str>,
+    input_format: InputFormat,
+    preserve_order: bool,
+    csv_infer_schema_length: Option<usize>,
+) -> Result<LazyFrame, PolarsError> {
     match input_format {
         InputFormat::Parquet => scan_lazyframe_parquet(path, safe_relaxed, asterisk_to_variable_name),
-        InputFormat::Sas => scan_lazyframe_readstat(path, ReadStatFormat::Sas),
-        InputFormat::Spss => scan_lazyframe_readstat(path, ReadStatFormat::Spss),
-        InputFormat::Csv => scan_lazyframe_csv(path),
+        InputFormat::Sas => scan_lazyframe_readstat(path, ReadStatFormat::Sas, preserve_order),
+        InputFormat::Spss => scan_lazyframe_readstat(path, ReadStatFormat::Spss, preserve_order),
+        InputFormat::Csv => scan_lazyframe_csv(path, csv_infer_schema_length),
     }
 }
 
@@ -365,7 +389,11 @@ fn scan_lazyframe_parquet(
     
 }
 
-fn scan_lazyframe_readstat(path: &str, format: ReadStatFormat) -> Result<LazyFrame, PolarsError> {
+fn scan_lazyframe_readstat(
+    path: &str,
+    format: ReadStatFormat,
+    preserve_order: bool,
+) -> Result<LazyFrame, PolarsError> {
     if Path::new(path).is_dir() {
         return Err(PolarsError::ComputeError(
             "Directory inputs are not supported for this input format".into(),
@@ -402,7 +430,10 @@ fn scan_lazyframe_readstat(path: &str, format: ReadStatFormat) -> Result<LazyFra
         file_paths.sort();
         let mut frames = Vec::with_capacity(file_paths.len());
         for file_path in file_paths {
-            let options = ReadStatScanOptions::default();
+            let mut options = ReadStatScanOptions::default();
+            if preserve_order {
+                options.preserve_order = Some(true);
+            }
             frames.push(readstat_scan(&file_path, Some(options), Some(format))?);
         }
 
@@ -420,11 +451,14 @@ fn scan_lazyframe_readstat(path: &str, format: ReadStatFormat) -> Result<LazyFra
         );
     }
 
-    let options = ReadStatScanOptions::default();
+    let mut options = ReadStatScanOptions::default();
+    if preserve_order {
+        options.preserve_order = Some(true);
+    }
     readstat_scan(path, Some(options), Some(format))
 }
 
-fn scan_lazyframe_csv(path: &str) -> Result<LazyFrame, PolarsError> {
+fn scan_lazyframe_csv(path: &str, infer_schema_length: Option<usize>) -> Result<LazyFrame, PolarsError> {
     let normalized_path = if cfg!(windows) {
         path.replace('\\', "/")
     } else {
@@ -436,6 +470,7 @@ fn scan_lazyframe_csv(path: &str) -> Result<LazyFrame, PolarsError> {
         .with_glob(true)
         .with_cache(false)
         .with_try_parse_dates(true)
+        .with_infer_schema_length(infer_schema_length)
         .finish()
 }
 
@@ -654,6 +689,176 @@ fn readstat_format_for_input(input_format: InputFormat) -> Option<ReadStatFormat
     }
 }
 
+#[derive(Default)]
+struct SqlIfColumnCollector {
+    columns: Vec<String>,
+    seen: HashSet<String>,
+}
+
+impl SqlIfColumnCollector {
+    fn push_column(&mut self, column: &str) {
+        let trimmed = column.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let key = trimmed.to_ascii_lowercase();
+        if self.seen.insert(key) {
+            self.columns.push(trimmed.to_string());
+        }
+    }
+}
+
+impl Visitor for SqlIfColumnCollector {
+    type Break = ();
+
+    fn pre_visit_expr(&mut self, expr: &SqlExpr) -> ControlFlow<Self::Break> {
+        match expr {
+            SqlExpr::Identifier(ident) => self.push_column(&ident.value),
+            SqlExpr::CompoundIdentifier(parts) => {
+                if let Some(last) = parts.last() {
+                    self.push_column(&last.value);
+                }
+            }
+            _ => {}
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+pub fn extract_sql_if_columns(sql_if: &str) -> Result<Vec<String>, String> {
+    let trimmed = sql_if.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let query = format!("SELECT * FROM df WHERE {}", trimmed);
+    let dialect = GenericDialect {};
+    let statements = Parser::parse_sql(&dialect, &query)
+        .map_err(|e| format!("Failed to parse sql_if: {}", e))?;
+
+    let mut collector = SqlIfColumnCollector::default();
+    for statement in statements {
+        let _ = statement.visit(&mut collector);
+    }
+    Ok(collector.columns)
+}
+
+fn push_unique_column(columns: &mut Vec<String>, seen: &mut HashSet<String>, name: &str) {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let key = trimmed.to_ascii_lowercase();
+    if seen.insert(key) {
+        columns.push(trimmed.to_string());
+    }
+}
+
+fn projected_readstat_columns(
+    selected_columns_ordered: &[String],
+    sql_filter: Option<&str>,
+) -> Option<Vec<String>> {
+    if let Some(sql_filter) = sql_filter {
+        let filter_columns = extract_sql_if_columns(sql_filter).ok()?;
+        let mut projected = Vec::new();
+        let mut seen = HashSet::new();
+
+        for col in selected_columns_ordered {
+            push_unique_column(&mut projected, &mut seen, col);
+        }
+        for col in filter_columns {
+            push_unique_column(&mut projected, &mut seen, &col);
+        }
+
+        if projected.is_empty() {
+            None
+        } else {
+            Some(projected)
+        }
+    } else if selected_columns_ordered.is_empty() {
+        None
+    } else {
+        Some(selected_columns_ordered.to_vec())
+    }
+}
+
+pub fn filtered_row_count_readstat_with_sql(
+    path: &str,
+    input_format: InputFormat,
+    sql_if: &str,
+) -> Option<usize> {
+    if Path::new(path).is_dir() || path.contains('*') || path.contains('?') || path.contains('[') {
+        return None;
+    }
+
+    let readstat_format = readstat_format_for_input(input_format)?;
+    let selected_cols = match extract_sql_if_columns(sql_if) {
+        Ok(cols) if cols.is_empty() => None,
+        Ok(cols) => Some(cols),
+        Err(_) => None,
+    };
+
+    let mut scan_opts = ReadStatScanOptions::default();
+    scan_opts.preserve_order = Some(true);
+
+    let mut iter = readstat_batch_iter(
+        path,
+        Some(scan_opts),
+        Some(readstat_format),
+        selected_cols,
+        None,
+        None,
+    )
+    .ok()?;
+
+    let mut total_rows = 0usize;
+    while let Some(batch_result) = iter.next() {
+        let batch = batch_result.ok()?;
+        let filtered = apply_sql_filter_to_batch(batch, Some(sql_if)).ok()?;
+        total_rows = total_rows.saturating_add(filtered.height());
+    }
+
+    Some(total_rows)
+}
+
+#[cfg(test)]
+mod sql_if_projection_tests {
+    use super::{extract_sql_if_columns, projected_readstat_columns};
+
+    #[test]
+    fn extracts_columns_from_sql_if_expression() {
+        let cols = extract_sql_if_columns("age > 30 AND country = 'US'").unwrap();
+        assert_eq!(cols, vec!["age".to_string(), "country".to_string()]);
+    }
+
+    #[test]
+    fn extracts_last_part_of_compound_identifier() {
+        let cols = extract_sql_if_columns("df.age > 30 AND t.country = 'US'").unwrap();
+        assert_eq!(cols, vec!["age".to_string(), "country".to_string()]);
+    }
+
+    #[test]
+    fn projects_selected_and_filter_columns() {
+        let selected = vec!["id".to_string(), "name".to_string()];
+        let projected = projected_readstat_columns(
+            &selected,
+            Some("age > 18 AND name = 'a'"),
+        )
+        .unwrap();
+        assert_eq!(
+            projected,
+            vec!["id".to_string(), "name".to_string(), "age".to_string()]
+        );
+    }
+
+    #[test]
+    fn falls_back_to_full_scan_on_invalid_sql() {
+        let selected = vec!["id".to_string()];
+        let projected = projected_readstat_columns(&selected, Some("age >"));
+        assert!(projected.is_none());
+    }
+}
+
 fn apply_sql_filter_to_batch(batch: DataFrame, sql_if: Option<&str>) -> PolarsResult<DataFrame> {
     let Some(sql_if) = sql_if.filter(|s| !s.trim().is_empty()) else {
         return Ok(batch);
@@ -684,6 +889,7 @@ fn read_to_stata_from_readstat_batches(
     parallel_strategy: Option<ParallelizationStrategy>,
     stata_offset: usize,
     batch_size: usize,
+    preserve_order: bool,
 ) -> Result<i32, Box<dyn Error>> {
     if all_columns.is_empty() {
         set_macro("n_batches", "0", false);
@@ -709,7 +915,9 @@ fn read_to_stata_from_readstat_batches(
     let mut scan_opts = ReadStatScanOptions::default();
     scan_opts.threads = Some(n_threads);
     scan_opts.chunk_size = Some(effective_batch_size);
-    scan_opts.preserve_order = Some(true);
+    if preserve_order {
+        scan_opts.preserve_order = Some(true);
+    }
 
     let sql_filter = sql_if.filter(|s| !s.trim().is_empty());
     let reader_n_rows = if sql_filter.is_some() {
@@ -718,13 +926,9 @@ fn read_to_stata_from_readstat_batches(
         Some(offset.saturating_add(n_rows))
     };
 
-    // Keep all columns available when SQL filtering is used, so predicates can
-    // reference columns outside the requested varlist.
-    let selected_cols = if sql_filter.is_some() || selected_columns_ordered.is_empty() {
-        None
-    } else {
-        Some(selected_columns_ordered.clone())
-    };
+    // Read only columns needed for output and SQL predicates.
+    // Fallback to all columns if SQL parsing fails.
+    let selected_cols = projected_readstat_columns(selected_columns_ordered, sql_filter);
 
     let mut iter = match readstat_batch_iter(
         path,
@@ -834,6 +1038,8 @@ pub fn read_to_stata(
     strl_col_names: &str,
     strl_dta_path: &str,
     input_format: InputFormat,
+    preserve_order: bool,
+    infer_schema_length: usize,
 ) -> Result<i32, Box<dyn Error>> {
 
     // Handle empty variable list by getting from macros
@@ -884,6 +1090,15 @@ pub fn read_to_stata(
 
     let has_strl = !strl_col_names.is_empty() && !strl_dta_path.is_empty();
     let has_glob = path.contains('*') || path.contains('?') || path.contains('[');
+    let csv_infer_schema_length = if matches!(input_format, InputFormat::Csv) {
+        if infer_schema_length == 0 {
+            None
+        } else {
+            Some(infer_schema_length)
+        }
+    } else {
+        Some(DEFAULT_CSV_INFER_SCHEMA_LENGTH)
+    };
     let can_use_readstat_batch_iter = matches!(input_format, InputFormat::Sas | InputFormat::Spss)
         && !has_strl
         && !has_glob
@@ -902,15 +1117,18 @@ pub fn read_to_stata(
             parallel_strategy,
             stata_offset,
             batch_size,
+            preserve_order,
         );
     }
 
     // Scan the parquet file to get a LazyFrame
-    let mut df = match scan_lazyframe(
+    let mut df = match scan_lazyframe_with_options(
         path,
         safe_relaxed,
         asterisk_to_variable_name,
         input_format,
+        preserve_order,
+        csv_infer_schema_length,
     ) {
         Ok(df) => df,
         Err(e) => {
@@ -937,8 +1155,22 @@ pub fn read_to_stata(
     // Cast categorical columns to string
     df = cast_catenum_to_string(&df).unwrap();
 
+    let sql_filter = sql_if.filter(|s| !s.trim().is_empty());
+
+    // For SAS/SPSS, project to requested columns + SQL predicate columns.
+    // This enables projection pushdown on non-streaming paths too.
+    if matches!(input_format, InputFormat::Sas | InputFormat::Spss) {
+        if let Some(projected_columns) = projected_readstat_columns(&selected_columns_ordered, sql_filter) {
+            let projection_exprs: Vec<Expr> = projected_columns
+                .iter()
+                .map(|name| col(name.as_str()))
+                .collect();
+            df = df.select(projection_exprs);
+        }
+    }
+
     // Apply SQL filter if provided
-    if let Some(sql) = sql_if.filter(|s| !s.trim().is_empty()) {
+    if let Some(sql) = sql_filter {
         let mut ctx = SQLContext::new();
         ctx.register("df", df);
         
@@ -1627,11 +1859,29 @@ pub fn write_overflow_batch_to_dta(
     _random_share: f64,
     _random_seed: u64,
     input_format: InputFormat,
+    infer_schema_length: usize,
 ) -> Result<i32, Box<dyn Error>> {
     use polars_readstat_rs::stata::writer::StataWriter;
 
+    let csv_infer_schema_length = if matches!(input_format, InputFormat::Csv) {
+        if infer_schema_length == 0 {
+            None
+        } else {
+            Some(infer_schema_length)
+        }
+    } else {
+        Some(DEFAULT_CSV_INFER_SCHEMA_LENGTH)
+    };
+
     // Use scan_lazyframe to properly handle glob patterns and other edge cases
-    let mut df = match scan_lazyframe(path, safe_relaxed, asterisk_to_variable_name, input_format) {
+    let mut df = match scan_lazyframe_with_options(
+        path,
+        safe_relaxed,
+        asterisk_to_variable_name,
+        input_format,
+        false,
+        csv_infer_schema_length,
+    ) {
         Ok(lf) => lf,
         Err(e) => {
             display(&format!("write_overflow_dta: error scanning source data: {:?}", e));

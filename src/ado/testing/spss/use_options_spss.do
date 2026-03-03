@@ -57,6 +57,10 @@ clear
 pq use_spss "`tcsv'.sav", clear parallelize(rows)
 assert _N == 100000
 
+clear
+pq use_spss "`tcsv'.sav", clear batch_size(64)
+assert _N == 100000
+
 pq use_spss * using "`tcsv'.sav", clear
 assert _N == 100000
 confirm variable c_1

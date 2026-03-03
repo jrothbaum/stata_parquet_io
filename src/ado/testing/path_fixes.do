@@ -26,12 +26,14 @@ pq save "`test_abs_back'", replace
 //	Test 1: absolute path with Windows backslashes
 //	----------------------------------------------------------------------
 pq use "`test_abs_back'", clear
+assert _N == `ref_n'
 
 if _N != `ref_n' {
 	di as error "Test 1: expected `ref_n' rows, got `=_N'"
 	exit 9
 }
 quietly sum row_id
+assert r(sum) == `ref_sum_id'
 if r(sum) != `ref_sum_id' {
 	di as error "Test 1: sum(row_id) `=r(sum)' != `ref_sum_id'"
 	exit 9
@@ -43,12 +45,14 @@ di as text "Test 1 (absolute path, backslashes): PASSED"
 //	Test 2: absolute path with forward slashes
 //	----------------------------------------------------------------------
 pq use "`test_abs_fwd'", clear
+assert _N == `ref_n'
 
 if _N != `ref_n' {
 	di as error "Test 2: expected `ref_n' rows, got `=_N'"
 	exit 9
 }
 quietly sum row_id
+assert r(sum) == `ref_sum_id'
 if r(sum) != `ref_sum_id' {
 	di as error "Test 2: sum(row_id) `=r(sum)' != `ref_sum_id'"
 	exit 9
@@ -63,6 +67,7 @@ local orig_dir = c(pwd)
 quietly cd "`tmp_root'"
 
 pq use "pq_path_test.parquet", clear
+assert _N == `ref_n'
 
 if _N != `ref_n' {
 	quietly cd "`orig_dir'"
@@ -70,6 +75,7 @@ if _N != `ref_n' {
 	exit 9
 }
 quietly sum row_id
+assert r(sum) == `ref_sum_id'
 if r(sum) != `ref_sum_id' {
 	quietly cd "`orig_dir'"
 	di as error "Test 3: sum(row_id) `=r(sum)' != `ref_sum_id'"
@@ -97,6 +103,8 @@ if "`cmp_back'" == "" {
 	di as error "Test 4: pq path returned empty for backslash input"
 	exit 9
 }
+assert "`cmp_back'" != ""
+assert "`cmp_back'" == "`cmp_fwd'"
 if "`cmp_back'" != "`cmp_fwd'" {
 	di as error "Test 4: paths resolve to different locations:"
 	di as error "  backslash form : `norm_back'"
