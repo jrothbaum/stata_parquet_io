@@ -46,11 +46,11 @@ sqlparser = { version = "0.60", features = ["visitor"] }
 # polars-readstat-rs = { path = "../polars_readstat/crates/polars_readstat_rs" }
 
 
-#   [profile.release]
-#   strip = "symbols"  # Remove debug info but keep symbols needed for performance
-#   panic = "unwind"     # Default panic behavior (often better for libraries)
-#   lto = "fat"         # More aggressive link-time optimization for speed
-#   codegen-units = 4   # Fewer codegen units allow more optimization
+[profile.release]
+strip = "symbols"  # Remove debug info but keep symbols needed for performance
+panic = "unwind"     # Default panic behavior (often better for libraries)
+lto = "fat"         # More aggressive link-time optimization for speed
+codegen-units = 1   # Fewer codegen units allow more optimization
 
 [profile.dev]
 split-debuginfo = "packed"
