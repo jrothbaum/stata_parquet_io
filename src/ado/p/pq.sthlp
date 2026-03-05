@@ -12,10 +12,10 @@
 Import a file into Stata (default is Parquet):
 
 {p 8 17 2}
-{cmd:pq use} [{varlist}] {cmd:using} {it:filename} [, {opt clear} {opt append} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} {opt preserve_order}
-{opt compress} {opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer 1000000)}
+{cmd:pq use} [{varlist}] {cmd:using} {it:filename} [, {opt clear} {opt append} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt sort(varlist)} {opt preserve_order}
+{opt compress} {opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer)}
 {opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt parse_dates}
-{opt max_obs_per_batch(integer 0)} {opt format(string)} {opt fast} {opt auto_fast_limit(integer 100)} {opt drop(varlist)} {opt drop_strl}]
+{opt format(string)} {opt fast} {opt drop(varlist)} {opt drop_strl}]
 
 {phang}
 Format-specific shortcuts for import:
@@ -33,8 +33,8 @@ Format-specific shortcuts for import:
 Append a file to existing data (default is Parquet):
 
 {p 8 17 2}
-{cmd:pq append} [{varlist}] {cmd:using} {it:filename} [, {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} {opt preserve_order} {opt compress}
-{opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer 1000000)}
+{cmd:pq append} [{varlist}] {cmd:using} {it:filename} [, {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt sort(varlist)} {opt preserve_order} {opt compress}
+{opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer)}
 {opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt parse_dates}
 {opt format(string)} {opt drop(varlist)} {opt drop_strl}]
 
@@ -42,8 +42,8 @@ Append a file to existing data (default is Parquet):
 Merge a file with existing data (default is Parquet):
 
 {p 8 17 2}
-{cmd:pq merge} {it:merge_type} [{varlist}] {cmd:using} {it:filename} [, {merge_options} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} {opt preserve_order} {opt compress}
-{opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer 1000000)}
+{cmd:pq merge} {it:merge_type} [{varlist}] {cmd:using} {it:filename} [, {merge_options} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt sort(varlist)} {opt preserve_order} {opt compress}
+{opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer)}
 {opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt parse_dates}
 {opt format(string)} {opt drop(varlist)} {opt drop_strl}]
 
@@ -157,10 +157,6 @@ with the specified name containing the part of the filename that matched the ast
 and /file/2020.parquet would create a variable with values "2019" and "2020" for the respective records.
 
 {phang}
-{opt parallelize(string)} specifies the parallelization strategy. Options are {cmd:"columns"}, {cmd:"rows"}, or {cmd:""} (default).
-This can improve performance when reading tall (many rows) vs. wide (many columns) files.
-
-{phang}
 {opt sort(varlist)} sorts the data by the specified variables during the read operation, which can be more efficient than 
 sorting after loading all data into memory.  Again, per SQL and not Stata standards, nulls are 
 not treated as greater than values.
@@ -196,8 +192,10 @@ resulting in different samples. Specify a positive integer to ensure the same ra
 across multiple runs.
 
 {phang}
-{opt batch_size(integer 1000000)} controls the reader batch size used while importing. Smaller values can
-reduce memory pressure and are useful for testing deterministic row-order behavior with {opt preserve_order}.
+{opt batch_size(integer)} controls the reader batch size used while importing. If omitted, SAS/SPSS reads
+use an inferred default based on projected columns and row counts; CSV/Parquet defer to Polars defaults.
+Smaller explicit values can reduce memory pressure and are useful for testing deterministic row-order behavior
+with {opt preserve_order}.
 
 {phang}
 {opt infer_schema_length(integer 10000)} is available for CSV reads and controls how many rows are used to infer
@@ -220,20 +218,12 @@ variables require special batch processing. Can be combined with {opt drop()} to
 variables.
 
 {phang}
-{opt max_obs_per_batch(integer 0)} sets the per-batch observation cap used when writing batches to Stata memory.
-{cmd:0} uses an internal maximum. Only available with {cmd:pq use}.
-
-{phang}
 {opt format(string)} sets input format for {cmd:pq use}/{cmd:pq append}/{cmd:pq merge}; supported values are
 {cmd:parquet}, {cmd:sas}, {cmd:spss}, and {cmd:csv}. The shortcut commands set this automatically.
 
 {phang}
 {opt fast} enables cached "describe+read" behavior for smaller files to avoid a second file pass.
 Only available with {cmd:pq use}.
-
-{phang}
-{opt auto_fast_limit(integer 100)} controls automatic fast-mode activation threshold (in MB). Set to {cmd:0}
-to disable auto-fast. Only available with {cmd:pq use}.
 
 {dlgtab:Options for pq merge}
 
@@ -280,8 +270,7 @@ to disable auto-fast. Only available with {cmd:pq use}.
 {opt update} specifies that missing values in the master dataset be replaced with values from the using dataset.
 
 {phang}
-All read options except {opt clear}, {opt fast}, {opt auto_fast_limit()}, and {opt max_obs_per_batch()}
-are available with {cmd:pq merge}.
+All read options except {opt clear} and {opt fast} are available with {cmd:pq merge}.
 This will load the data using {cmd:pq use} in a temporary frame, {cmd:save} it to a temporary dta file, and then run the specified {cmd:merge}.
 
 {dlgtab:Options for pq save}
@@ -441,11 +430,6 @@ that would be created from the asterisk pattern.
 
 {pstd}Load with relaxed schema merging:{p_end}
 {phang2}{cmd:. pq use using /data/*.parquet, clear relaxed}{p_end}
-
-{dlgtab:Performance optimization}
-
-{pstd}Load with parallel processing by column (override default which depends on the number of rows and columns):{p_end}
-{phang2}{cmd:. pq use using large_file.parquet, clear parallelize(columns)}{p_end}
 
 {dlgtab:Describing files}
 

@@ -51,26 +51,8 @@ tempfile tparquet
 compress
 pq save "`tparquet'.parquet", replace
 
-clear
-timer clear
-timer on 1
-pq use "`tparquet'.parquet", clear parallelize(columns) compress
-timer off 1
-assert _N == 100000
-
-clear
-timer on 2
-pq use "`tparquet'.parquet", clear parallelize(rows)
-timer off 2
-assert _N == 100000
-
-clear
 pq use "`tparquet'.parquet", clear batch_size(64)
 assert _N == 100000
-
-di "1:	Columns"
-di "2:	Rows"
-timer list
 
 pq use * using "`tparquet'.parquet", clear
 assert _N == 100000

@@ -224,7 +224,6 @@ program pq_merge
 
 	syntax [varlist(default=none)] using/ [,	///
 		  ASSERT(string)			///
-		  DEBUG					///
 		  GENerate(name)			///
 		  FORCE					///
 		  KEEP(string)				///
@@ -240,14 +239,13 @@ program pq_merge
 		if(string asis) 		///
 		relaxed 				///
 		asterisk_to_variable(string)	///
-		parallelize(string)		///
 		sort(string)			///
 		compress				///
 		compress_string_to_numeric	///
 			random_n(integer 0)		///
 			random_share(real 0.0)	///
 			random_seed(integer 0)	///
-			batch_size(integer 1000000)	///
+			batch_size(string)	///
 			infer_schema_length(integer 10000)	///
 			parse_dates				///
 			preserve_order			///
@@ -269,24 +267,24 @@ program pq_merge
 	}
 	local format_opt
 	if ("`format'" != "") local format_opt format(`format')
+	local batch_size_opt
+	if ("`batch_size'" != "") local batch_size_opt batch_size(`batch_size')
 
 	tempfile t_save
 	tempname f_pq
 	frame create `f_pq'
 	frame `f_pq' {
-		di "Loading source file and saving to temporary dta"
 		pq use `using_vars' using `"`using'"', 	clear in(`in') 					///
 												if(`if') 						///
 												`relaxed' 						///
 												asterisk_to_variable(`asterisk_to_variable')	///
-												parallelize(`parallelize')		///
-												sort(`varlist')					///
+																			sort(`varlist')					///
 												`compress'						///
 												`compress_string_to_numeric'	///
 												random_n(`random_n')			///
 												random_share(`random_share')	///
 												random_seed(`random_seed')		///
-												batch_size(`batch_size')		///
+												`batch_size_opt'				///
 												infer_schema_length(`infer_schema_length')	///
 												`parse_dates'				///
 												`preserve_order'				///
@@ -356,8 +354,7 @@ program pq_use_append
 						if(string asis) 		///
 						relaxed 				///
 						asterisk_to_variable(string)	///
-						parallelize(string)		///
-						sort(string)			///
+										sort(string)			///
 						compress				///
 						compress_string_to_numeric	///
 						clear					///
@@ -366,14 +363,13 @@ program pq_use_append
 						random_seed(integer 0)	///
 						infer_schema_length(integer 10000)	///
 						parse_dates				///
-						batch_size(integer 1000000)	///
+						batch_size(string)	///
 						max_obs_per_batch(integer 0)	///
 						preserve_order			///
 						drop(string)			///
 						drop_strl				///
 						format(string)			///
 						fast					///
-						auto_fast_limit(integer 100)	///
 						append]
 	
 	pq_register_plugin
@@ -401,13 +397,21 @@ program pq_use_append
 		exit 198
 	}
 
-	if (!inlist("`parallelize'", "", "columns", "rows")) {
-		display as error `"Acceptable options for parallelize are "columns", "rows", and "", passed "`parallelize'""'
-		exit 198
-	}
 	if (`infer_schema_length' < 0) {
 		display as error `"infer_schema_length() must be >= 0, passed `infer_schema_length'"'
 		exit 198
+	}
+	if ("`batch_size'" != "") {
+		capture confirm integer number `batch_size'
+		if (_rc) {
+			display as error `"batch_size() must be a positive integer, passed `batch_size'"'
+			exit 198
+		}
+		local batch_size_num = real("`batch_size'")
+		if (`batch_size_num' <= 0) {
+			display as error `"batch_size() must be > 0, passed `batch_size'"'
+			exit 198
+		}
 	}
 
 	if ("`source_format'" != "parquet") {
@@ -426,22 +430,13 @@ program pq_use_append
 		di as text "note: preserve_order ignored for format(`source_format'); only used for sas/spss reads."
 		local b_preserve_order = 0
 	}
-	local infer_schema_length_for_plugin = `infer_schema_length'
-	if ("`source_format'" != "csv") {
-		if (`infer_schema_length' != 10000) {
-			di as text "note: infer_schema_length() ignored for format(`source_format'); only used for csv reads."
-		}
-		local infer_schema_length_for_plugin = 10000
-	}
 	local b_parse_dates = "`parse_dates'" != ""
-	local parse_dates_for_plugin = `b_parse_dates'
-	if ("`source_format'" != "csv") {
-		if (`b_parse_dates') {
-			di as text "note: parse_dates ignored for format(`source_format'); only used for csv reads."
-		}
-		local parse_dates_for_plugin = 0
-	}
+	pq_normalize_csv_opts, source_format(`source_format') infer_schema_length(`infer_schema_length') b_parse_dates(`b_parse_dates')
+	local infer_schema_length_for_plugin = r(infer_schema_length_for_plugin)
+	local parse_dates_for_plugin = r(parse_dates_for_plugin)
 	local b_fast = "`fast'" != ""
+	local batch_size_for_plugin -1
+	if ("`batch_size'" != "") local batch_size_for_plugin = real("`batch_size'")
 
 	// Set default for max_obs_per_batch if not specified
 	if (`max_obs_per_batch' == 0) {
@@ -496,7 +491,7 @@ program pq_use_append
 	
 	// Rust resolves wildcards and applies drop() inside file_summary(), then sets
 	// matched_vars. drop_strl columns (binary parquet type) are filtered below.
-	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric' "`source_format'" `infer_schema_length_for_plugin' `parse_dates_for_plugin' `b_fast' `auto_fast_limit' "`namelist'" "`drop'"
+	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric' "`source_format'" `infer_schema_length_for_plugin' `parse_dates_for_plugin' `b_fast' 100 "`namelist'" "`drop'"
 
 	local vars_in_file
 	local n_renamed = 0
@@ -758,7 +753,7 @@ program pq_use_append
 
 	//	strl col names and dta path are passed so the plugin writes the strl .dta
 	//	in the same scan as the non-strl columns (consistent sampling)
-	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed' `batch_size' "`strl_col_names'" "`temp_strl_dta'" "`source_format'" `b_preserve_order' `infer_schema_length_for_plugin' `parse_dates_for_plugin'
+	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed' `batch_size_for_plugin' "`strl_col_names'" "`temp_strl_dta'" "`source_format'" `b_preserve_order' `infer_schema_length_for_plugin' `parse_dates_for_plugin'
 
 	//	Merge strL columns from .dta written by plugin into the current dataset
 	//	The .dta always contains _pq_strl_key (1-based row index) added by Rust.
@@ -1033,21 +1028,10 @@ program pq_describe, rclass
 		display as error `"infer_schema_length() must be >= 0, passed `infer_schema_length'"'
 		exit 198
 	}
-	local infer_schema_length_for_plugin = `infer_schema_length'
-	if ("`source_format'" != "csv") {
-		if (`infer_schema_length' != 10000) {
-			di as text "note: infer_schema_length() ignored for format(`source_format'); only used for csv reads."
-		}
-		local infer_schema_length_for_plugin = 10000
-	}
 	local b_parse_dates = "`parse_dates'" != ""
-	local parse_dates_for_plugin = `b_parse_dates'
-	if ("`source_format'" != "csv") {
-		if (`b_parse_dates') {
-			di as text "note: parse_dates ignored for format(`source_format'); only used for csv reads."
-		}
-		local parse_dates_for_plugin = 0
-	}
+	pq_normalize_csv_opts, source_format(`source_format') infer_schema_length(`infer_schema_length') b_parse_dates(`b_parse_dates')
+	local infer_schema_length_for_plugin = r(infer_schema_length_for_plugin)
+	local parse_dates_for_plugin = r(parse_dates_for_plugin)
 
 	//	Trailing zeros are compress indicators
 	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "" "`asterisk_to_variable'" 0 0 "`source_format'" `infer_schema_length_for_plugin' `parse_dates_for_plugin'
@@ -1068,79 +1052,6 @@ end
 
 
 
-
-capture program drop pq_match_variables
-program pq_match_variables, rclass
-    syntax [anything(name=namelist)], against(string) [drop(string)]
-
-
-	// Create local macros
-    local vars `"`against'"'
-    local matched
-    local unmatched
-
-    foreach name in `namelist' {
-		local found = 0
-
-        // Wildcard pattern
-        if strpos("`name'", "*") | strpos("`name'", "?") {
-            foreach v of local against {
-                if match("`v'", "`name'") {
-                    // Avoid duplicates
-                    if strpos(" `matched '", " `v' ") == 0 {
-                        local matched = `" `matched' `v' "'
-                    }
-                    local found = 1
-                }
-            }
-        }
-        else {
-            // Exact match
-            foreach v of local against {
-                if "`v'" == "`name'" {
-                    if strpos(" `matched '", " `v' ") == 0 {
-                        local matched = `" `matched' `v' "'
-                    }
-                    local found = 1
-                }
-            }
-        }
-
-        // Track unmatched names
-        if `found' == 0 {
-            local unmatched `unmatched' `name'
-        }
-    }
-
-	// Throw error if any names didn't match
-    if "`unmatched'" != "" {
-        di as error "The following variable(s) were not found: `unmatched'"
-        error 111
-    }
-
-	// Apply drop list - remove any matched vars that match drop patterns
-	if "`drop'" != "" {
-		local after_drop
-		foreach v of local matched {
-			local should_drop = 0
-			foreach dpat of local drop {
-				if strpos("`dpat'", "*") | strpos("`dpat'", "?") {
-					if match("`v'", "`dpat'")  local should_drop = 1
-				}
-				else {
-					if "`v'" == "`dpat'"  local should_drop = 1
-				}
-			}
-			if !`should_drop' {
-				local after_drop `after_drop' `v'
-			}
-		}
-		local matched `after_drop'
-	}
-
-    // Return matched vars
-    return local matched_vars = `"`matched'"'
-end
 
 capture program drop pq_save
 program pq_save
@@ -1513,6 +1424,30 @@ program pq_write_overflow_dta
 	// This writes ALL columns (both strL and non-strL) for the overflow slice
 	// Args: parquet_path, dta_output, columns, n_rows, offset, sql_if, relax, asterisk_to_variable, random_share, random_seed
 	plugin call polars_parquet_plugin, write_overflow_dta "`using'" "`output'" "`columns'" `n_rows' `offset' `"`if_clause'"' `b_relax' "`asterisk_to_variable'" `random_share' `random_seed' "`source_format'" `infer_schema_length' `parse_dates_for_plugin'
+end
+
+
+capture program drop pq_normalize_csv_opts
+program pq_normalize_csv_opts, rclass
+	//	Normalize infer_schema_length and parse_dates for non-CSV formats.
+	//	CSV-only options are silently reset to defaults for other formats.
+	syntax, source_format(string) infer_schema_length(integer) b_parse_dates(integer)
+	local infer_schema_length_for_plugin = `infer_schema_length'
+	if ("`source_format'" != "csv") {
+		if (`infer_schema_length' != 10000) {
+			di as text "note: infer_schema_length() ignored for format(`source_format'); only used for csv reads."
+		}
+		local infer_schema_length_for_plugin = 10000
+	}
+	local parse_dates_for_plugin = `b_parse_dates'
+	if ("`source_format'" != "csv") {
+		if (`b_parse_dates') {
+			di as text "note: parse_dates ignored for format(`source_format'); only used for csv reads."
+		}
+		local parse_dates_for_plugin = 0
+	}
+	return local infer_schema_length_for_plugin = `infer_schema_length_for_plugin'
+	return local parse_dates_for_plugin = `parse_dates_for_plugin'
 end
 
 

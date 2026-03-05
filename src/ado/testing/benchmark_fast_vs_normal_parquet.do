@@ -5,7 +5,7 @@ set varabbrev off
 //
 // fast   : describe collects full DataFrame into RAM and caches it;
 //          the subsequent read skips the second disk scan entirely.
-// normal : auto_fast_limit(0) ensures auto-fast never fires.
+// normal : ensures auto-fast never fires.
 
 capture program drop build_bench_data
 program define build_bench_data
@@ -56,7 +56,7 @@ foreach n of local sizes {
 	forvalues r = 1/`reps' {
 		clear
 		timer on 1
-		pq use using "`pq_file'", clear auto_fast_limit(0)
+		pq use using "`pq_file'", clear
 		timer off 1
 		assert _N == `n'
 	}

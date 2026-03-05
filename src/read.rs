@@ -11,11 +11,17 @@ use polars::prelude::*;
 use polars_sql::SQLContext;
 use polars::datatypes::{AnyValue, TimeUnit};
 use std::error::Error;
-use serde_json;
+use serde_json::Value;
 use std::collections::HashSet;
 use glob::glob;
 use regex::Regex;
-use polars_readstat_rs::{readstat_batch_iter, readstat_scan, ReadStatFormat, ScanOptions as ReadStatScanOptions};
+use polars_readstat_rs::{
+    readstat_batch_iter,
+    readstat_metadata_json,
+    readstat_scan,
+    ReadStatFormat,
+    ScanOptions as ReadStatScanOptions,
+};
 use sqlparser::ast::{Expr as SqlExpr, Visit, Visitor};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
@@ -31,13 +37,10 @@ use crate::stata_interface::{
 };
 
 use crate::utilities::{
-    determine_parallelization_strategy,
     get_thread_count,
     get_thread_pool,
     ms,
-    normalize_path_separators,
     profile_timing_enabled,
-    ParallelizationStrategy,
     DAY_SHIFT_SAS_STATA,
     SEC_MICROSECOND,
     SEC_MILLISECOND,
@@ -57,6 +60,39 @@ fn adaptive_batch_size(requested_rows: usize, n_cols: usize, n_rows: usize) -> u
     let target_bytes = 64 * 1024 * 1024;
     let adaptive = (target_bytes / est_bytes_per_row).clamp(10_000, 1_000_000);
     requested.min(adaptive).min(n_rows)
+}
+
+fn infer_default_batch_size(
+    n_cols: usize,
+    n_rows: Option<usize>,
+    metadata_row_count: Option<usize>,
+) -> usize {
+    let min_rows_floor = 1_000usize;
+    let min_rows_cap = 10_000usize;
+    let max_rows = 100_000usize;
+    let target_cells = 2_000_000usize;
+    let min_cells = 250_000usize;
+
+    let n_cols = n_cols.max(1);
+    let by_cols = (target_cells / n_cols).max(1);
+    let mut batch = max_rows.min(by_cols);
+
+    let total_rows = n_rows
+        .filter(|rows| *rows > 0)
+        .or_else(|| metadata_row_count.filter(|rows| *rows > 0));
+
+    let min_rows_by_rows = if let Some(total_rows) = total_rows {
+        batch = batch.min(total_rows);
+        min_rows_floor.max(min_rows_cap.min(total_rows / 10))
+    } else {
+        min_rows_cap
+    };
+
+    let min_rows_by_cols =
+        min_rows_floor.max(min_rows_cap.min((min_cells + n_cols - 1) / n_cols));
+    let min_rows = min_rows_by_rows.min(min_rows_by_cols);
+
+    min_rows.max(batch)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -660,6 +696,20 @@ fn readstat_format_for_input(input_format: InputFormat) -> Option<ReadStatFormat
     }
 }
 
+fn readstat_metadata_row_count(path: &str, input_format: InputFormat) -> Option<usize> {
+    if Path::new(path).is_dir() || path.contains('*') || path.contains('?') || path.contains('[') {
+        return None;
+    }
+
+    let format = readstat_format_for_input(input_format)?;
+    let metadata_json = readstat_metadata_json(path, Some(format)).ok()?;
+    let metadata: Value = serde_json::from_str(&metadata_json).ok()?;
+    metadata
+        .get("row_count")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+}
+
 #[derive(Default)]
 struct SqlIfColumnCollector {
     columns: Vec<String>,
@@ -794,7 +844,7 @@ pub fn filtered_row_count_readstat_with_sql(
 
 #[cfg(test)]
 mod sql_if_projection_tests {
-    use super::{extract_sql_if_columns, projected_readstat_columns};
+    use super::{extract_sql_if_columns, infer_default_batch_size, projected_readstat_columns};
 
     #[test]
     fn extracts_columns_from_sql_if_expression() {
@@ -828,6 +878,18 @@ mod sql_if_projection_tests {
         let projected = projected_readstat_columns(&selected, Some("age >"));
         assert!(projected.is_none());
     }
+
+    #[test]
+    fn infer_default_batch_size_matches_expected_scale_for_wide_and_narrow_tables() {
+        assert_eq!(infer_default_batch_size(10, None, None), 100_000);
+        assert_eq!(infer_default_batch_size(500, None, None), 4_000);
+    }
+
+    #[test]
+    fn infer_default_batch_size_uses_row_information_when_available() {
+        assert_eq!(infer_default_batch_size(2, Some(5_000), None), 5_000);
+        assert_eq!(infer_default_batch_size(50, None, Some(300)), 1_000);
+    }
 }
 
 fn apply_sql_filter_to_batch(batch: DataFrame, sql_if: Option<&str>) -> PolarsResult<DataFrame> {
@@ -857,9 +919,8 @@ fn read_to_stata_from_readstat_batches(
     offset: usize,
     sql_if: Option<&str>,
     cast_json: &str,
-    parallel_strategy: Option<ParallelizationStrategy>,
     stata_offset: usize,
-    batch_size: usize,
+    batch_size: Option<usize>,
     preserve_order: bool,
 ) -> Result<i32, Box<dyn Error>> {
     if all_columns.is_empty() {
@@ -872,11 +933,15 @@ fn read_to_stata_from_readstat_batches(
         None => return Ok(198),
     };
 
-    let effective_batch_size = adaptive_batch_size(batch_size, all_columns.len(), n_rows);
+    let effective_batch_size = match batch_size.filter(|v| *v > 0) {
+        Some(requested) => adaptive_batch_size(requested, all_columns.len(), n_rows),
+        None => infer_default_batch_size(
+            selected_columns_ordered.len(),
+            (n_rows > 0).then_some(n_rows),
+            readstat_metadata_row_count(path, input_format),
+        ),
+    };
     let n_threads = if n_rows < 1_000 { 1 } else { get_thread_count() };
-    let strategy = parallel_strategy.unwrap_or_else(|| {
-        determine_parallelization_strategy(all_columns.len(), n_rows, n_threads)
-    });
     let thread_pool = if n_threads > 1 {
         Some(get_thread_pool(n_threads))
     } else {
@@ -972,7 +1037,6 @@ fn read_to_stata_from_readstat_batches(
             &batch,
             rows_written,
             all_columns,
-            strategy,
             n_threads,
             n_batches,
             stata_offset,
@@ -998,14 +1062,13 @@ pub fn read_to_stata(
     offset: usize,
     sql_if: Option<&str>,
     mapping: &str,
-    parallel_strategy: Option<ParallelizationStrategy>,
     safe_relaxed: bool,
     asterisk_to_variable_name: Option<&str>,
     sort:&str,
     stata_offset:usize,
     random_share:f64,
     random_seed:u64,
-    batch_size:usize,
+    batch_size: Option<usize>,
     strl_col_names: &str,
     strl_dta_path: &str,
     input_format: InputFormat,
@@ -1099,6 +1162,7 @@ pub fn read_to_stata(
         infer_schema_length,
     };
     let cached_lf: Option<LazyFrame> = fast_cache::take(&cache_key).map(|df: DataFrame| df.lazy());
+    let loaded_from_cache = cached_lf.is_some();
 
     let csv_schema = if matches!(input_format, InputFormat::Csv) {
         csv_schema_from_describe_macros()
@@ -1121,7 +1185,6 @@ pub fn read_to_stata(
             offset,
             sql_if,
             &cast_json,
-            parallel_strategy,
             stata_offset,
             batch_size,
             preserve_order,
@@ -1184,7 +1247,7 @@ pub fn read_to_stata(
 
     // For SAS/SPSS, project to requested columns + SQL predicate columns.
     // This enables projection pushdown on non-streaming paths too.
-    if matches!(input_format, InputFormat::Sas | InputFormat::Spss) {
+    if !loaded_from_cache && matches!(input_format, InputFormat::Sas | InputFormat::Spss) {
         if let Some(projected_columns) = projected_readstat_columns(&selected_columns_ordered, sql_filter) {
             let projection_exprs: Vec<Expr> = projected_columns
                 .iter()
@@ -1195,6 +1258,7 @@ pub fn read_to_stata(
     }
 
     // Apply SQL filter if provided
+    if !loaded_from_cache {
     if let Some(sql) = sql_filter {
         let t0 = Instant::now();
         let mut ctx = SQLContext::new();
@@ -1210,6 +1274,7 @@ pub fn read_to_stata(
         if prof {
             t_sql += t0.elapsed();
         }
+    }
     }
 
     let sample_share = random_share > 0.0;
@@ -1276,7 +1341,17 @@ pub fn read_to_stata(
         .collect();
 
     //  display(&format!("columns: {:?}", columns));
-    let effective_batch_size = adaptive_batch_size(batch_size, columns.len(), n_rows);
+    let effective_batch_size = if let Some(requested) = batch_size.filter(|v| *v > 0) {
+        Some(adaptive_batch_size(requested, columns.len(), n_rows))
+    } else if matches!(input_format, InputFormat::Sas | InputFormat::Spss) {
+        Some(infer_default_batch_size(
+            columns.len(),
+            (n_rows > 0).then_some(n_rows),
+            readstat_metadata_row_count(path, input_format),
+        ))
+    } else {
+        None
+    };
     
     // Determine thread count based on data size
     let n_threads = if n_rows < 1_000 {
@@ -1285,21 +1360,11 @@ pub fn read_to_stata(
         get_thread_count()
     };
     
-    let strategy = parallel_strategy.unwrap_or_else(|| {
-        determine_parallelization_strategy(
-            columns.len(),
-            n_rows,
-            n_threads
-        )
-    });
-
     let thread_pool = if n_threads > 1 {
         Some(get_thread_pool(n_threads))
     } else {
         None
     };
-    
-    //  display(&format!("Processing with strategy: {:?}, threads: {}", strategy, n_threads));
     // When strl columns are present, collect the full frame once so that strl and
     // non-strl see exactly the same rows (including any random sampling already applied).
     // The strl columns are written to a .dta file; non-strl continue via sink_batches.
@@ -1370,7 +1435,7 @@ pub fn read_to_stata(
     let batch_counter_cb = Arc::clone(&batch_counter);
     let batch_write_nanos_cb = Arc::clone(&batch_write_nanos);
     let read_pool_cb = thread_pool;
-    let chunk_size = NonZeroUsize::new(effective_batch_size);
+    let chunk_size = effective_batch_size.and_then(NonZeroUsize::new);
 
     let t0 = Instant::now();
     let sink_lf = match write_lf
@@ -1385,7 +1450,6 @@ pub fn read_to_stata(
                     &batch,
                     start_index,
                     all_columns_cb.as_ref(),
-                    strategy,
                     n_threads,
                     batchi,
                     stata_offset,
@@ -1479,7 +1543,13 @@ fn column_info_from_macros(n_vars: usize) -> Vec<ColumnInfo> {
     let mut column_infos = Vec::with_capacity(n_vars);
     
     for i in 0..n_vars {
-        let index = get_macro(&format!("v_to_read_index_{}", i+1), false, None).parse::<usize>().unwrap() - 1;
+        let index_macro = get_macro(&format!("v_to_read_index_{}", i + 1), false, None);
+        let index = index_macro
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .and_then(|v| v.checked_sub(1))
+            .unwrap_or(i);
         let name = get_macro(&format!("v_to_read_name_{}", i+1), false, None);
         let dtype = get_macro(&format!("v_to_read_p_type_{}", i+1), false, None);
         let stata_type = get_macro(&format!("v_to_read_type_{}", i+1), false, None);
@@ -1497,56 +1567,33 @@ fn column_info_from_macros(n_vars: usize) -> Vec<ColumnInfo> {
     column_infos
 }
 
-// Main entry point that delegates to appropriate strategy
 fn process_batch_with_strategy(
     batch: &DataFrame,
     start_index: usize,
     all_columns: &Vec<ColumnInfo>,
-    strategy: ParallelizationStrategy,
     n_threads: usize,
     _n_batch:usize,
     stata_offset:usize,
     thread_pool: Option<&rayon::ThreadPool>,
 ) -> PolarsResult<()> {
-
-    // If only 1 thread requested or batch is too small, use single-threaded version
     let row_count = batch.height();
-    let min_multithreaded = 10000;
-    
-    if n_threads <= 1 || row_count < min_multithreaded {
+    if n_threads <= 1 || row_count < 10_000 {
         return process_batch_single_thread(batch, start_index, all_columns, stata_offset);
     }
 
-    // Partition columns into special (strl/binary) and regular columns
     let (_special_columns,
          regular_columns): (Vec<_>, Vec<_>) = all_columns.iter().enumerate()
         .partition(|(_, col_info)| {
             col_info.stata_type == "strl" || col_info.stata_type == "binary"
         });
 
-
     let run = || -> PolarsResult<()> {
-        // First, process regular columns with the chosen strategy
         if !regular_columns.is_empty() {
-            // Create a vector of regular ColumnInfo objects
             let regular_column_infos: Vec<ColumnInfo> = regular_columns.iter()
                 .map(|(_, col_info)| (*col_info).clone())
                 .collect();
-            
-            match strategy {
-                ParallelizationStrategy::ByRow => {
-                    // Process regular columns by row
-                    process_regular_by_row(batch, start_index, &regular_column_infos, stata_offset)?;
-                },
-                ParallelizationStrategy::ByColumn => {
-                    // Process regular columns by column
-                    process_regular_by_column(batch, start_index, &regular_column_infos, stata_offset)?;
-                }
-            }
+            process_regular_by_row(batch, start_index, &regular_column_infos, stata_offset)?;
         }
-
-        // strL columns are written to .dta inside read_to_stata, skip them here
-
         Ok(())
     };
 
@@ -1557,8 +1604,6 @@ fn process_batch_with_strategy(
     }
 }
 
-
-// Process regular columns with row-wise parallelization
 fn process_regular_by_row(
     batch: &DataFrame,
     start_index: usize,
@@ -1582,58 +1627,6 @@ fn process_regular_by_row(
             process_row_range(batch, start_index, start_row, end_row, columns, stata_offset)
         })
 }
-
-// Process regular columns with column-wise parallelization
-fn process_regular_by_column(
-    batch: &DataFrame,
-    start_index: usize,
-    columns: &Vec<ColumnInfo>,
-    stata_offset: usize,
-) -> PolarsResult<()> {
-    // Process columns in parallel
-    columns.par_iter().enumerate()
-        .try_for_each(|(_col_idx, col_info)| {
-            // Get the column by name
-            let col = match batch.column(&col_info.name) {
-                Ok(c) => c,
-                Err(e) => return Err(e)
-            };
-            //  display(&format!("Index: {}", col_info.index));
-            // Process regular column based on its type
-            match col_info.stata_type.as_str() {
-                "string" => {
-                    // Handle string types
-                    if let Ok(str_col) = col.str() {
-                        for row_idx in 0..batch.height() {
-                            let global_row_idx = row_idx + start_index;
-                            
-                            // Get the string value at this row position
-                            let opt_val = match str_col.get(row_idx) {
-                                Some(s) => Some(s.to_string()),
-                                None => None
-                            };
-                            
-                            replace_string(
-                                opt_val, 
-                                global_row_idx + 1 + stata_offset, // +1 because replace_string expects 1-indexed
-                                col_info.index + 1        // +1 because replace functions expect 1-indexed
-                            );
-                        }
-                    }
-                    Ok(())
-                },
-                "datetime" => {
-                    // Process datetime with appropriate time unit
-                    process_datetime_column(col, 0, batch.height(), start_index, col_info.index + 1, stata_offset)
-                },
-                _ => {
-                    // Handle numeric types
-                    process_numeric_column(col, col_info, 0, batch.height(), start_index, col_info.index + 1, stata_offset)
-                }
-            }
-        })
-}
-
 
 // Single-threaded implementation (fallback)
 fn process_batch_single_thread(

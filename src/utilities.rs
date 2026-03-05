@@ -48,13 +48,6 @@ pub fn get_thread_count() -> usize {
 }
 
 
-#[derive(Copy,Clone,Debug)]
-pub enum ParallelizationStrategy {
-    ByRow,
-    ByColumn,
-}
-
-// Simple decision function
 /// Convert backslashes to forward slashes for cross-platform glob compatibility.
 /// Safe to call on all platforms — forward slashes work on Windows too.
 pub fn normalize_path_separators(path: &str) -> String {
@@ -84,18 +77,3 @@ pub fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
 }
 
-pub fn determine_parallelization_strategy(
-    n_columns: usize,
-    n_rows: usize,
-    available_cores: usize
-) -> ParallelizationStrategy {
-    // Column parallelism when:
-    // 1. We have significantly more columns than CPU cores
-    // 2. We have relatively few rows compared to columns
-    if n_columns > available_cores * 2 && n_rows < 100_000 {
-        ParallelizationStrategy::ByColumn
-    } else {
-        // Default to row parallelism in most other cases
-        ParallelizationStrategy::ByRow
-    }
-}

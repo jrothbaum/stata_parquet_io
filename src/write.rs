@@ -24,10 +24,6 @@ use crate::utilities::{
     //  SEC_MILLISECOND,
     SEC_MICROSECOND,
     //  SEC_NANOSECOND,
-    get_thread_count,
-    get_thread_pool,
-    ParallelizationStrategy,
-    determine_parallelization_strategy,
 };
 
 #[allow(dead_code)]
@@ -51,7 +47,6 @@ pub fn write_from_stata(
     offset:usize,
     sql_if:Option<&str>,
     mapping:&str,
-    parallel_strategy:Option<ParallelizationStrategy>,
     partition_by_str:&str,
     compression:&str,
     compression_level:Option<usize>,
@@ -134,7 +129,6 @@ pub fn write_from_stata(
         offset,
         n_rows,
         sql_if_owned,
-        parallel_strategy
     );
 
     
@@ -985,7 +979,6 @@ pub struct StataDataScan {
     column_info:Vec<mapping::StataColumnInfo>,
     all_columns:Vec<PlSmallStr>,
     sql_if:Option<String>,
-    parallel_strategy:Option<ParallelizationStrategy>,
 }
 
 
@@ -997,7 +990,6 @@ impl StataDataScan {
         initial_offset: usize,
         n_rows: usize,
         sql_if: Option<String>,
-        parallel_strategy:Option<ParallelizationStrategy>,
     ) -> Self {
         let rows_to_read = if n_rows > 0 {
             n_rows
@@ -1014,7 +1006,6 @@ impl StataDataScan {
             column_info: column_info,
             all_columns: all_columns,
             sql_if: sql_if,
-            parallel_strategy:parallel_strategy,
         }
     }
     
@@ -1052,7 +1043,6 @@ impl AnonymousScan for StataDataScan {
             scan_opts,
             0,
             n_rows,
-            self.parallel_strategy
         )?;
 
         // Now handle the Option<DataFrame>
@@ -1232,61 +1222,22 @@ fn read_single_batch(
     _scan_opts: AnonymousScanArgs,
     offset: usize,
     n_rows: usize,
-    parallel_strategy: Option<ParallelizationStrategy>,
 ) -> PolarsResult<Option<DataFrame>> {
     // Calculate how many rows to read in this batch
     let rows_remaining = sds.n_rows - offset;
     let n_rows_to_read = std::cmp::min(n_rows, rows_remaining);
     
-    //  Configure thread pool
-    let n_threads = if n_rows_to_read < 100_000 {
-        1 as usize
-    } else {
-        get_thread_count()
-    };
-    
-    
-    let strategy = parallel_strategy.unwrap_or_else(|| {
-        determine_parallelization_strategy(
-            sds.schema.len(),
-            n_rows_to_read,
-            n_threads
-        )
-    });
-    
-    let thread_pool = get_thread_pool(n_threads);
-    
-    // Apply the strategy
-    let columns_result: PolarsResult<Vec<Series>> = match strategy {
-        ParallelizationStrategy::ByColumn => {
-            // Process columns in parallel
-            thread_pool.install(|| {
-                sds.all_columns.par_iter().enumerate()
-                    .map(|(col_idx, col_name)| {
-                        match process_column(col_idx, col_name, n_rows_to_read, offset, false, &sds.schema, &sds.column_info)? {
-                            Some(series) => Ok(series),
-                            None => Err(PolarsError::ComputeError(
-                                format!("Failed to process column: {}", col_name).into(),
-                            ))
-                        }
-                    })
-                    .collect()
-            })
-        },
-        ParallelizationStrategy::ByRow => {
-            // Process columns sequentially, but rows in parallel
-            sds.all_columns.iter().enumerate()
-                .map(|(col_idx, col_name)| {
-                    match process_column(col_idx, col_name, n_rows_to_read, offset, true, &sds.schema, &sds.column_info)? {
-                        Some(series) => Ok(series),
-                        None => Err(PolarsError::ComputeError(
-                            format!("Failed to process column: {}", col_name).into(),
-                        ))
-                    }
-                })
-                .collect()
-        }
-    };
+    // Process columns sequentially, rows in parallel
+    let columns_result: PolarsResult<Vec<Series>> = sds.all_columns.iter().enumerate()
+        .map(|(col_idx, col_name)| {
+            match process_column(col_idx, col_name, n_rows_to_read, offset, true, &sds.schema, &sds.column_info)? {
+                Some(series) => Ok(series),
+                None => Err(PolarsError::ComputeError(
+                    format!("Failed to process column: {}", col_name).into(),
+                ))
+            }
+        })
+        .collect();
     
     let columns = columns_result?;
 

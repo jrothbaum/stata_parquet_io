@@ -1,11 +1,6 @@
-// use tikv_jemallocator::Jemalloc;
-// #[global_allocator]
-// static GLOBAL: Jemalloc = Jemalloc;
-
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::slice;
-use utilities::ParallelizationStrategy;
 
 
 pub mod read;
@@ -80,13 +75,8 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
             rust_args
         };
         
-        // display(&format!("{:?}",&args));
-        // First argument is the subfunction name
         let subfunction_name = args[0];
-        
-        // Remaining arguments are passed to the subfunction
         let subfunction_args = &args[1..];
-        //    println!("subfunction_args = {:?}",subfunction_args);
         
         
         // Call the appropriate subfunction
@@ -100,44 +90,47 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     return 601 as ST_retcode;
                 }
                 
-                // for i in 0..9 {
-                //     display(&format!("{} = {:?}", i,subfunction_args[i]));
-                // }
-                let parallel_strategy:Option<ParallelizationStrategy> = match subfunction_args[6] {
-                    "columns" => Some(ParallelizationStrategy::ByColumn),
-                    "rows" => Some(ParallelizationStrategy::ByRow),
-                    //  Use default based on file dimensions
-                    _ => None
-                };
-
-                
-                let safe_relaxed = match subfunction_args[7] {
+                let safe_relaxed = match subfunction_args[6] {
                     "0" => false,
                     "1" => true,
                     _ => false
                 };
 
-                let asterisk_to_variable_name = if subfunction_args[8].is_empty() {
+                // args[6]=safe_relaxed [7]=asterisk [8]=sort [9]=n_obs_already
+                // [10]=random_share [11]=random_seed [12]=batch_size
+                // [13]=strl_col_names [14]=strl_dta_path [15]=format
+                // [16]=preserve_order [17]=infer_schema_length [18]=parse_dates
+                let asterisk_to_variable_name = if subfunction_args[7].is_empty() {
                     None
                 } else {
-                    Some(subfunction_args[8])
+                    Some(subfunction_args[7])
                 };
+                let batch_size = subfunction_args
+                    .get(12)
+                    .and_then(|s| {
+                        let trimmed = s.trim();
+                        if trimmed.is_empty() || trimmed == "-1" {
+                            None
+                        } else {
+                            trimmed.parse::<usize>().ok()
+                        }
+                    });
 
-                let strl_col_names = if subfunction_args.len() > 14 { subfunction_args[14] } else { "" };
-                let strl_dta_path  = if subfunction_args.len() > 15 { subfunction_args[15] } else { "" };
-                let format_arg = if subfunction_args.len() > 16 { subfunction_args[16] } else { "parquet" };
-                let preserve_order = if subfunction_args.len() > 17 { subfunction_args[17] == "1" } else { false };
-                let infer_schema_length = if subfunction_args.len() > 18 {
-                    subfunction_args[18].parse::<usize>().unwrap_or(10000)
+                let strl_col_names = if subfunction_args.len() > 13 { subfunction_args[13] } else { "" };
+                let strl_dta_path  = if subfunction_args.len() > 14 { subfunction_args[14] } else { "" };
+                let format_arg = if subfunction_args.len() > 15 { subfunction_args[15] } else { "parquet" };
+                let preserve_order = if subfunction_args.len() > 16 { subfunction_args[16] == "1" } else { false };
+                let infer_schema_length = if subfunction_args.len() > 17 {
+                    subfunction_args[17].parse::<usize>().unwrap_or(10000)
                 } else {
                     10000
                 };
-                let parse_dates = if subfunction_args.len() > 19 {
-                    subfunction_args[19] == "1"
+                let parse_dates = if subfunction_args.len() > 18 {
+                    subfunction_args[18] == "1"
                 } else {
                     false
                 };
-                let columns_varlist = if subfunction_args.len() > 20 { subfunction_args[20] } else { "" };
+                let columns_varlist = if subfunction_args.len() > 19 { subfunction_args[19] } else { "" };
                 let input_format = match InputFormat::from_str(format_arg) {
                     Some(f) => f,
                     None => {
@@ -149,18 +142,17 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 let read_result = read_to_stata(
                     subfunction_args[0],
                     subfunction_args[1],
-                    subfunction_args[2].parse::<usize>().unwrap(),
-                    subfunction_args[3].parse::<usize>().unwrap(),
+                    subfunction_args[2].parse::<usize>().unwrap_or(0),
+                    subfunction_args[3].parse::<usize>().unwrap_or(0),
                     Some(subfunction_args[4]),
                     subfunction_args[5],
-                    parallel_strategy,
                     safe_relaxed,
                     asterisk_to_variable_name,
-                    subfunction_args[9],
-                    subfunction_args[10].parse::<usize>().unwrap(),
-                    subfunction_args[11].parse::<f64>().unwrap(),
-                    subfunction_args[12].parse::<u64>().unwrap(),
-                    subfunction_args[13].parse::<usize>().unwrap(),
+                    subfunction_args[8],
+                    subfunction_args[9].parse::<usize>().unwrap_or(0),
+                    subfunction_args[10].parse::<f64>().unwrap_or(0.0),
+                    subfunction_args[11].parse::<u64>().unwrap_or(0),
+                    batch_size,
                     strl_col_names,
                     strl_dta_path,
                     input_format,
@@ -228,13 +220,13 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 };
                 return file_summary(
                         subfunction_args[0],
-                        subfunction_args[1].parse::<u8>().unwrap() != 0,
-                        subfunction_args[2].parse::<u8>().unwrap() != 0,
+                        subfunction_args[1].parse::<u8>().unwrap_or(0) != 0,
+                        subfunction_args[2].parse::<u8>().unwrap_or(0) != 0,
                         Some(subfunction_args[3].as_ref()),
                         true,
                         asterisk_to_variable_name,
-                        subfunction_args[5].parse::<u8>().unwrap() != 0,
-                        subfunction_args[6].parse::<u8>().unwrap() != 0,
+                        subfunction_args[5].parse::<u8>().unwrap_or(0) != 0,
+                        subfunction_args[6].parse::<u8>().unwrap_or(0) != 0,
                         input_format,
                         infer_schema_length,
                         parse_dates,
@@ -253,8 +245,8 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 let mapping = subfunction_args[5];
                 let partition_by = subfunction_args[6];
                 let compression = subfunction_args[7];
-                let compression_level_passed = subfunction_args[8].parse::<i32>().unwrap();
-                let overwrite_partition = subfunction_args[9].parse::<i32>().unwrap() == 1;
+                let compression_level_passed = subfunction_args[8].parse::<i32>().unwrap_or(-1);
+                let overwrite_partition = subfunction_args[9].parse::<i32>().unwrap_or(0) == 1;
 
                 
                 let compression_level = if compression_level_passed == -1 {
@@ -264,20 +256,19 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 };
 
 
-                let compress = subfunction_args[10].parse::<u8>().unwrap() != 0;
-                let compress_string = subfunction_args[11].parse::<u8>().unwrap() != 0;
-                let quietly = subfunction_args[12].parse::<u8>().unwrap() != 0;
-                let append_to_partition = subfunction_args[13].parse::<u8>().unwrap() != 0;
+                let compress = subfunction_args[10].parse::<u8>().unwrap_or(0) != 0;
+                let compress_string = subfunction_args[11].parse::<u8>().unwrap_or(0) != 0;
+                let quietly = subfunction_args[12].parse::<u8>().unwrap_or(0) != 0;
+                let append_to_partition = subfunction_args[13].parse::<u8>().unwrap_or(0) != 0;
                 let output_format = if subfunction_args.len() > 14 { subfunction_args[14] } else { "parquet" };
                 
                 let output = match write::write_from_stata(
                     path,
                     varlist,
-                    n_rows.parse::<usize>().unwrap(),
-                    offset.parse::<usize>().unwrap(),
+                    n_rows.parse::<usize>().unwrap_or(0),
+                    offset.parse::<usize>().unwrap_or(0),
                     Some(sql_if),
                     mapping,
-                    None,
                     partition_by,
                     compression,
                     compression_level,
@@ -340,13 +331,13 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     subfunction_args[0],  // parquet path
                     subfunction_args[1],  // dta output path
                     columns,  // column names (space-separated, optional)
-                    subfunction_args[3].parse::<usize>().unwrap(),  // n_rows
-                    subfunction_args[4].parse::<usize>().unwrap(),  // offset
+                    subfunction_args[3].parse::<usize>().unwrap_or(0),  // n_rows
+                    subfunction_args[4].parse::<usize>().unwrap_or(0),  // offset
                     Some(subfunction_args[5]),  // sql_if
                     safe_relaxed,
                     asterisk_to_variable_name,
-                    subfunction_args[8].parse::<f64>().unwrap(),   // random_share
-                    subfunction_args[9].parse::<u64>().unwrap(),   // random_seed
+                    subfunction_args[8].parse::<f64>().unwrap_or(0.0),   // random_share
+                    subfunction_args[9].parse::<u64>().unwrap_or(0),   // random_seed
                     input_format,
                     infer_schema_length,
                     parse_dates,
@@ -362,7 +353,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
             },
             "clean_path" => {
                 let path = subfunction_args[0];
-                let create_dir = subfunction_args[1].parse::<i32>().unwrap() == 1;
+                let create_dir = subfunction_args[1].parse::<i32>().unwrap_or(0) == 1;
                 let overwrite_partition = true;
 
                 let delete_error = write::delete_existing_files(path, overwrite_partition);
