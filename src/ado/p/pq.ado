@@ -47,6 +47,15 @@ program define pq
 		//	di `"pq_merge `0'"'
 		pq_merge `0'
     }
+	else if ("`todo'" == "merge_sas") {
+		pq_merge_sas `0'
+	}
+	else if ("`todo'" == "merge_spss") {
+		pq_merge_spss `0'
+	}
+	else if ("`todo'" == "merge_csv") {
+		pq_merge_csv `0'
+	}
     else if ("`todo'" == "save") {
 		//	di `"pq_save `0'"'
         pq_save `0'
@@ -160,6 +169,36 @@ program define pq_describe_csv
 	}
 end
 
+capture program drop pq_merge_sas
+program define pq_merge_sas
+	if strpos(`"`0'"', ",") > 0 {
+		pq_merge `0' format(sas)
+	}
+	else {
+		pq_merge `0', format(sas)
+	}
+end
+
+capture program drop pq_merge_spss
+program define pq_merge_spss
+	if strpos(`"`0'"', ",") > 0 {
+		pq_merge `0' format(spss)
+	}
+	else {
+		pq_merge `0', format(spss)
+	}
+end
+
+capture program drop pq_merge_csv
+program define pq_merge_csv
+	if strpos(`"`0'"', ",") > 0 {
+		pq_merge `0' format(csv)
+	}
+	else {
+		pq_merge `0', format(csv)
+	}
+end
+
 
 
 capture program drop pq_merge
@@ -210,6 +249,7 @@ program pq_merge
 			random_seed(integer 0)	///
 			batch_size(integer 1000000)	///
 			infer_schema_length(integer 10000)	///
+			parse_dates				///
 			preserve_order			///
 			drop(string)			///
 			drop_strl					///
@@ -248,6 +288,7 @@ program pq_merge
 												random_seed(`random_seed')		///
 												batch_size(`batch_size')		///
 												infer_schema_length(`infer_schema_length')	///
+												`parse_dates'				///
 												`preserve_order'				///
 												`format_opt'					///
 												drop(`drop')					///
@@ -324,12 +365,15 @@ program pq_use_append
 						random_share(real 0.0)	///
 						random_seed(integer 0)	///
 						infer_schema_length(integer 10000)	///
+						parse_dates				///
 						batch_size(integer 1000000)	///
 						max_obs_per_batch(integer 0)	///
 						preserve_order			///
 						drop(string)			///
-						drop_strl					///
+						drop_strl				///
 						format(string)			///
+						fast					///
+						auto_fast_limit(integer 100)	///
 						append]
 	
 	pq_register_plugin
@@ -389,6 +433,15 @@ program pq_use_append
 		}
 		local infer_schema_length_for_plugin = 10000
 	}
+	local b_parse_dates = "`parse_dates'" != ""
+	local parse_dates_for_plugin = `b_parse_dates'
+	if ("`source_format'" != "csv") {
+		if (`b_parse_dates') {
+			di as text "note: parse_dates ignored for format(`source_format'); only used for csv reads."
+		}
+		local parse_dates_for_plugin = 0
+	}
+	local b_fast = "`fast'" != ""
 
 	// Set default for max_obs_per_batch if not specified
 	if (`max_obs_per_batch' == 0) {
@@ -441,23 +494,25 @@ program pq_use_append
 	local b_compress_string_to_numeric = "`compress_string_to_numeric'" != ""
 	//	di `"plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "`sql_if'" "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric'"'
 	
-	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric' "`source_format'" `infer_schema_length_for_plugin'
-	
+	// Rust resolves wildcards and applies drop() inside file_summary(), then sets
+	// matched_vars. drop_strl columns (binary parquet type) are filtered below.
+	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric' "`source_format'" `infer_schema_length_for_plugin' `parse_dates_for_plugin' `b_fast' `auto_fast_limit' "`namelist'" "`drop'"
+
 	local vars_in_file
 	local n_renamed = 0
 	forvalues i = 1/`n_columns' {
 		local vars_in_file `vars_in_file' `name_`i''
-		
+
 		local renamei `rename_`i''
 		if ("`renamei'" != "") {
-			local n_renamed = `n_renamed' + 1 
+			local n_renamed = `n_renamed' + 1
 			local rename_from_`n_renamed' `name_`i''
 			local rename_to_`n_renamed' `renamei'
 		}
 	}
-	
-	
-	//	Build drop list from drop_strl flag
+
+	// matched_vars is set by the Rust describe plugin (wildcards expanded, drop applied).
+	// Handle drop_strl separately: remove binary ("strl") columns identified from schema.
 	if "`drop_strl'" == "drop_strl" {
 		local strl_drop_list
 		forvalues i = 1/`n_columns' {
@@ -465,27 +520,18 @@ program pq_use_append
 				local strl_drop_list `strl_drop_list' `name_`i''
 			}
 		}
-		local drop `drop' `strl_drop_list'
+		if "`strl_drop_list'" != "" {
+			local new_matched
+			foreach vari in `matched_vars' {
+				if !`:list vari in strl_drop_list' {
+					local new_matched `new_matched' `vari'
+				}
+			}
+			local matched_vars `new_matched'
+		}
 	}
 
-	// If namelist is empty or blank, return the full varlist
-	if "`namelist'" == "" | "`namelist'" == "*" {
-		if "`drop'" != "" {
-			pq_match_variables `vars_in_file', against(`vars_in_file') drop(`drop')
-			local matched_vars = r(matched_vars)
-		}
-		else {
-			local matched_vars `vars_in_file'
-		}
-		local match_all = 1
-    }
-    else {
-        // Use function to match the variables from name list to the ones on the file
-        pq_match_variables `namelist', against(`vars_in_file') drop(`drop')
-
-		local matched_vars = r(matched_vars)
-		local match_all = 0
-    }
+	local match_all = ("`namelist'" == "" | "`namelist'" == "*") & "`drop'" == ""
 	
 	//	Get the list of already existing variables
 	capture unab all_vars: *
@@ -712,7 +758,7 @@ program pq_use_append
 
 	//	strl col names and dta path are passed so the plugin writes the strl .dta
 	//	in the same scan as the non-strl columns (consistent sampling)
-	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed' `batch_size' "`strl_col_names'" "`temp_strl_dta'" "`source_format'" `b_preserve_order' `infer_schema_length_for_plugin'
+	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' "`parallelize'" `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed' `batch_size' "`strl_col_names'" "`temp_strl_dta'" "`source_format'" `b_preserve_order' `infer_schema_length_for_plugin' `parse_dates_for_plugin'
 
 	//	Merge strL columns from .dta written by plugin into the current dataset
 	//	The .dta always contains _pq_strl_key (1-based row index) added by Rust.
@@ -800,7 +846,8 @@ program pq_use_append
 			columns("`overflow_columns'") if_clause(`"`sql_if'"') ///
 			`relax_opt' asterisk_to_variable("`asterisk_to_variable'") ///
 			random_share(`random_share') random_seed(`random_seed') format(`source_format') ///
-			infer_schema_length(`infer_schema_length_for_plugin')
+			infer_schema_length(`infer_schema_length_for_plugin') ///
+			parse_dates(`parse_dates_for_plugin')
 
 		//	Append the overflow .dta
 		quietly append using "`temp_overflow_dta'"
@@ -963,7 +1010,8 @@ program pq_describe, rclass
 			 detailed					///
 			 asterisk_to_variable(string) ///
 			 format(string)				///
-			 infer_schema_length(integer 10000)]
+			 infer_schema_length(integer 10000) ///
+			 parse_dates]
 
 	pq_register_plugin
 	local b_quiet = ("`quietly'" != "")
@@ -992,9 +1040,17 @@ program pq_describe, rclass
 		}
 		local infer_schema_length_for_plugin = 10000
 	}
+	local b_parse_dates = "`parse_dates'" != ""
+	local parse_dates_for_plugin = `b_parse_dates'
+	if ("`source_format'" != "csv") {
+		if (`b_parse_dates') {
+			di as text "note: parse_dates ignored for format(`source_format'); only used for csv reads."
+		}
+		local parse_dates_for_plugin = 0
+	}
 
 	//	Trailing zeros are compress indicators
-	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "" "`asterisk_to_variable'" 0 0 "`source_format'" `infer_schema_length_for_plugin'
+	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "" "`asterisk_to_variable'" 0 0 "`source_format'" `infer_schema_length_for_plugin' `parse_dates_for_plugin'
 
 	
 	local macros_to_return n_rows n_columns //	mapping
@@ -1427,7 +1483,7 @@ program pq_write_overflow_dta
 	syntax, using(string) output(string) offset(integer) n_rows(integer) ///
 	        columns(string) [if_clause(string) relax asterisk_to_variable(string) ///
 	        random_share(real 0) random_seed(integer 0) format(string) ///
-	        infer_schema_length(integer 10000)]
+	        infer_schema_length(integer 10000) parse_dates(integer 0)]
 
 	if (`infer_schema_length' < 0) {
 		display as error `"infer_schema_length() must be >= 0, passed `infer_schema_length'"'
@@ -1439,6 +1495,10 @@ program pq_write_overflow_dta
 	if !inlist("`source_format'", "parquet", "sas", "spss", "csv") {
 		display as error `"Unsupported format(`format'): expected parquet, sas, spss, or csv"'
 		exit 198
+	}
+	local parse_dates_for_plugin = `parse_dates'
+	if ("`source_format'" != "csv") {
+		local parse_dates_for_plugin = 0
 	}
 
 	// Set up relax flag
@@ -1452,7 +1512,7 @@ program pq_write_overflow_dta
 	// Call plugin to write overflow rows to .dta
 	// This writes ALL columns (both strL and non-strL) for the overflow slice
 	// Args: parquet_path, dta_output, columns, n_rows, offset, sql_if, relax, asterisk_to_variable, random_share, random_seed
-	plugin call polars_parquet_plugin, write_overflow_dta "`using'" "`output'" "`columns'" `n_rows' `offset' `"`if_clause'"' `b_relax' "`asterisk_to_variable'" `random_share' `random_seed' "`source_format'" `infer_schema_length'
+	plugin call polars_parquet_plugin, write_overflow_dta "`using'" "`output'" "`columns'" `n_rows' `offset' `"`if_clause'"' `b_relax' "`asterisk_to_variable'" `random_share' `random_seed' "`source_format'" `infer_schema_length' `parse_dates_for_plugin'
 end
 
 

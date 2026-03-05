@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use std::num::NonZeroUsize;
 use std::ops::ControlFlow;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 use rayon::prelude::*;
 use polars::error::ErrString;
 use polars::prelude::*;
@@ -19,6 +20,7 @@ use sqlparser::ast::{Expr as SqlExpr, Visit, Visitor};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 
+use crate::fast_cache::{self, FastCacheKey, parse_varlist};
 use crate::mapping::ColumnInfo;
 use crate::stata_interface::{
     display,
@@ -32,6 +34,9 @@ use crate::utilities::{
     determine_parallelization_strategy,
     get_thread_count,
     get_thread_pool,
+    ms,
+    normalize_path_separators,
+    profile_timing_enabled,
     ParallelizationStrategy,
     DAY_SHIFT_SAS_STATA,
     SEC_MICROSECOND,
@@ -41,130 +46,6 @@ use crate::utilities::{
 };
 
 use crate::downcast::apply_cast;
-
-// Trait for converting Polars values to Stata values
-
-#[allow(dead_code)]
-trait ToStataValue {
-    fn to_stata_value(&self) -> Option<f64>;
-}
-
-// Implementations for different types
-impl ToStataValue for bool {
-    #[inline(always)]
-    fn to_stata_value(&self) -> Option<f64> {
-        Some(if *self { 1.0 } else { 0.0 })
-    }
-}
-
-impl ToStataValue for i8 {
-    #[inline(always)]
-    fn to_stata_value(&self) -> Option<f64> {
-        Some(*self as f64)
-    }
-}
-
-impl ToStataValue for i16 {
-    #[inline(always)]
-    fn to_stata_value(&self) -> Option<f64> {
-        Some(*self as f64)
-    }
-}
-
-impl ToStataValue for i32 {
-    #[inline(always)]
-    fn to_stata_value(&self) -> Option<f64> {
-        Some(*self as f64)
-    }
-}
-
-impl ToStataValue for i64 {
-    #[inline(always)]
-    fn to_stata_value(&self) -> Option<f64> {
-        Some(*self as f64)
-    }
-}
-
-impl ToStataValue for u8 {
-    #[inline(always)]
-    fn to_stata_value(&self) -> Option<f64> {
-        Some(*self as f64)
-    }
-}
-
-impl ToStataValue for u16 {
-    #[inline(always)]
-    fn to_stata_value(&self) -> Option<f64> {
-        Some(*self as f64)
-    }
-}
-
-impl ToStataValue for u32 {
-    #[inline(always)]
-    fn to_stata_value(&self) -> Option<f64> {
-        Some(*self as f64)
-    }
-}
-
-impl ToStataValue for u64 {
-    #[inline(always)]
-    fn to_stata_value(&self) -> Option<f64> {
-        Some(*self as f64)
-    }
-}
-
-impl ToStataValue for f32 {
-    #[inline(always)]
-    fn to_stata_value(&self) -> Option<f64> {
-        Some(*self as f64)
-    }
-}
-
-impl ToStataValue for f64 {
-    #[inline(always)]
-    fn to_stata_value(&self) -> Option<f64> {
-        Some(*self)
-    }
-}
-
-// Special type for handling dates
-#[allow(dead_code)]
-struct DateValue(i32);
-impl ToStataValue for DateValue {
-    #[inline(always)]
-    fn to_stata_value(&self) -> Option<f64> {
-        Some((self.0 + DAY_SHIFT_SAS_STATA) as f64)
-    }
-}
-
-// Special type for handling time
-#[allow(dead_code)]
-struct TimeValue(i64);
-
-impl ToStataValue for TimeValue {
-    #[inline(always)]
-    fn to_stata_value(&self) -> Option<f64> {
-        Some((self.0 / SEC_MICROSECOND) as f64)
-    }
-}
-
-
-// Special type for handling datetime
-#[allow(dead_code)]
-struct DatetimeValue(i64, TimeUnit);
-
-impl ToStataValue for DatetimeValue {
-    #[inline(always)]
-    fn to_stata_value(&self) -> Option<f64> {
-        let mills_factor = match self.1 {
-            TimeUnit::Nanoseconds => (SEC_NANOSECOND/SEC_MILLISECOND) as f64,
-            TimeUnit::Microseconds => (SEC_MICROSECOND/SEC_MILLISECOND) as f64,
-            TimeUnit::Milliseconds => 1.0,
-        };
-        
-        Some(self.0 as f64 / mills_factor + (SEC_SHIFT_SAS_STATA as f64) * (SEC_MILLISECOND as f64))
-    }
-}
 
 fn adaptive_batch_size(requested_rows: usize, n_cols: usize, n_rows: usize) -> usize {
     if n_rows == 0 {
@@ -196,6 +77,94 @@ impl InputFormat {
             _ => None,
         }
     }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Parquet => "parquet",
+            Self::Sas => "sas",
+            Self::Spss => "spss",
+            Self::Csv => "csv",
+        }
+    }
+}
+
+fn parse_polars_debug_dtype(dtype: &str) -> Option<DataType> {
+    match dtype {
+        "Boolean" => Some(DataType::Boolean),
+        "Int8" => Some(DataType::Int8),
+        "Int16" => Some(DataType::Int16),
+        "Int32" => Some(DataType::Int32),
+        "Int64" => Some(DataType::Int64),
+        "UInt8" => Some(DataType::UInt8),
+        "UInt16" => Some(DataType::UInt16),
+        "UInt32" => Some(DataType::UInt32),
+        "UInt64" => Some(DataType::UInt64),
+        "Float32" => Some(DataType::Float32),
+        "Float64" => Some(DataType::Float64),
+        "Date" => Some(DataType::Date),
+        "Time" => Some(DataType::Time),
+        "String" => Some(DataType::String),
+        "Binary" => Some(DataType::Binary),
+        "Null" => Some(DataType::Null),
+        _ => {
+            if dtype.starts_with("Datetime(") {
+                let tu = if dtype.contains("Nanoseconds") {
+                    TimeUnit::Nanoseconds
+                } else if dtype.contains("Microseconds") {
+                    TimeUnit::Microseconds
+                } else if dtype.contains("Milliseconds") {
+                    TimeUnit::Milliseconds
+                } else {
+                    return None;
+                };
+                Some(DataType::Datetime(tu, None))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn csv_schema_from_describe_macros() -> Option<SchemaRef> {
+    let n_columns = get_macro("n_columns", false, None).parse::<usize>().ok()?;
+    if n_columns == 0 {
+        return None;
+    }
+
+    let mut fields: Vec<Field> = Vec::with_capacity(n_columns);
+    for i in 1..=n_columns {
+        let name = get_macro(&format!("name_{}", i), false, None);
+        let dtype_str = get_macro(&format!("polars_type_{}", i), false, None);
+        let dtype = parse_polars_debug_dtype(dtype_str.trim())?;
+        fields.push(Field::new(name.into(), dtype));
+    }
+
+    Some(Arc::new(Schema::from_iter(fields)))
+}
+
+fn matched_vars_from_macros() -> Vec<String> {
+    let count = get_macro("matched_var_count", false, None)
+        .trim()
+        .parse::<usize>()
+        .unwrap_or(0);
+    if count > 0 {
+        let mut out = Vec::with_capacity(count);
+        for i in 1..=count {
+            let name = get_macro(&format!("matched_var_{}", i), false, None);
+            if !name.trim().is_empty() {
+                out.push(name);
+            }
+        }
+        if !out.is_empty() {
+            return out;
+        }
+    }
+
+    // Backward-compatible fallback.
+    get_macro("matched_vars", false, Some(1024 * 1024 * 10))
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 pub fn data_exists(path: &str) -> bool {
@@ -294,19 +263,7 @@ fn is_valid_glob_pattern(glob_path: &str) -> bool {
     
     // Check if glob pattern matches any files
     match glob(&normalized_pattern) {
-        Ok(paths) => {
-            let found_files: Vec<_> = paths.filter_map(Result::ok).collect();
-            
-            // // Debug output (remove in production)
-            // #[cfg(debug_assertions)]
-            // {
-            //     println!("Original pattern: {}", glob_path);
-            //     println!("Normalized pattern: {}", normalized_pattern);
-            //     println!("Found files: {:?}", found_files);
-            // }
-            
-            !found_files.is_empty()
-        },
+        Ok(paths) => paths.filter_map(Result::ok).next().is_some(),
         Err(_e) => {
             #[cfg(debug_assertions)]
             println!("Glob error for pattern '{}': {:?}", normalized_pattern, _e);
@@ -329,6 +286,8 @@ pub fn scan_lazyframe(
         input_format,
         false,
         None,
+        false,
+        None,
     )
 }
 
@@ -339,12 +298,14 @@ pub fn scan_lazyframe_with_options(
     input_format: InputFormat,
     preserve_order: bool,
     csv_infer_schema_length: Option<usize>,
+    csv_try_parse_dates: bool,
+    csv_schema: Option<SchemaRef>,
 ) -> Result<LazyFrame, PolarsError> {
     match input_format {
         InputFormat::Parquet => scan_lazyframe_parquet(path, safe_relaxed, asterisk_to_variable_name),
         InputFormat::Sas => scan_lazyframe_readstat(path, ReadStatFormat::Sas, preserve_order),
         InputFormat::Spss => scan_lazyframe_readstat(path, ReadStatFormat::Spss, preserve_order),
-        InputFormat::Csv => scan_lazyframe_csv(path, csv_infer_schema_length),
+        InputFormat::Csv => scan_lazyframe_csv(path, csv_infer_schema_length, csv_try_parse_dates, csv_schema),
     }
 }
 
@@ -456,20 +417,32 @@ fn scan_lazyframe_readstat(
     readstat_scan(path, Some(options), Some(format))
 }
 
-fn scan_lazyframe_csv(path: &str, infer_schema_length: Option<usize>) -> Result<LazyFrame, PolarsError> {
+fn scan_lazyframe_csv(
+    path: &str,
+    infer_schema_length: Option<usize>,
+    try_parse_dates: bool,
+    schema: Option<SchemaRef>,
+) -> Result<LazyFrame, PolarsError> {
     let normalized_path = if cfg!(windows) {
         path.replace('\\', "/")
     } else {
         path.to_string()
     };
 
-    LazyCsvReader::new(PlRefPath::new(normalized_path.as_str()))
+    let reader = LazyCsvReader::new(PlRefPath::new(normalized_path.as_str()))
         .with_has_header(true)
         .with_glob(true)
         .with_cache(false)
-        .with_try_parse_dates(true)
-        .with_infer_schema_length(infer_schema_length)
-        .finish()
+        .with_try_parse_dates(try_parse_dates)
+        .with_infer_schema_length(infer_schema_length);
+
+    let reader = if let Some(schema_ref) = schema {
+        reader.with_schema(Some(schema_ref))
+    } else {
+        reader
+    };
+
+    reader.finish()
 }
 
 fn scan_hive_partitioned(dir_path: &str) -> Result<LazyFrame, PolarsError> {
@@ -1038,14 +1011,19 @@ pub fn read_to_stata(
     input_format: InputFormat,
     preserve_order: bool,
     infer_schema_length: usize,
+    parse_dates: bool,
+    columns_varlist: &str,
 ) -> Result<i32, Box<dyn Error>> {
-
-    // Handle empty variable list by getting from macros
-    let variables_as_str = if variables_as_str.is_empty() || variables_as_str == "from_macro" {
-        &get_macro("matched_vars", false, Some(1024 * 1024 * 10))
-    } else {
-        variables_as_str
-    };
+    let prof = profile_timing_enabled();
+    let t_total = Instant::now();
+    let mut t_scan = Duration::ZERO;
+    let mut t_apply_cast = Duration::ZERO;
+    let mut t_cast_cat = Duration::ZERO;
+    let mut t_sql = Duration::ZERO;
+    let mut t_sample = Duration::ZERO;
+    let mut t_sort = Duration::ZERO;
+    let mut t_sink_build = Duration::ZERO;
+    let mut t_collect_exec = Duration::ZERO;
 
     // Get column info either from mapping or macros
     let all_columns_unfiltered: Vec<ColumnInfo> = if mapping.is_empty() || mapping == "from_macros" {
@@ -1063,13 +1041,18 @@ pub fn read_to_stata(
     };
 
 
-    let selected_columns_ordered: Vec<String> = variables_as_str
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect();
+    let selected_columns_ordered: Vec<String> = if variables_as_str.is_empty() || variables_as_str == "from_macro" {
+        matched_vars_from_macros()
+    } else {
+        variables_as_str
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect()
+    };
 
-    // First, create a HashSet of column names from variables_as_str for efficient lookups
-    let selected_column_names: HashSet<&str> = variables_as_str.split_whitespace().collect();
+    // First, create a HashSet of selected column names for efficient lookups.
+    let selected_column_names: HashSet<&str> =
+        selected_columns_ordered.iter().map(|s| s.as_str()).collect();
 
     // Then filter all_columns to only keep columns whose names are in the HashSet
     let all_columns: Vec<ColumnInfo> = all_columns_unfiltered
@@ -1097,7 +1080,33 @@ pub fn read_to_stata(
     } else {
         None
     };
-    let can_use_readstat_batch_iter = matches!(input_format, InputFormat::Sas | InputFormat::Spss)
+    let csv_try_parse_dates = matches!(input_format, InputFormat::Csv) && parse_dates;
+
+    // Check fast cache before any disk I/O.
+    let requested_cols_for_cache = if columns_varlist.trim().is_empty() {
+        let mut cols = selected_columns_ordered.clone();
+        cols.sort();
+        cols
+    } else {
+        parse_varlist(columns_varlist)
+    };
+    let cache_key = FastCacheKey {
+        path: path.to_string(),
+        sql_if: sql_if.filter(|s| !s.trim().is_empty()).unwrap_or("").to_string(),
+        columns: requested_cols_for_cache,
+        format: input_format.as_str().to_string(),
+        parse_dates,
+        infer_schema_length,
+    };
+    let cached_lf: Option<LazyFrame> = fast_cache::take(&cache_key).map(|df: DataFrame| df.lazy());
+
+    let csv_schema = if matches!(input_format, InputFormat::Csv) {
+        csv_schema_from_describe_macros()
+    } else {
+        None
+    };
+    let can_use_readstat_batch_iter = cached_lf.is_none()
+        && matches!(input_format, InputFormat::Sas | InputFormat::Spss)
         && !has_strl
         && !has_glob
         && sort.is_empty()
@@ -1119,24 +1128,35 @@ pub fn read_to_stata(
         );
     }
 
-    // Scan the parquet file to get a LazyFrame
-    let mut df = match scan_lazyframe_with_options(
+    // Use cached LazyFrame if available, otherwise scan from disk.
+    let t0 = Instant::now();
+    let mut df = if let Some(lf) = cached_lf {
+        lf
+    } else {
+        match scan_lazyframe_with_options(
         path,
         safe_relaxed,
         asterisk_to_variable_name,
         input_format,
         preserve_order,
         csv_infer_schema_length,
+        csv_try_parse_dates,
+        csv_schema,
     ) {
         Ok(df) => df,
         Err(e) => {
             display(&format!("Error scanning lazyframe: {:?}", e));
             return Ok(198);
         },
-    };
+    }
+    }; // end cached_lf else branch
+    if prof {
+        t_scan += t0.elapsed();
+    }
 
     //  display(&format!("Cast: {}", cast_json));
     if !cast_json.is_empty() {
+        let t0 = Instant::now();
         df = match apply_cast(
             df,
             &cast_json,
@@ -1146,12 +1166,19 @@ pub fn read_to_stata(
                 display(&format!("Cast failed with error: {}", e));
                 return Ok(198);
             }
+        };
+        if prof {
+            t_apply_cast += t0.elapsed();
         }
     }
 
     //  display(&format!("df: {:?}", df.explain(true)));
     // Cast categorical columns to string
+    let t0 = Instant::now();
     df = cast_catenum_to_string(&df).unwrap();
+    if prof {
+        t_cast_cat += t0.elapsed();
+    }
 
     let sql_filter = sql_if.filter(|s| !s.trim().is_empty());
 
@@ -1169,6 +1196,7 @@ pub fn read_to_stata(
 
     // Apply SQL filter if provided
     if let Some(sql) = sql_filter {
+        let t0 = Instant::now();
         let mut ctx = SQLContext::new();
         ctx.register("df", df);
         
@@ -1179,10 +1207,14 @@ pub fn read_to_stata(
                 return Ok(198);
             }
         };
+        if prof {
+            t_sql += t0.elapsed();
+        }
     }
 
     let sample_share = random_share > 0.0;
     if sample_share {
+        let t0 = Instant::now();
         let random_seed_option = if random_seed == 0 {
             None
         } else {
@@ -1203,7 +1235,11 @@ pub fn read_to_stata(
                 return Ok(198);
             }
         };
+        if prof {
+            t_sample += t0.elapsed();
+        }
     }
+    let t0 = Instant::now();
     df = if sort.is_empty() {
             df
         } else {
@@ -1229,11 +1265,14 @@ pub fn read_to_stata(
                 sort_options
             )
         };
+    if prof {
+        t_sort += t0.elapsed();
+    }
 
-    // Create column expressions from the provided variable list
-    let columns: Vec<Expr> = selected_column_names
+    // Create column expressions from the provided variable list (preserving user-specified order)
+    let columns: Vec<Expr> = selected_columns_ordered
         .iter()
-        .map(|&s| col(s))
+        .map(|s| col(s.as_str()))
         .collect();
 
     //  display(&format!("columns: {:?}", columns));
@@ -1324,18 +1363,22 @@ pub fn read_to_stata(
     let all_columns_ref = Arc::new(all_columns);
     let row_offset = Arc::new(AtomicUsize::new(0));
     let batch_counter = Arc::new(AtomicUsize::new(0));
+    let batch_write_nanos = Arc::new(AtomicU64::new(0));
 
     let all_columns_cb = Arc::clone(&all_columns_ref);
     let row_offset_cb = Arc::clone(&row_offset);
     let batch_counter_cb = Arc::clone(&batch_counter);
+    let batch_write_nanos_cb = Arc::clone(&batch_write_nanos);
     let read_pool_cb = thread_pool;
     let chunk_size = NonZeroUsize::new(effective_batch_size);
 
+    let t0 = Instant::now();
     let sink_lf = match write_lf
         .select(&columns)
         .slice(write_slice_offset, write_slice_n_rows)
         .sink_batches(
             PlanCallback::new(move |batch: DataFrame| {
+                let t_batch = Instant::now();
                 let start_index = row_offset_cb.fetch_add(batch.height(), Ordering::SeqCst);
                 let batchi = batch_counter_cb.fetch_add(1, Ordering::SeqCst);
                 process_batch_with_strategy(
@@ -1348,6 +1391,7 @@ pub fn read_to_stata(
                     stata_offset,
                     read_pool_cb,
                 )?;
+                batch_write_nanos_cb.fetch_add(t_batch.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 Ok(false)
             }),
             true,
@@ -1360,10 +1404,17 @@ pub fn read_to_stata(
             return Ok(198);
         }
     };
+    if prof {
+        t_sink_build += t0.elapsed();
+    }
 
+    let t0 = Instant::now();
     if let Err(e) = sink_lf.collect() {
         display(&format!("Error collecting streamed batches: {:?}", e));
         return Ok(198);
+    }
+    if prof {
+        t_collect_exec += t0.elapsed();
     }
 
     set_macro(
@@ -1371,6 +1422,26 @@ pub fn read_to_stata(
         &batch_counter.load(Ordering::SeqCst).to_string(),
         false
     );
+
+    if prof {
+        let t_total_elapsed = t_total.elapsed();
+        let t_batch_write = Duration::from_nanos(batch_write_nanos.load(Ordering::Relaxed));
+        display(&format!(
+            "[pq profile read format({})] total={:.2}ms scan={:.2}ms cast={:.2}ms cat_cast={:.2}ms sql={:.2}ms sample={:.2}ms sort={:.2}ms sink_build={:.2}ms collect_exec={:.2}ms batch_write={:.2}ms batches={}",
+            input_format.as_str(),
+            ms(t_total_elapsed),
+            ms(t_scan),
+            ms(t_apply_cast),
+            ms(t_cast_cat),
+            ms(t_sql),
+            ms(t_sample),
+            ms(t_sort),
+            ms(t_sink_build),
+            ms(t_collect_exec),
+            ms(t_batch_write),
+            batch_counter.load(Ordering::Relaxed),
+        ));
+    }
 
     Ok(0)
 }
@@ -1688,24 +1759,34 @@ fn process_datetime_column(
     };
     
     let sec_shift_scaled = (SEC_SHIFT_SAS_STATA as f64) * (SEC_MILLISECOND as f64);
-    
-    // Process each row based on the schema's time unit
+
+    // Fast path: typed DatetimeChunked access avoids AnyValue boxing per row.
+    // DatetimeChunked is Logical<DatetimeType, Int64Type>; .phys gives the underlying Int64Chunked.
+    if let Ok(ca) = col.datetime() {
+        for row_idx in start_row..end_row {
+            let global_row_idx = row_idx + start_index;
+            let value = ca.phys.get(row_idx).map(|v| v as f64 / mills_factor + sec_shift_scaled);
+            replace_number(value, global_row_idx + 1 + stata_offset, col_idx);
+        }
+        return Ok(());
+    }
+
+    // Fallback: AnyValue path
     for row_idx in start_row..end_row {
         let global_row_idx = row_idx + start_index;
         let value: Option<f64> = match col.get(row_idx) {
-            Ok(AnyValue::Datetime(v, _, _)) => { 
+            Ok(AnyValue::Datetime(v, _, _)) => {
                 Some(v as f64 / mills_factor + sec_shift_scaled)
             },
             _ => None
         };
-
         replace_number(
-            value, 
-            global_row_idx + 1 + stata_offset,  // +1 because replace functions expect 1-indexed
-            col_idx              // col_idx is already 1-indexed
+            value,
+            global_row_idx + 1 + stata_offset,
+            col_idx
         );
     }
-    
+
     Ok(())
 }
 
@@ -1858,6 +1939,7 @@ pub fn write_overflow_batch_to_dta(
     _random_seed: u64,
     input_format: InputFormat,
     infer_schema_length: usize,
+    parse_dates: bool,
 ) -> Result<i32, Box<dyn Error>> {
     use polars_readstat_rs::stata::writer::StataWriter;
 
@@ -1870,6 +1952,7 @@ pub fn write_overflow_batch_to_dta(
     } else {
         None
     };
+    let csv_try_parse_dates = matches!(input_format, InputFormat::Csv) && parse_dates;
 
     // Use scan_lazyframe to properly handle glob patterns and other edge cases
     let mut df = match scan_lazyframe_with_options(
@@ -1879,6 +1962,8 @@ pub fn write_overflow_batch_to_dta(
         input_format,
         false,
         csv_infer_schema_length,
+        csv_try_parse_dates,
+        None,
     ) {
         Ok(lf) => lf,
         Err(e) => {

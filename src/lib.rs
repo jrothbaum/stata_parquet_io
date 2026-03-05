@@ -16,6 +16,7 @@ pub mod describe;
 pub mod sql_from_if;
 pub mod utilities;
 pub mod downcast;
+pub mod fast_cache;
 
 use std::ptr;
 
@@ -131,6 +132,12 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 } else {
                     10000
                 };
+                let parse_dates = if subfunction_args.len() > 19 {
+                    subfunction_args[19] == "1"
+                } else {
+                    false
+                };
+                let columns_varlist = if subfunction_args.len() > 20 { subfunction_args[20] } else { "" };
                 let input_format = match InputFormat::from_str(format_arg) {
                     Some(f) => f,
                     None => {
@@ -159,6 +166,8 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     input_format,
                     preserve_order,
                     infer_schema_length,
+                    parse_dates,
+                    columns_varlist,
                 );
         
                 // Use match to handle the Result
@@ -193,6 +202,23 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 } else {
                     10000
                 };
+                let parse_dates = if subfunction_args.len() > 9 {
+                    subfunction_args[9] == "1"
+                } else {
+                    false
+                };
+                let fast = if subfunction_args.len() > 10 {
+                    subfunction_args[10] == "1"
+                } else {
+                    false
+                };
+                let auto_fast_limit_mb = if subfunction_args.len() > 11 {
+                    subfunction_args[11].parse::<u64>().unwrap_or(100)
+                } else {
+                    100
+                };
+                let columns_varlist = if subfunction_args.len() > 12 { subfunction_args[12] } else { "" };
+                let drop_list      = if subfunction_args.len() > 13 { subfunction_args[13] } else { "" };
                 let input_format = match InputFormat::from_str(format_arg) {
                     Some(f) => f,
                     None => {
@@ -211,6 +237,11 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                         subfunction_args[6].parse::<u8>().unwrap() != 0,
                         input_format,
                         infer_schema_length,
+                        parse_dates,
+                        fast,
+                        auto_fast_limit_mb,
+                        columns_varlist,
+                        drop_list,
                     ) as ST_retcode;
             },
             "save" => {
@@ -285,6 +316,11 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 } else {
                     10000
                 };
+                let parse_dates = if subfunction_args.len() > 12 {
+                    subfunction_args[12] == "1"
+                } else {
+                    false
+                };
                 let input_format = match InputFormat::from_str(format_arg) {
                     Some(f) => f,
                     None => {
@@ -313,6 +349,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     subfunction_args[9].parse::<u64>().unwrap(),   // random_seed
                     input_format,
                     infer_schema_length,
+                    parse_dates,
                 );
 
                 match result {

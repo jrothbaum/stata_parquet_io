@@ -1,6 +1,9 @@
 use std::thread;
 use std::env;
 use std::sync::OnceLock;
+use std::time::Duration;
+
+use crate::stata_interface::get_macro;
 
 pub const DAY_SHIFT_SAS_STATA: i32 = 3653;
 pub const SEC_SHIFT_SAS_STATA: i64 = 315619200;
@@ -52,6 +55,35 @@ pub enum ParallelizationStrategy {
 }
 
 // Simple decision function
+/// Convert backslashes to forward slashes for cross-platform glob compatibility.
+/// Safe to call on all platforms — forward slashes work on Windows too.
+pub fn normalize_path_separators(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+pub fn profile_timing_enabled() -> bool {
+    let macro_local = get_macro("pq_profile_timing", false, None);
+    let macro_global = get_macro("pq_profile_timing", true, None);
+    let macro_enabled = [macro_local, macro_global]
+        .iter()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .any(|t| !t.is_empty() && t != "0" && t != "false" && t != "off" && t != "no");
+    if macro_enabled {
+        return true;
+    }
+    match std::env::var("PQ_PROFILE_TIMING") {
+        Ok(v) => {
+            let t = v.trim().to_ascii_lowercase();
+            !t.is_empty() && t != "0" && t != "false" && t != "off" && t != "no"
+        }
+        Err(_) => false,
+    }
+}
+
+pub fn ms(d: Duration) -> f64 {
+    d.as_secs_f64() * 1000.0
+}
+
 pub fn determine_parallelization_strategy(
     n_columns: usize,
     n_rows: usize,

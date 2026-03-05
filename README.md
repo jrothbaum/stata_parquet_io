@@ -1,19 +1,15 @@
-# Read/Write parquet files in stata
+# Read/Write Parquet, SAS, SPSS, and CSV files in Stata
 
-`pq` is a Stata package that enables reading and writing Parquet files directly in Stata. This plugin bridges the gap between Stata's data analysis capabilities and the increasingly popular Parquet file format, which is optimized for storage and performance with large datasets.
+`pq` is a Stata package for high-performance file IO. It supports read/append/merge/describe across Parquet, SAS, SPSS, and CSV, and save to Parquet, SPSS, and CSV.
 
 ## Features
 
-- **Read** Parquet files into Stata datasets
-- **Write** Stata datasets to Parquet files  
-- **Append** Parquet files to existing data in memory
-- **Merge** Parquet files with existing data using standard Stata merge syntax
-- **Describe** Parquet file structure without loading the data
-- Support for variable selection and filtering during read operations
-- Automatic handling of data types between Stata and Parquet
-- Preserves original Parquet column names via variable labels
-- Performance optimizations including compression and parallel processing
-- Support for partitioned datasets and wildcard file patterns
+- Unified Stata interface: `use`, `append`, `merge`, `save`, `describe`
+- Format shortcuts: `use_sas`, `use_spss`, `use_csv`, `save_spss`, `save_csv`, `describe_sas`, `describe_spss`, `describe_csv`
+- Predicate pushdown and projection (`if()`, varlists, wildcards)
+- Large-file handling (batching, streaming writes, chunked writes)
+- Parquet-specific tuning (partitioning, compression, schema-relaxed file unions)
+- Preserves original Parquet column names via `{parquet_name:...}` labels
 
 ## Installation
 ### Option 1: Install from SSC - https://ideas.repec.org/c/boc/bocode/s459458.html
@@ -40,106 +36,71 @@ You may encounter an error related to Mac Gatekeeper restrictions on unsigned bi
 ## Quick Start
 
 ```stata
-* Load a Parquet file
+* Parquet
 pq use using mydata.parquet, clear
-
-* Save current data as Parquet
 pq save using mydata.parquet, replace
 
-* Describe a Parquet file without loading
-pq describe using mydata.parquet
+* SPSS / CSV shortcuts
+pq use_spss using mydata.sav, clear preserve_order
+pq save_csv using mydata.csv, replace
 ```
 
 ## Usage
 
-### Reading Parquet Files
+### Core Commands
+
+- `pq use|append|merge ... [, format(parquet|sas|spss|csv)]`
+- `pq save ... [, format(parquet|spss|csv)]`
+- `pq describe ... [, format(parquet|sas|spss|csv)]`
+- Shortcuts that set `format()` automatically: `use_sas`, `use_spss`, `use_csv`, `save_spss`, `save_csv`, `describe_sas`, `describe_spss`, `describe_csv`
+
+### Read/Append/Merge Options
+
+- Common: `in()`, `if()`, `parallelize(columns|rows)`, `sort()`, `compress`, `compress_string_to_numeric`, `random_n()`, `random_share()`, `random_seed()`, `batch_size()`, `drop()`, `drop_strl`
+- `preserve_order` for SAS/SPSS reads
+- `infer_schema_length()` for CSV reads
+- `parse_dates` for CSV reads (off by default)
+- `max_obs_per_batch()` for `use`/`append` overflow batching
+- `relaxed` and `asterisk_to_variable()` for Parquet reads
+
+### Save Options
+
+- Common: `replace`, `if()`, `noautorename`, `label`, `format()`
+- Parquet only: `partition_by()`, `nopartitionoverwrite`, `compression()`, `compression_level()`, `chunk()`, `stream`, `consolidate`, `do_not_reload`
+
+### Describe Options
+
+- `quietly`, `detailed`, `format()`
+- `infer_schema_length()` for CSV describe
+- `parse_dates` for CSV describe
+- `asterisk_to_variable()` for Parquet describe
+
+### Examples
 
 ```stata
-* Basic usage - read entire file
-pq use using filename.parquet, clear
+* CSV read with explicit schema inference window
+pq use_csv using raw.csv, clear infer_schema_length(50000)
 
-* Read specific variables
-pq use var1 var2 var3 using filename.parquet, clear
+* CSV read with date/datetime parsing enabled
+pq use_csv using raw.csv, clear parse_dates
 
-* Read with observation filtering (using Stata syntax that will be converted to SQL)
-pq use using filename.parquet, clear if(value > 100)
+* SAS read while preserving source order
+pq use_sas using source.sas7bdat, clear preserve_order
 
-* Date filtering with explicit SQL date parsing (recommended for readability)
-pq use using test_dates.parquet, clear if(my_date = date('01jan2024','%d%b%Y'))
+* Parquet read excluding long strings
+pq use using big.parquet, clear drop_strl drop(notes_*)
 
-* Read subset of rows
-pq use using filename.parquet, clear in(1/1000)
+* Append with overflow batching control
+pq append using huge.parquet, max_obs_per_batch(50000000)
 
-* Use wildcards to select variables
-pq use x* using filename.parquet, clear
+* Save to SPSS
+pq save_spss using out.sav, replace
 
-* Performance optimizations
-pq use using large_file.parquet, clear compress compress_string_to_numeric sort(id)
+* Chunked parquet stream write
+pq save using out.parquet, replace chunk(2000000) stream do_not_reload
 
-* Random sampling a specific number of rows
-pq use using large_file.parquet, clear random_n(1000)
-
-* Random sampling a specific number of rows, with a seed for replicability
-pq use using large_file.parquet, clear random_n(1000) random_seed(12345)
-
-* Random sampling a specific share of rows, with a seed for replicability
-pq use using large_file.parquet, clear random_share(0.1) random_seed(12345)
-```
-
-### Appending Data
-
-```stata
-* Append Parquet file to existing data
-pq append using additional_data.parquet
-
-* Append with filtering
-pq append using new_data.parquet, if(year == 2024)
-```
-
-### Merging Data
-
-```stata
-* Standard Stata merge syntax with Parquet files
-pq merge 1:1 id using lookup_table.parquet, generate(_merge)
-pq merge m:1 category_id using categories.parquet, keep(match) nogenerate
-```
-
-### Writing Parquet Files
-
-```stata
-* Save entire dataset
-pq save using filename.parquet, replace
-
-* Save specific variables
-pq save var1 var2 var3 using filename.parquet, replace
-
-* Save with filtering
-pq save using filename.parquet, replace if(value > 100)
-
-* Save with compression options
-pq save using compressed.parquet, replace compression(zstd) compression_level(9)
-
-* Create partitioned dataset
-pq save using /output/partitioned_data, replace partition_by(year region)
-
-* Preserve original Parquet variable names (default behavior)
-pq save using filename.parquet, replace
-* OR disable automatic renaming
-pq save using filename.parquet, replace noautorename
-```
-
-### Examining Parquet Files
-
-```stata
-* Basic structure information
-pq describe using filename.parquet
-
-* Detailed information including string lengths
-pq describe using filename.parquet, detailed
-
-* Quiet mode for programmatic use
-pq describe using filename.parquet, quietly
-return list  // View returned values
+* Describe CSV
+pq describe_csv using raw.csv, detailed infer_schema_length(50000)
 ```
 
 

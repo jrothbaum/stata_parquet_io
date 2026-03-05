@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.7.1 August 2025}{...}
+{* *! version 3.0.0 March 2026}{...}
 {title:Title}
 
 {phang}
@@ -14,7 +14,8 @@ Import a file into Stata (default is Parquet):
 {p 8 17 2}
 {cmd:pq use} [{varlist}] {cmd:using} {it:filename} [, {opt clear} {opt append} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} {opt preserve_order}
 {opt compress} {opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer 1000000)}
-{opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt drop(varlist)} {opt drop_strl}]
+{opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt parse_dates}
+{opt max_obs_per_batch(integer 0)} {opt format(string)} {opt fast} {opt auto_fast_limit(integer 100)} {opt drop(varlist)} {opt drop_strl}]
 
 {phang}
 Format-specific shortcuts for import:
@@ -26,30 +27,45 @@ Format-specific shortcuts for import:
 {cmd:pq use_spss} [{varlist}] {cmd:using} {it:filename} [, {it:use_options}]
 
 {p 8 17 2}
-{cmd:pq use_csv} [{varlist}] {cmd:using} {it:filename} [, {it:use_options} {opt infer_schema_length(integer 10000)}]
+{cmd:pq use_csv} [{varlist}] {cmd:using} {it:filename} [, {it:use_options} {opt infer_schema_length(integer 10000)} {opt parse_dates}]
 
 {phang}
-Append a Parquet file to existing data:
+Append a file to existing data (default is Parquet):
 
 {p 8 17 2}
 {cmd:pq append} [{varlist}] {cmd:using} {it:filename} [, {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} {opt preserve_order} {opt compress}
 {opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer 1000000)}
-{opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt drop(varlist)} {opt drop_strl}]
+{opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt parse_dates}
+{opt format(string)} {opt drop(varlist)} {opt drop_strl}]
 
 {phang}
-Merge a Parquet file with existing data:
+Merge a file with existing data (default is Parquet):
 
 {p 8 17 2}
 {cmd:pq merge} {it:merge_type} [{varlist}] {cmd:using} {it:filename} [, {merge_options} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt parallelize(string)} {opt sort(varlist)} {opt preserve_order} {opt compress}
 {opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer 1000000)}
-{opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt drop(varlist)} {opt drop_strl}]
+{opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt parse_dates}
+{opt format(string)} {opt drop(varlist)} {opt drop_strl}]
+
+{phang}
+Format-specific shortcuts for merge:
+
+{p 8 17 2}
+{cmd:pq merge_sas} {it:merge_type} [{varlist}] {cmd:using} {it:filename} [, {it:merge_options} {it:read_options}]
+
+{p 8 17 2}
+{cmd:pq merge_spss} {it:merge_type} [{varlist}] {cmd:using} {it:filename} [, {it:merge_options} {it:read_options}]
+
+{p 8 17 2}
+{cmd:pq merge_csv} {it:merge_type} [{varlist}] {cmd:using} {it:filename} [, {it:merge_options} {it:read_options}]
 
 {phang}
 Save Stata data to a file (default is Parquet):
 
 {p 8 17 2}
 {cmd:pq save} [{varlist}] {cmd:using} {it:filename} [, {opt replace} {opt if(expression)} {opt noautorename} {opt partition_by(varlist)} {opt compression(string)} {opt compression_level(integer)} {opt nopartitionoverwrite} {opt compress} 
-{opt compress_string_to_numeric} {opt label} ]
+{opt compress_string_to_numeric} {opt chunk(integer 2147483647)} {opt stream} {opt consolidate}
+{opt do_not_reload} {opt label} {opt format(string)} ]
 
 {phang}
 Format-specific shortcuts for save:
@@ -65,7 +81,7 @@ Describe contents of a file:
 
 {p 8 17 2}
 {cmd:pq describe} {cmd:using} {it:filename} [, {opt quietly} {opt detailed} 
-{opt asterisk_to_variable(string)} {opt format(string)} {opt infer_schema_length(integer 10000)}]
+{opt asterisk_to_variable(string)} {opt format(string)} {opt infer_schema_length(integer 10000)} {opt parse_dates}]
 
 {p 8 17 2}
 {cmd:pq describe_sas} {cmd:using} {it:filename} [, {opt quietly} {opt detailed}]
@@ -74,7 +90,7 @@ Describe contents of a file:
 {cmd:pq describe_spss} {cmd:using} {it:filename} [, {opt quietly} {opt detailed}]
 
 {p 8 17 2}
-{cmd:pq describe_csv} {cmd:using} {it:filename} [, {opt quietly} {opt detailed} {opt infer_schema_length(integer 10000)}]
+{cmd:pq describe_csv} {cmd:using} {it:filename} [, {opt quietly} {opt detailed} {opt infer_schema_length(integer 10000)} {opt parse_dates}]
 
 {marker description}{...}
 {title:Description}
@@ -88,7 +104,7 @@ this format, such as Python (pandas, polars), R, Spark, duckdb, and many others.
 {pstd}
 The package supports five main operations: {cmd:use} (load data), {cmd:append} (add to existing data), 
 {cmd:merge} (join with existing data), {cmd:save} (write data), and {cmd:describe} (examine file structure).
-Shortcuts {cmd:use_sas}, {cmd:use_spss}, {cmd:use_csv}, {cmd:save_spss}, {cmd:save_csv}, {cmd:describe_sas}, {cmd:describe_spss}, and {cmd:describe_csv} are provided for common
+Shortcuts {cmd:use_sas}, {cmd:use_spss}, {cmd:use_csv}, {cmd:merge_sas}, {cmd:merge_spss}, {cmd:merge_csv}, {cmd:save_spss}, {cmd:save_csv}, {cmd:describe_sas}, {cmd:describe_spss}, and {cmd:describe_csv} are provided for common
 non-Parquet workflows.
 
 {pstd}
@@ -189,6 +205,9 @@ column types. If set to {cmd:0}, Rust receives {cmd:None} and infers schema from
 formats, this option is ignored.
 
 {phang}
+{opt parse_dates} enables CSV date/datetime inference while reading. For non-CSV formats, this option is ignored.
+
+{phang}
 {opt drop(varlist)} specifies variables to exclude from the import. Supports Stata-style wildcard patterns
 using {cmd:*} and {cmd:?}. For example, {cmd:drop(weight*)} would exclude all variables whose names begin
 with "weight", and {cmd:drop(x y z)} would exclude those three variables. This is applied after any
@@ -199,6 +218,22 @@ variable selection from the {varlist} and can be combined with {opt drop_strl}.
 import. This can be useful when strL columns are not needed and would slow down loading, since strL
 variables require special batch processing. Can be combined with {opt drop()} to exclude additional
 variables.
+
+{phang}
+{opt max_obs_per_batch(integer 0)} sets the per-batch observation cap used when writing batches to Stata memory.
+{cmd:0} uses an internal maximum. Only available with {cmd:pq use}.
+
+{phang}
+{opt format(string)} sets input format for {cmd:pq use}/{cmd:pq append}/{cmd:pq merge}; supported values are
+{cmd:parquet}, {cmd:sas}, {cmd:spss}, and {cmd:csv}. The shortcut commands set this automatically.
+
+{phang}
+{opt fast} enables cached "describe+read" behavior for smaller files to avoid a second file pass.
+Only available with {cmd:pq use}.
+
+{phang}
+{opt auto_fast_limit(integer 100)} controls automatic fast-mode activation threshold (in MB). Set to {cmd:0}
+to disable auto-fast. Only available with {cmd:pq use}.
 
 {dlgtab:Options for pq merge}
 
@@ -245,8 +280,8 @@ variables.
 {opt update} specifies that missing values in the master dataset be replaced with values from the using dataset.
 
 {phang}
-All read options ({opt in()}, {opt if()}, {opt relaxed}, {opt asterisk_to_variable()}, {opt parallelize()}, {opt sort()}, {opt preserve_order}, {opt compress}, {opt compress_string_to_numeric}, {opt random_n}, {opt random_share}, {opt random_seed}, {opt batch_size()}, {opt infer_schema_length()}, {opt drop()}, {opt drop_strl})
-are also available with {cmd:pq merge}.
+All read options except {opt clear}, {opt fast}, {opt auto_fast_limit()}, and {opt max_obs_per_batch()}
+are available with {cmd:pq merge}.
 This will load the data using {cmd:pq use} in a temporary frame, {cmd:save} it to a temporary dta file, and then run the specified {cmd:merge}.
 
 {dlgtab:Options for pq save}
@@ -289,6 +324,21 @@ additional file to a partition (like a new year of data) without overwriting the
 {phang}
 {opt label} saves labeled variables as strings.
 
+{phang}
+{opt chunk(integer 2147483647)} sets maximum rows per chunk for streaming writes.
+
+{phang}
+{opt stream} enables low-memory chunked writing.
+
+{phang}
+{opt consolidate} combines chunked parquet output files into one file after streaming.
+
+{phang}
+{opt do_not_reload} with {opt stream} keeps memory clear after write instead of reloading the original data.
+
+{phang}
+{opt format(string)} sets output format for {cmd:pq save}; supported values are {cmd:parquet}, {cmd:spss}, and {cmd:csv}.
+
 
 {dlgtab:Options for pq describe}
 
@@ -308,6 +358,9 @@ that would be created from the asterisk pattern.
 
 {phang}
 {opt infer_schema_length(integer 10000)} is used for CSV describe operations to control schema inference. If set to {cmd:0}, Rust receives {cmd:None} and scans the full CSV for inference. For non-CSV formats, this option is ignored.
+
+{phang}
+{opt parse_dates} enables CSV date/datetime inference during describe. For non-CSV formats, this option is ignored.
 
 {marker examples}{...}
 {title:Examples}
@@ -377,6 +430,9 @@ that would be created from the asterisk pattern.
 
 {pstd}Merge with specific variables and filtering:{p_end}
 {phang2}{cmd:. pq merge 1:m customer_id using transactions.parquet, keepusing(amount date) if(amount > 100)}{p_end}
+
+{pstd}Merge from CSV with CSV-specific read options:{p_end}
+{phang2}{cmd:. pq merge_csv 1:1 id using lookup.csv, infer_schema_length(0) parse_dates}{p_end}
 
 {dlgtab:Working with multiple files}
 

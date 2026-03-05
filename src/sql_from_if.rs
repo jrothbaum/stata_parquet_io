@@ -92,14 +92,20 @@ impl StataToSqlRegexConverter {
     }
     
     pub fn convert(&self, input: &str) -> String {
+        // Normalize common smart quotes to plain double quotes before processing.
+        let normalized = input
+            .replace('“', "\"")
+            .replace('”', "\"");
+
         // Protect quoted string literals so replacements do not touch their contents.
-        let (mut processed, quoted_literals) = self.extract_quoted_literals(input);
+        let (mut processed, quoted_literals) = self.extract_quoted_literals(&normalized);
 
         for (regex, replacement) in &self.replacements {
             processed = regex.replace_all(&processed, replacement.as_str()).to_string();
         }
 
-        self.restore_quoted_literals(&processed, &quoted_literals)
+        let restored = self.restore_quoted_literals(&processed, &quoted_literals);
+        self.normalize_double_quoted_literals(&restored)
     }
 
     fn extract_quoted_literals(&self, input: &str) -> (String, Vec<String>) {
@@ -150,9 +156,23 @@ impl StataToSqlRegexConverter {
         let mut output = input.to_string();
         for (idx, literal) in quoted_literals.iter().enumerate() {
             let token = format!("__Q{}__", idx);
-            output = output.replace(&token, literal);
+            // Stata uses double-quoted string literals; SQL requires single quotes.
+            // Convert "..." -> '...' so the SQL engine treats them as values, not identifiers.
+            let sql_literal = if literal.starts_with('"') && literal.ends_with('"') && literal.len() >= 2 {
+                format!("'{}'", &literal[1..literal.len() - 1])
+            } else {
+                literal.clone()
+            };
+            output = output.replace(&token, &sql_literal);
         }
         output
+    }
+
+    fn normalize_double_quoted_literals(&self, input: &str) -> String {
+        // Fallback: if any double-quoted literals survived tokenization,
+        // normalize them to SQL single-quoted string literals.
+        let re = Regex::new(r#""([^"]*)""#).expect("Invalid regex pattern");
+        re.replace_all(input, "'$1'").to_string()
     }
 }
 
@@ -171,14 +191,14 @@ mod tests {
         assert_eq!(stata_to_sql("missing(age)"), "age IS NULL");
         assert_eq!(stata_to_sql("!missing(age)"), "age IS NOT NULL");
         assert_eq!(stata_to_sql("inrange(age, 18, 65)"), "age BETWEEN 18 AND 65");
-        assert_eq!(stata_to_sql("inlist(country, \"USA\", \"Canada\")"), "country IN (\"USA\", \"Canada\")");
+        assert_eq!(stata_to_sql("inlist(country, \"USA\", \"Canada\")"), "country IN ('USA', 'Canada')");
         assert_eq!(stata_to_sql("ceil(value)"), "CEILING(value)");
         assert_eq!(stata_to_sql("mod(x, 5)"), "(x % 5)");
     }
 
     #[test]
     fn test_stata_operators_converted() {
-        assert_eq!(stata_to_sql("age > 30 & gender == \"male\""), "age > 30 AND gender = \"male\"");
+        assert_eq!(stata_to_sql("age > 30 & gender == \"male\""), "age > 30 AND gender = 'male'");
         assert_eq!(stata_to_sql("status == 1 | status == 2"), "status = 1 OR status = 2");
     }
 
@@ -220,9 +240,10 @@ mod tests {
     fn test_operators_in_strings_unchanged() {
         // Operators inside strings should not be converted
         assert_eq!(stata_to_sql("name = 'John & Jane'"), "name = 'John & Jane'");
-        assert_eq!(stata_to_sql("text = \"a | b\""), "text = \"a | b\"");
+        assert_eq!(stata_to_sql("text = \"a | b\""), "text = 'a | b'");
         assert_eq!(stata_to_sql("value = 'x == y'"), "value = 'x == y'");
-        assert_eq!(stata_to_sql("desc = \"missing(data)\""), "desc = \"missing(data)\"");
+        assert_eq!(stata_to_sql("desc = \"missing(data)\""), "desc = 'missing(data)'");
+        assert_eq!(stata_to_sql("c_2 == \"A\""), "c_2 = 'A'");
     }
 
     #[test]
@@ -243,7 +264,7 @@ mod tests {
         );
         assert_eq!(
             stata_to_sql("missing(name) | desc = \"has | in text\""),
-            "name IS NULL OR desc = \"has | in text\""
+            "name IS NULL OR desc = 'has | in text'"
         );
     }
 }

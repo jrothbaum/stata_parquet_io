@@ -46,6 +46,11 @@ impl StataType {
     }
 }
 
+/// Returns true for Polars string-like types that need length measurement.
+pub fn is_string_type(dtype: &DataType) -> bool {
+    matches!(dtype, DataType::String | DataType::Categorical(_, _) | DataType::Enum(_, _))
+}
+
 // Function to map Polars DataType to StataType
 pub fn map_polars_to_stata(
     dtype: &DataType,
@@ -229,7 +234,8 @@ pub fn schema_with_stata_types(
     df:&LazyFrame,
     schema: &Schema,
     quietly:bool,
-    detailed:bool
+    detailed:bool,
+    precomputed_string_lengths: Option<&HashMap<PlSmallStr, usize>>,
 ) {
 
     if !quietly {
@@ -238,8 +244,10 @@ pub fn schema_with_stata_types(
     }
 
     let hash_strings = if detailed {
-            //  Get length of string columns and assign to hashmap
-            get_string_column_lengths(&df, &schema).unwrap()
+            // Use precomputed lengths when available to avoid a second scan.
+            precomputed_string_lengths
+                .cloned()
+                .unwrap_or_else(|| get_string_column_lengths(&df, &schema).unwrap())
         } else {
             HashMap::<PlSmallStr, usize>::new()
         };
