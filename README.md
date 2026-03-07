@@ -1,433 +1,104 @@
 # Read/Write Parquet, SAS, SPSS, and CSV files in Stata
 
-`pq` is a Stata package for high-performance file IO. It supports read/append/merge/describe across Parquet, SAS, SPSS, and CSV, and save to Parquet, SPSS, and CSV.
-
-## Features
-
-- Unified Stata interface: `use`, `append`, `merge`, `save`, `describe`
-- Format shortcuts: `use_sas`, `use_spss`, `use_csv`, `save_spss`, `save_csv`, `describe_sas`, `describe_spss`, `describe_csv`
-- Predicate pushdown and projection (`if()`, varlists, wildcards)
-- Large-file handling (batching, streaming writes, chunked writes)
-- Parquet-specific tuning (partitioning, compression, schema-relaxed file unions)
-- Preserves original Parquet column names via `{parquet_name:...}` labels
+`pq` is a Stata package for high-performance file IO across Parquet, SAS, SPSS, and CSV formats. Built on [Polars](https://github.com/pola-rs/polars). Requires Stata 16+.
 
 ## Installation
-### Option 1: Install from SSC - https://ideas.repec.org/c/boc/bocode/s459458.html
+
+**From SSC:**
 ```stata
 ssc install pq
 ```
 
+**Manual:** download the package for your platform from the [latest release](https://github.com/jrothbaum/stata_parquet_io/releases) and place the files in your `PLUS/p` directory (`sysdir` shows the path).
 
-### Option 2: Manual installation
-1. Download the package files for your archictecture (Linux, Mac, or Windows)  from the [latest release](https://github.com/jrothbaum/stata_parquet_io/releases)
-2. Place the files in your PLUS/p directory (find location with `sysdir`)
-
-### Important Note for Mac ARM Users
-
-You may encounter an error related to Mac Gatekeeper restrictions on unsigned binaries. To resolve this:
-
-1. Go to **System Preferences/Settings → Privacy & Security**
-2. Look for a message about the blocked dylib near the bottom
-3. Click **"Allow Anyway"** next to the blocked file
-4. Authenticate with your password if prompted
-5. Try using the plugin again in Stata
-
+**Mac ARM users:** if you see a Gatekeeper error on first use, go to **System Preferences → Privacy & Security**, find the blocked `.dylib`, and click **Allow Anyway**.
 
 ## Quick Start
 
 ```stata
 * Parquet
-pq use using mydata.parquet, clear
-pq save using mydata.parquet, replace
+pq use mydata.parquet, clear
+pq save mydata.parquet, replace
 
-* SPSS / CSV shortcuts
-pq use_spss using mydata.sav, clear preserve_order
-pq save_csv using mydata.csv, replace
+* Format shortcuts (set format automatically)
+pq use_sas   source.sas7bdat, clear
+pq use_spss  source.sav, clear
+pq use_csv   source.csv, clear
+pq save_spss out.sav, replace
+pq save_csv  out.csv, replace
 ```
 
-## Usage
+pq use/append/merge/save commands also accept `format(parquet|sas|spss|csv)` as an option.
 
-### Core Commands
+## Key Options
 
-- `pq use|append|merge ... [, format(parquet|sas|spss|csv)]`
-- `pq save ... [, format(parquet|spss|csv)]`
-- `pq describe ... [, format(parquet|sas|spss|csv)]`
-- Shortcuts that set `format()` automatically: `use_sas`, `use_spss`, `use_csv`, `save_spss`, `save_csv`, `describe_sas`, `describe_spss`, `describe_csv`
+**Reading** (`use`, `append`, `merge`, and format shortcuts):
 
-### Read/Append/Merge Options
+| Option | Description |
+|--------|-------------|
+| `if(expr)` | SQL predicate pushdown — filters at read time |
+| `in(range)` | Row range, e.g. `in(1/1000)` |
+| varlist | Load only selected columns, e.g. `pq use id age using data.parquet` |
+| `compress` | Downcast numerics to smallest lossless type |
+| `sort(varlist)` | Sort on load; prefix `-` for descending |
+| `drop(varlist)` | Exclude columns by name or pattern |
+| `preserve_order` | Maintain source row order (SAS/SPSS) |
+| `parse_dates` | Auto-detect and convert date strings (CSV) |
+| `relaxed` | Union files with mismatched schemas (Parquet) |
+| `asterisk_to_variable(name)` | Extract wildcard match into a variable (Parquet) |
 
-- Common: `in()`, `if()`, `parallelize(columns|rows)`, `sort()`, `compress`, `compress_string_to_numeric`, `random_n()`, `random_share()`, `random_seed()`, `batch_size()`, `drop()`, `drop_strl`
-- `preserve_order` for SAS/SPSS reads
-- `infer_schema_length()` for CSV reads
-- `parse_dates` for CSV reads (off by default)
-- `max_obs_per_batch()` for `use`/`append` overflow batching
-- `relaxed` and `asterisk_to_variable()` for Parquet reads
+**Saving** (`save`, `save_spss`, `save_csv`):
 
-### Save Options
+| Option | Description |
+|--------|-------------|
+| `replace` | Overwrite existing file |
+| `if(expr)` | Save a filtered subset with stata if syntax |
+| `partition_by(varlist)` | Hive-partitioned output directory (Parquet) |
+| `compression(type)` | `zstd` (default), `snappy`, `gzip`, etc. (Parquet) |
 
-- Common: `replace`, `if()`, `noautorename`, `label`, `format()`
-- Parquet only: `partition_by()`, `nopartitionoverwrite`, `compression()`, `compression_level()`, `chunk()`, `stream`, `consolidate`, `do_not_reload`
+For the full option reference, run `help pq` after installing.
 
-### Describe Options
-
-- `quietly`, `detailed`, `format()`
-- `infer_schema_length()` for CSV describe
-- `parse_dates` for CSV describe
-- `asterisk_to_variable()` for Parquet describe
-
-### Examples
+## Examples
 
 ```stata
-* CSV read with explicit schema inference window
-pq use_csv using raw.csv, clear infer_schema_length(50000)
+* Load selected columns with a filter
+pq use id year earnings using cps.parquet, clear if(year >= 2010 & !missing(earnings))
 
-* CSV read with date/datetime parsing enabled
-pq use_csv using raw.csv, clear parse_dates
+* Load multiple files; extract year from filename
+pq use /data/cps_*.parquet, clear asterisk_to_variable(year)
 
-* SAS read while preserving source order
-pq use_sas using source.sas7bdat, clear preserve_order
+* Combine Parquet files with slightly different schemas
+pq use /data/*.parquet, clear relaxed
 
-* Parquet read excluding long strings
-pq use using big.parquet, clear drop_strl drop(notes_*)
+* Append a second file, compressing on load
+pq append extra.parquet, compress
 
-* Append with overflow batching control
-pq append using huge.parquet, max_obs_per_batch(50000000)
+* SAS read preserving source order
+pq use_sas survey.sas7bdat, clear preserve_order
 
-* Save to SPSS
-pq save_spss using out.sav, replace
+* CSV read with date parsing
+pq use_csv raw.csv, clear parse_dates
 
-* Chunked parquet stream write
-pq save using out.parquet, replace chunk(2000000) stream do_not_reload
-
-* Describe CSV
-pq describe_csv using raw.csv, detailed infer_schema_length(50000)
+* Save partitioned by state and year
+pq save /output/data, replace partition_by(state year)
 ```
 
+## Data Types
 
-## Advanced Features
-
-### Working with Multiple Files
-
-```stata
-* Load multiple files with wildcard patterns
-pq use using /data/sales_*.parquet, clear asterisk_to_variable(year)
-
-* Combine files with different schemas
-pq use using /data/*.parquet, clear relaxed
-```
-
-### Performance Optimization
-
-```stata
-* Thread management - set environment variable to limit threads
-* (useful on shared systems)
-* Example: set POLARS_MAX_THREADS=4 before starting Stata
-
-* Parallel processing strategies
-pq use using large_file.parquet, clear parallelize(columns)  // for wide files
-pq use using large_file.parquet, clear parallelize(rows)     // for tall files
-
-* Compression and optimization
-pq use using large_file.parquet, clear compress compress_string_to_numeric
-```
-
-### Variable Name Handling
-
-Parquet files support more flexible variable names than Stata (spaces, special characters, unlimited length). When reading Parquet files:
-
-- Original column names are preserved in variable labels as `{parquet_name:original_name}`
-- Variables are renamed if they contain reserved words or exceed 32 characters
-- When saving, original Parquet names are automatically restored unless `noautorename` is specified
-
-### Partitioned Datasets
-
-```stata
-* Save as partitioned dataset (creates directory structure)
-pq save using /output/partitioned_data, replace partition_by(year region)
-
-* Control partition overwrite behavior
-pq save using /output/data, replace partition_by(year) nopartitionoverwrite
-```
-
-Partition folder names preserve the underlying partition variable type:
-
-- integer partitions: `state=1/data_0.parquet`
-- float/double partitions: `state=1.0/data_0.parquet`
-
-## Data Type Support
-
-| Parquet Type | Stata Type | Notes |
-|--------------|------------|-------|
-| String | str# or strL | Automatically sized; >2045 chars become strL |
-| Integer | byte/int/long | Automatically sized based on range |
-| Float | float/double | Preserves precision |
-| Boolean | byte | 0/1 values |
-| Date | long | Formatted as %td |
-| DateTime | double | Formatted as %tc |
-| Time | double | Formatted as %tchh:mm:ss |
-| Binary | *dropped* | Not currently supported by Stata for C plugins |
-
-## Technical Details
-
-- Built on the [Polars](https://github.com/pola-rs/polars) library for blazing-fast performance (as all Rust libraries require you note)
-- Requires Stata 16.0 or later
-- Cross-platform support (Windows, Linux, macOS)
-- Efficient memory usage with optional compression
-- Plugin-based architecture for optimal performance
+| Source type | Stata type | Notes |
+|-------------|------------|-------|
+| String | `str#` / `strL` | Auto-sized; >2045 chars → strL |
+| Integer | `byte`/`int`/`long` | Sized by range |
+| Float/Double | `float`/`double` | Preserves precision |
+| Boolean | `byte` | 0/1 |
+| Date | `long` (%td) | |
+| DateTime | `double` (%tc) | |
+| Time | `double` (%tchh:mm:ss) | |
+| Binary | *dropped* | Not supported by Stata plugin API |
 
 ## Limitations
 
-- **Binary data**: Not supported (columns are dropped with warning)
-- **strL performance**: Reading strL columns is slower due to Stata plugin limitations  
-- **SQL vs. Stata syntax**: The `if()` condition converts Stata if conditions to SQL-style comparisons where missing values are not treated as greater than any value (unlike Stata)
-
-
-
-## Benchmarks
-This was run on my computer, with the following specs:<br>
-CPU: 	AMD Ryzen 7 8845HS w/ Radeon 780M Graphics<br>
-Cores: 	16<br>
-RAM: 	14Gi<br>
-OS: 	Windows 11<br>
-Run:	June 2, 2025<br>
-This is not intended to be a scientific benchmark, see the code below.
-
-Basically, it just draws a bunch of random normally distributed float variables (and an integer index stored as a float and a string variable) of various sizes (n_rows, n_columns) and save/use them as parquet and dta files and compares the time.  For each, I report the time for the save/use and next to the parquet time, I report the parquet time/dta time.
-
-
-```
-. benchmark_parquet_io_data,      n_cols(10)      ///
->                                 n_rows(1000)
-Number of observations (_N) was 0, now 1,000.
-(          1,000,              10)
-    1: Stata:       save:        0.00
-    2: Parquet:     save:        0.00             4.00
-    3: Stata:       use:         0.01
-    4: Parquet:     use:         0.01             0.91
-
-    Loading only 5 variables of 10
-    5: Stata:       use:         0.00
-    6: Parquet:     use:         0.01          15.00
-
-.                                 
-. 
-. benchmark_parquet_io_data,      n_cols(10)      ///
->                                 n_rows(10000)
-Number of observations (_N) was 0, now 10,000.
-(         10,000,              10)
-    1: Stata:       save:        0.00
-    2: Parquet:     save:        0.01             9.00
-    3: Stata:       use:         0.01
-    4: Parquet:     use:         0.02             2.88
-
-    Loading only 5 variables of 10
-    5: Stata:       use:         0.00
-    6: Parquet:     use:         0.01          10.00
-
-. 
-. benchmark_parquet_io_data,      n_cols(10)      ///
->                                 n_rows(100000)
-Number of observations (_N) was 0, now 100,000.
-(        100,000,              10)
-    1: Stata:       save:        0.01
-    2: Parquet:     save:        0.03             5.50
-    3: Stata:       use:         0.00
-    4: Parquet:     use:         0.07            17.00
-
-    Loading only 5 variables of 10
-    5: Stata:       use:         0.01
-    6: Parquet:     use:         0.04           5.43
-
-.                                 
-.                                 
-. benchmark_parquet_io_data,      n_cols(10)      ///
->                                 n_rows(1000000)
-Number of observations (_N) was 0, now 1,000,000.
-(      1,000,000,              10)
-    1: Stata:       save:        0.03
-    2: Parquet:     save:        0.26            10.24
-    3: Stata:       use:         0.02
-    4: Parquet:     use:         0.24            11.80
-
-    Loading only 5 variables of 10
-    5: Stata:       use:         0.04
-    6: Parquet:     use:         0.13           3.47
-
-.                                 
-.                                 
-. benchmark_parquet_io_data,      n_cols(10)      ///
->                                 n_rows(10000000)
-Number of observations (_N) was 0, now 10,000,000.
-(     10,000,000,              10)
-    1: Stata:       save:        0.15
-    2: Parquet:     save:        1.56            10.34
-    3: Stata:       use:         0.11
-    4: Parquet:     use:         1.83            16.79
-
-    Loading only 5 variables of 10
-    5: Stata:       use:         0.31
-    6: Parquet:     use:         0.99           3.16
-
-. 
-. benchmark_parquet_io_data,      n_cols(100)     ///
->                                 n_rows(1000000)
-Number of observations (_N) was 0, now 1,000,000.
-(      1,000,000,             100)
-    1: Stata:       save:        0.15
-    2: Parquet:     save:        1.43             9.72
-    3: Stata:       use:         0.10
-    4: Parquet:     use:         2.47            24.95
-
-    Loading only 5 variables of 100
-    5: Stata:       use:         0.14
-    6: Parquet:     use:         0.14           0.99
-
-. 
-. benchmark_parquet_io_data,      n_cols(1000)    ///
->                                 n_rows(100000)
-Number of observations (_N) was 0, now 100,000.
-(        100,000,           1,000)
-    1: Stata:       save:        0.14
-    2: Parquet:     save:        1.58            11.35
-    3: Stata:       use:         0.10
-    4: Parquet:     use:         1.92            18.31
-
-    Loading only 5 variables of 1000
-    5: Stata:       use:         0.08
-    6: Parquet:     use:         0.06           0.71
-
-```
-
-
-
-
-Benchmark code:
-```
-capture program drop benchmark_parquet_io_data
-program define benchmark_parquet_io_data
-	version 16
-	syntax		, 	n_cols(integer)			///
-					n_rows(integer)
-	
-	clear
-	set obs `n_rows'
-	local cols_created = 0
-
-	if `n_cols' > `cols_created' {
-		local cols_created = `cols_created' + 1
-		quietly gen c_`cols_created' = _n
-	}
-
-	if `n_cols' > `cols_created' {
-		local cols_created = `cols_created' + 1
-		quietly gen c_`cols_created' = char(65 + floor(runiform()*5))
-	}
-	
-	if `n_cols' > `cols_created' {
-		local cols_created = `cols_created' + 1
-		forvalues ci = `cols_created'/`n_cols' {
-			quietly gen c_`ci' = rnormal()
-		}
-	}
-	
-	local n_to_load = 5
-	local subset_to_load
-	forvalues i=1/`n_to_load' {
-		local subset_to_load `subset_to_load' c_`i'
-	}
-	
-	
-	
-	tempfile path_save_root
-	quietly {
-		timer clear
-		di "save stata"
-		timer on 1
-		save "`path_save_root'.dta", replace
-		timer off 1
-		
-		di "save parquet"
-		timer on 2
-		
-		di `"pq save "`path_save_root'.parquet", replace"'
-		pq save "`path_save_root'.parquet", replace
-		timer off 2
-		
-		di "use stata"
-		timer on 3
-		use "`path_save_root'.dta", clear
-		timer off 3
-		
-		di "use parquet"
-		timer on 4
-		di `"pq use "`path_save_root'.parquet", clear"'
-		pq use "`path_save_root'.parquet", clear
-		timer off 4
-		
-		
-		di "use stata"
-		timer on 5
-		use `subset_to_load' using "`path_save_root'.dta", clear
-		timer off 5
-		
-		di "use parquet"
-		timer on 6
-		di `"pq use "`path_save_root'.parquet", clear"'
-		pq use `subset_to_load' using "`path_save_root'.parquet", clear
-		timer off 6
-		
-		timer list
-		local save_stata = r(t1)
-		local save_parquet = r(t2)
-		local use_stata = r(t3)
-		local use_parquet = r(t4)
-		local use_stata_subset = r(t5)
-		local use_parquet_subset = r(t6)
-		local save_ratio = r(t2)/r(t1)
-		local use_ratio = r(t4)/r(t3)
-		local use_ratio_subset = r(t6)/r(t5)
-		noisily di "(" %15.0fc `n_rows' ", " %15.0fc `n_cols' ")"
-		noisily di "	1: Stata:	save:	" %9.2f `save_stata'
-		noisily di "	2: Parquet:	save:	" %9.2f `save_parquet' "	" %9.2f `save_ratio'
-		noisily di "	3: Stata:	use:	" %9.2f `use_stata'
-		noisily di "	4: Parquet:	use:	" %9.2f `use_parquet'  "	" %9.2f `use_ratio'
-		
-		noisily di ""
-		noisily di "	Loading only `n_to_load' variables of `n_cols'"
-		noisily di "	5: Stata:	use:	" %9.2f `use_stata_subset'
-		noisily di "	6: Parquet:	use:	" %9.2f `use_parquet_subset'  "      " %9.2f `use_ratio_subset'
-	}
-	
-	capture erase `path_save_root'.parquet
-	capture erase `path_save_root'.dta
-	
-end
-
-
-clear
-set seed 1565225
-
-benchmark_parquet_io_data, 	n_cols(10)	///
-				n_rows(1000)
-				
-
-benchmark_parquet_io_data, 	n_cols(10)	///
-				n_rows(10000)
-
-benchmark_parquet_io_data, 	n_cols(10)	///
-				n_rows(100000)
-				
-				
-benchmark_parquet_io_data, 	n_cols(10)	///
-				n_rows(1000000)
-				
-				
-benchmark_parquet_io_data, 	n_cols(10)	///
-				n_rows(10000000)
-
-benchmark_parquet_io_data, 	n_cols(100)	///
-				n_rows(1000000)
-
-benchmark_parquet_io_data, 	n_cols(1000)	///
-				n_rows(100000)
-```
+- **Binary columns** are silently dropped.
+- **strL reads** are slower than str# due to Stata plugin constraints.
+- **`if()` uses SQL semantics**: missing values are not treated as greater than any value (unlike Stata's native `if`).
+- **CSV date filters**: use ISO literals (`DATE '2020-01-05'`, `TIMESTAMP '2020-01-05 00:00:00'`) rather than Stata's `td()`/`tc()` functions in `if()`.
