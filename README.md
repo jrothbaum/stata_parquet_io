@@ -123,7 +123,9 @@ Parquet full reads are slower than `.dta` (Stata's native format is highly optim
 |-----------|------|--------------|---------|
 | Write | 0.035s | 0.384s (`export delimited`) | **11×** |
 | Read — all columns | 0.100s | 0.714s (`import delimited`) | **7×** |
-| Read — 4 of 10 columns | 0.073s | 0.362s (load + `keep`) | **5×** |
+| Read — 4 of 10 columns | 0.073s | 0.362s (`import delimited` + `keep`) | **5×** |
+
+`import delimited` does not support column projection (outside of contiguous columns by index with colrange); the Stata "subset" time is a full load followed by `keep`. `pq` skips parsing of unused fields in the lazy CSV scan.
 
 **SAS** — 88,932 rows, average of 5 runs:
 
@@ -132,7 +134,6 @@ Parquet full reads are slower than `.dta` (Stata's native format is highly optim
 | Full read | 0.71s | 3.50s | **5×** |
 | Subset columns | 0.27s | 0.14s | — |
 
-SAS7BDAT is row-oriented, so all column data is read from disk regardless; column projection still reduces transfer and processing time, though gains are smaller than for columnar formats.
 
 **SPSS** — GSS 2024 survey (3,309 rows × 813 variables), average of 5 runs:
 

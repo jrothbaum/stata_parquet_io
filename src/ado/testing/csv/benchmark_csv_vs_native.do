@@ -87,7 +87,7 @@ forvalues r = 1/`reps' {
 	assert id[1] == 1
 	assert id[`n_rows'] == `n_rows'
 
-	// native read subset vars
+	// native read subset vars (import delimited has no column projection; full load then keep)
 	clear
 	timer on 6
 	import delimited using "`native_csv'", varnames(1) clear
