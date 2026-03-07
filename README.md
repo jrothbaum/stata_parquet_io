@@ -107,14 +107,15 @@ pq save /output/data, replace partition_by(state year)
 
 Benchmarks run on AMD Ryzen 7 8845HS (16 cores), 14 GB RAM, Windows 11, Stata 17 SE.
 
-**Parquet vs `.dta`** — 1,000,000 rows:
+**Parquet vs `.dta`** — 100,000 rows × 1,000 columns:
 
-| | Stata `.dta` | `pq` (10 cols) | `pq` (5 of 1,000 cols) |
-|---|---|---|---|
-| Full read | 0.02s | 0.22s | — |
-| Subset columns | 0.04s | 0.13s | **0.04s** |
+| Operation | Stata `.dta` | `pq` |
+|---|---|---|
+| Write | 0.20s | 2.15s |
+| Full read | 0.13s | 2.52s |
+| Read 5 of 1,000 columns | 0.09s | **0.03s** |
 
-Parquet full reads are slower than `.dta` (Stata's native format is highly optimized). The value is **roundtripping with Python, R, and Spark** — Stata has no native Parquet writer (with a newly available reader in Stata Now). Column selection on very wide Parquet files also matches or beats `.dta`.
+Write and full read are slower than `.dta` (Stata's native format is highly optimized). The value is **roundtripping with Python, R, Spark, etc.** — Stata has no native Parquet writer (with a newly available and fast reader in Stata Now). Column selection on very wide Parquet files is 3× faster than `.dta`.
 
 
 **CSV** — 100,000 rows × 10 variables, average of 3 runs:
