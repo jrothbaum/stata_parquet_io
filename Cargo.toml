@@ -41,7 +41,7 @@ serde = "1.0.228"
 serde_json = "1.0.145"
 glob = "0.3.3"
 regex = "1.12.2"
-polars-readstat-rs = "0.4.1"
+polars-readstat-rs = "0.4.4"
 sqlparser = { version = "0.60", features = ["visitor"] }
 # polars-readstat-rs = { path = "../polars_readstat/crates/polars_readstat_rs" }
 
