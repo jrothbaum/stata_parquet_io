@@ -39,13 +39,13 @@ program define create_data
 end
 
 
-di "Parallelization"
 create_data, n_rows(100000) n_cols(100) 
 tempfile tparquet
 local tmp_root C:\Users\jonro\OneDrive\Documents\Coding\stata_parquet_io\test_data\tmp
 capture mkdir "`tmp_root'"
 local tparquet `tmp_root'\test_save
 
+save "`tparquet'", replace
 pq save "`tparquet'.parquet", replace
 pq use "`tparquet'.parquet", clear
 
@@ -79,16 +79,32 @@ pq save "`tparquet'_partitioned.parquet", replace partition_by(year month) nopar
 
 
 pq use "`tparquet'_gzip.parquet", clear
-sum
+cf _all using "`tparquet'"
+local n_diff = r(Nsum)
+assert `n_diff' == 0
+
 pq use "`tparquet'_gzip_2.parquet", clear
-sum
+cf _all using "`tparquet'"
+local n_diff = r(Nsum)
+assert `n_diff' == 0
+
 pq use "`tparquet'_partitioned.parquet", clear
 sum
+count if year == 0
+assert r(N) == 100
+
+count if year == 1
+assert r(N) == 100
+
+
+count if year > 1
+assert r(N) == 100000
+
+
 pq use "`tparquet'_if.parquet", clear
 sum
 
 
-//	Save that should fail
 pq save "`tmp_root'\non_hive.parquet", partition_by(year) replace
 
 
@@ -101,8 +117,12 @@ pq save "`tmp_root'\compress.parquet", replace compress compress_string_to_numer
 
 pq use "`tmp_root'\compress.parquet", clear
 describe
-sum
 
+local c10type: type c_10
+assert "`c10type'" == "double"
+
+local c1type: type c_1
+assert "`c1type'" == "long"
 
 clear
 set obs 4

@@ -40,7 +40,7 @@ pq save_csv "`pq1'.csv", replace
 //	----------------------------------------------------------------------
 //	Test 1: full load — values must be bit-for-bit identical
 //	----------------------------------------------------------------------
-pq use_csv "`pq1'.csv", clear
+pq use_csv "`pq1'.csv", clear  parse_dates
 
 assert _N == 10
 
@@ -69,12 +69,11 @@ di as text "Test 1 (full load round-trip): PASSED"
 
 //	----------------------------------------------------------------------
 //	Test 2: if filter on date column
-//	Parquet stores dates as Unix epoch (days since 01jan1970).  Stata's td()
-//	is days since 01jan1960, so td() values cannot be passed raw to SQL.
-//	Use the Polars date() function instead: date('ddmonyyyy','%d%b%Y').
-//	See: https://github.com/jrothbaum/stata_parquet_io/issues/37
+//	For CSV reads, use ISO date literals (DATE 'YYYY-MM-DD') in if() filters.
+//	The two-argument date(string, format) form used for Parquet does not work
+//	for CSV because Polars SQL loses the format string during lazy-scan pushdown.
 //	----------------------------------------------------------------------
-pq use_csv "`pq1'.csv", clear if(date_var >= date('05jan2020','%d%b%Y'))
+pq use_csv "`pq1'.csv", clear parse_dates if(date_var >= DATE '2020-01-05')
 
 assert _N == 6
 local cutoff = td(05jan2020)
@@ -86,12 +85,13 @@ di as text "Test 2 (if filter on date column using date() syntax): PASSED"
 
 //	----------------------------------------------------------------------
 //	Test 3: save with if on date, then reload
+//	Use ISO string literal '...' when date_var is Utf8 (loaded without parse_dates).
 //	----------------------------------------------------------------------
 pq use_csv "`pq1'.csv", clear
 tempfile pq2
-pq save_csv "`pq2'.csv", replace if(date_var <= date('03jan2020','%d%b%Y'))
+pq save_csv "`pq2'.csv", replace if(date_var <= '2020-01-03')
 
-pq use_csv "`pq2'.csv", clear
+pq use_csv "`pq2'.csv", clear parse_dates
 assert _N == 3
 assert date_var[1] == td(01jan2020)
 assert date_var[3] == td(03jan2020)
@@ -110,7 +110,7 @@ di as text "Test 4 (td() in if() correctly rejected rc=198): PASSED"
 //	Test 5: datetime filter using TIMESTAMP literal
 //	datetime_var[3] = 03jan2020 00:00:00; load rows with dt >= that value
 //	----------------------------------------------------------------------
-pq use_csv "`pq1'.csv", clear if(datetime_var >= TIMESTAMP '2020-01-03 00:00:00')
+pq use_csv "`pq1'.csv", clear parse_dates if(datetime_var >= TIMESTAMP '2020-01-03 00:00:00')
 
 assert _N == 8
 assert datetime_var[1] == clock("03jan2020 00:00:00", "DMYhms")

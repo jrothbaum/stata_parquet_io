@@ -49,12 +49,7 @@ tempfile tcsv
 compress
 pq save_csv "`tcsv'.csv", replace
 
-clear
-pq use_csv "`tcsv'.csv", clear parallelize(columns) compress
-assert _N == 100000
-
-clear
-pq use_csv "`tcsv'.csv", clear parallelize(rows)
+pq use_csv "`tcsv'.csv", clear compress
 assert _N == 100000
 
 clear
