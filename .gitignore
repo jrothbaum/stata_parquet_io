@@ -36,3 +36,5 @@ scripts/run-reset-code.ps1
 # Compiled Stata plugin binaries
 *.plugin
 *.dll
+
+**/too_big/*

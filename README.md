@@ -102,3 +102,44 @@ pq save /output/data, replace partition_by(state year)
 - **strL reads** are slower than str# due to Stata plugin constraints.
 - **`if()` uses SQL semantics**: missing values are not treated as greater than any value (unlike Stata's native `if`).
 - **CSV date filters**: use ISO literals (`DATE '2020-01-05'`, `TIMESTAMP '2020-01-05 00:00:00'`) rather than Stata's `td()`/`tc()` functions in `if()`.
+
+## Performance
+
+Benchmarks run on AMD Ryzen 7 8845HS (16 cores), 14 GB RAM, Windows 11, Stata 17 SE.
+
+**Parquet vs `.dta`** — 1,000,000 rows:
+
+| | Stata `.dta` | `pq` (10 cols) | `pq` (5 of 1,000 cols) |
+|---|---|---|---|
+| Full read | 0.02s | 0.22s | — |
+| Subset columns | 0.04s | 0.13s | **0.04s** |
+
+Parquet full reads are slower than `.dta` (Stata's native format is highly optimized). The value is **roundtripping with Python, R, and Spark** — Stata has no native Parquet writer (with a newly available reader in Stata Now). Column selection on very wide Parquet files also matches or beats `.dta`.
+
+
+**CSV** — 100,000 rows × 10 variables, average of 3 runs:
+
+| Operation | `pq` | Stata native | Speedup |
+|-----------|------|--------------|---------|
+| Write | 0.035s | 0.384s (`export delimited`) | **11×** |
+| Read — all columns | 0.100s | 0.714s (`import delimited`) | **7×** |
+| Read — 4 of 10 columns | 0.073s | 0.362s (load + `keep`) | **5×** |
+
+**SAS** — 88,932 rows, average of 5 runs:
+
+| Operation | `pq` | `import sas` | Speedup |
+|-----------|------|--------------|---------|
+| Full read | 0.71s | 3.50s | **5×** |
+| Subset columns | 0.27s | 0.14s | — |
+
+SAS7BDAT is row-oriented, so all column data is read from disk regardless; column projection still reduces transfer and processing time, though gains are smaller than for columnar formats.
+
+**SPSS** — GSS 2024 survey (3,309 rows × 813 variables), average of 5 runs:
+
+| Operation | `pq` | Stata native | Notes |
+|-----------|------|--------------|-------|
+| Read — all columns | 0.68s | 1.61s (`import spss`) | **2.4× faster** |
+| Write — all columns | 0.43s | — | **No Stata equivalent** |
+
+Stata can read SPSS files but has no `export spss` command. `pq save_spss` enables full roundtripping.
+
