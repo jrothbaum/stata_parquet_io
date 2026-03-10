@@ -21,8 +21,8 @@ d
 f pq.ado
 f pq.sthlp
 g LINUX64 pq.so pq.plugin
-g MACINTEL64 pq.dylib pq.plugin
-g MACARM64 pq.dylib pq.plugin
+g MACINTEL64 pq_intel.dylib pq.plugin
+g MACARM64 pq_arm.dylib pq.plugin
 g WIN64 pq.dll pq.plugin
 h pq.plugin
 f pq_benchmark.do
