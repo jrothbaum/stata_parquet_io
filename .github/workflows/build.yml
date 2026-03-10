@@ -25,7 +25,7 @@ jobs:
               platform_name: "windows"
             }
           - {
-              name: "macOS Universal",
+              name: "macOS",
               os: macos-latest,
               target: "universal",
               extension: "dylib",
@@ -107,7 +107,7 @@ jobs:
             cargo build --release --target x86_64-unknown-linux-gnu
           "
 
-      - name: Build release (macOS Universal)
+      - name: Build release (macOS)
         if: matrix.config.platform_name == 'macos'
         run: |
           # Build for x86_64 (Intel)
@@ -115,17 +115,6 @@ jobs:
           
           # Build for aarch64 (ARM)
           cargo build --release --target aarch64-apple-darwin
-          
-          # Create universal binary
-          mkdir -p target/universal-apple-darwin/release
-          lipo -create \
-            target/x86_64-apple-darwin/release/libstata_parquet_io.dylib \
-            target/aarch64-apple-darwin/release/libstata_parquet_io.dylib \
-            -output target/universal-apple-darwin/release/libstata_parquet_io.dylib
-          
-          # Verify the universal binary
-          echo "Universal binary architecture info:"
-          lipo -info target/universal-apple-darwin/release/libstata_parquet_io.dylib
         env:
           RUST_BACKTRACE: 1
           POLARS_STATICALLY_LINK: 1
@@ -149,11 +138,12 @@ jobs:
           if [ "${{ matrix.config.platform_name }}" = "windows" ]; then
             cp target/${{ matrix.config.target }}/release/stata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
           elif [ "${{ matrix.config.platform_name }}" = "macos" ]; then
-            # Use the universal binary
-            cp target/universal-apple-darwin/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
+            # Copy Intel and ARM binaries separately
+            cp target/x86_64-apple-darwin/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/pq_intel.dylib
+            cp target/aarch64-apple-darwin/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/pq_arm.dylib
             
-            echo "Universal binary verification:"
-            lipo -info release_package/pq.${{ matrix.config.extension }}
+            echo "macOS binaries:"
+            ls -la release_package/
           elif [ "${{ matrix.config.platform_name }}" = "linux" ]; then
             if [ -f "target/${{ matrix.config.target }}/release/libstata_parquet_io.${{ matrix.config.extension }}" ]; then
               cp target/${{ matrix.config.target }}/release/libstata_parquet_io.${{ matrix.config.extension }} release_package/pq.${{ matrix.config.extension }}
@@ -211,7 +201,8 @@ jobs:
           
           # Copy platform-specific binaries
           cp pq-windows/pq.dll pq-ssc/
-          cp pq-macos/pq.dylib pq-ssc/
+          cp pq-macos/pq_intel.dylib pq-ssc/
+          cp pq-macos/pq_arm.dylib pq-ssc/
           cp pq-linux/pq.so pq-ssc/
           
           # Verify contents
@@ -224,8 +215,23 @@ jobs:
       - name: Create platform zip files
         run: |
           cd pq-windows && mv pq.dll pq.plugin && zip -r ../pq-windows.zip * && cd ..
-          cd pq-macos && mv pq.dylib pq.plugin && zip -r ../pq-macos.zip * && cd ..
           cd pq-linux && mv pq.so pq.plugin && zip -r ../pq-linux.zip * && cd ..
+
+          # macOS ARM
+          mkdir -p pq-macos-arm
+          cp pq-macos/pq.ado pq-macos-arm/
+          cp pq-macos/pq.pkg pq-macos-arm/
+          cp pq-macos/pq.sthlp pq-macos-arm/
+          cp pq-macos/pq_arm.dylib pq-macos-arm/pq.plugin
+          cd pq-macos-arm && zip -r ../pq-macos.zip * && cd ..
+
+          # macOS Intel
+          mkdir -p pq-macos-intel
+          cp pq-macos/pq.ado pq-macos-intel/
+          cp pq-macos/pq.pkg pq-macos-intel/
+          cp pq-macos/pq.sthlp pq-macos-intel/
+          cp pq-macos/pq_intel.dylib pq-macos-intel/pq.plugin
+          cd pq-macos-intel && zip -r ../pq-macos-intel.zip * && cd ..
 
           
       - name: Create Release
@@ -235,6 +241,7 @@ jobs:
           files: |
             pq-windows.zip
             pq-macos.zip
+            pq-macos-intel.zip
             pq-linux.zip
             pq-ssc.zip
           draft: false
