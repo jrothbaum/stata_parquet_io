@@ -1288,8 +1288,9 @@ pub fn read_to_stata(
 
         df = match df.collect() {
             Ok(df) => {
-                df.sample_frac(
-                        &Series::new("frac".into(), vec![random_share as f64]),
+                let n = (random_share * df.height() as f64).round() as u32;
+                df.sample_n(
+                        &Series::new("n".into(), vec![n]),
                         false,
                         false,
                         random_seed_option

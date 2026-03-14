@@ -6,7 +6,7 @@ members = [
 
 [package]
 name = "stata_parquet_io"
-version = "3.0.0"
+version = "3.0.4"
 authors = ["Jon Rothbaum <jlrothbaum@gmail.com>"]
 edition = "2021"
 rust-version = "1.93"
@@ -35,7 +35,7 @@ polars-parquet = "0.53"
 
 stata-sys = { path = "./crates/stata-sys" }
 rayon = "1.11"
-log = "0.4.28"
+#   log = "0.4.28"
 env_logger = "0.11.8"
 serde = "1.0.228"
 serde_json = "1.0.145"
