@@ -2,6 +2,22 @@ use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::slice;
 
+#[cfg(target_os = "linux")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[cfg(target_os = "linux")]
+#[ctor::ctor]
+fn set_jemalloc_env() {
+    use std::env;
+    if env::var("_RJEM_MALLOC_CONF").is_err() {
+        unsafe { env::set_var("_RJEM_MALLOC_CONF", "dirty_decay_ms:0,muzzy_decay_ms:0"); }
+    }
+    if env::var("MALLOC_TRIM_THRESHOLD_").is_err() {
+        unsafe { env::set_var("MALLOC_TRIM_THRESHOLD_", "0"); }
+    }
+}
+
 
 pub mod read;
 pub mod write;

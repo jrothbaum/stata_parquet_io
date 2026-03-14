@@ -45,6 +45,10 @@ polars-readstat-rs = "0.4.4"
 sqlparser = { version = "0.60", features = ["visitor"] }
 # polars-readstat-rs = { path = "../polars_readstat/crates/polars_readstat_rs" }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+tikv-jemallocator = "0.6"
+ctor = "0.6.3"
+
 
 [profile.release]
 strip = "symbols"  # Remove debug info but keep symbols needed for performance
