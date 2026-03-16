@@ -1,5 +1,7 @@
 *! pq - read/write parquet files with stata
-*! Version 3.0.0 - Add robust SPSS/CSV round-trip support, faster CSV read/write than native stata CSV
+*! Version 3.0.5 - Fix random_n() off-by-one; fix pq use with wide varlists hitting Stata's plugin-call
+*!                 string limit; aggressive jemalloc memory return on Linux for HPC/cgroup environments
+*!         3.0.0 - Add robust SPSS/CSV round-trip support, faster CSV read/write than native stata CSV
 *! 				   faster SAS reads.
 *!				   Better handling reads of strl columns, handle datasets that exceed the limit
 *!				   of Stata's C plugin API.  Better options for low-memory parquet writes
@@ -371,7 +373,9 @@ program pq_use_append
 						format(string)			///
 						fast					///
 						append]
-	
+
+	local pq_namelist_buf `"`namelist'"'
+		
 	pq_register_plugin
 	
 	pq_convert_path `"`using'"'
@@ -487,11 +491,11 @@ program pq_use_append
 	local b_detailed = 1
 	local b_compress = "`compress'" != ""
 	local b_compress_string_to_numeric = "`compress_string_to_numeric'" != ""
-	//	di `"plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "`sql_if'" "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric'"'
 	
+	//	di `"plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "`sql_if'" "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric'"'
 	// Rust resolves wildcards and applies drop() inside file_summary(), then sets
 	// matched_vars. drop_strl columns (binary parquet type) are filtered below.
-	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric' "`source_format'" `infer_schema_length_for_plugin' `parse_dates_for_plugin' `b_fast' 100 "`namelist'" "`drop'"
+	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric' "`source_format'" `infer_schema_length_for_plugin' `parse_dates_for_plugin' `b_fast' 100 "pq_namelist_buf" "`drop'"
 
 	local vars_in_file
 	local n_renamed = 0

@@ -225,7 +225,16 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 } else {
                     100
                 };
-                let columns_varlist = if subfunction_args.len() > 12 { subfunction_args[12] } else { "" };
+                // "pq_namelist_buf" is a sentinel: the ado stored a large column list
+                // in that local rather than expanding it into the plugin call string.
+                let columns_varlist_arg = if subfunction_args.len() > 12 { subfunction_args[12] } else { "" };
+                let columns_varlist_owned: String;
+                let columns_varlist: &str = if columns_varlist_arg == "pq_namelist_buf" {
+                    columns_varlist_owned = stata_interface::get_macro("pq_namelist_buf", false, Some(1024 * 1024 * 10));
+                    &columns_varlist_owned
+                } else {
+                    columns_varlist_arg
+                };
                 let drop_list      = if subfunction_args.len() > 13 { subfunction_args[13] } else { "" };
                 let input_format = match InputFormat::from_str(format_arg) {
                     Some(f) => f,
