@@ -473,7 +473,7 @@ fn scan_lazyframe_csv(
         .with_infer_schema_length(infer_schema_length);
 
     let reader = if let Some(schema_ref) = schema {
-        reader.with_schema(Some(schema_ref))
+        reader.with_dtype_overwrite(Some(schema_ref))
     } else {
         reader
     };
