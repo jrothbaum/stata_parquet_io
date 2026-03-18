@@ -1508,6 +1508,10 @@ pub fn read_to_stata(
         ));
     }
 
+    //  Release freed heap memory back to the OS on Linux (HPC cgroup memory limits).
+    #[cfg(target_os = "linux")]
+    unsafe { libc::malloc_trim(0); }
+
     Ok(0)
 }
 
