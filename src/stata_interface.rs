@@ -30,7 +30,7 @@ pub fn get_macro(
     global:bool,
     buffer_size: Option<usize>
 ) -> String {
-    stata_sys::get_macro(macro_name, global, buffer_size).unwrap()
+    stata_sys::get_macro(macro_name, global, buffer_size).unwrap_or_default()
 }
 
 #[inline]
