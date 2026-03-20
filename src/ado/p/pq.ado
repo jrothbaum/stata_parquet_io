@@ -1,6 +1,6 @@
 *! pq - read/write parquet files with stata
 *! Version 3.0.5 - Fix random_n() off-by-one; fix pq use with wide varlists hitting Stata's plugin-call
-*!                 string limit; aggressive jemalloc memory return on Linux for HPC/cgroup environments
+*!                 string limit; aggressive memory return on Linux for HPC/cgroup environments. Fix for weird label char edge case
 *!         3.0.0 - Add robust SPSS/CSV round-trip support, faster CSV read/write than native stata CSV
 *! 				   faster SAS reads.
 *!				   Better handling reads of strl columns, handle datasets that exceed the limit
@@ -1219,18 +1219,21 @@ program pq_save
 		
 		//	Rename?
 		if ("`noautorename'" == "") {
-			local labeli: variable label `vari'
+			//	capture: labels with backticks (e.g. `87) cause r(132) "too few quotes"
+			//	when expanded inside compound quotes -- silently skip rename check
+			capture {
+				local labeli: variable label `vari'
+				if regexm(`"`labeli'"', "^\{parquet_name:([^}]*)\}") {
+					//	Extract the value between "parquet_name:" and "}"
 
-			if regexm(`"`labeli'"', "^\{parquet_name:([^}]*)\}") {
-				//	Extract the value between "parquet_name:" and "}"
+					local n_rename = `n_rename' + 1
+					local rename_from_`n_rename' `vari'
+					local rename_to_`n_rename' = regexs(1)
 
-				local n_rename = `n_rename' + 1
-				local rename_from_`n_rename' `vari'
-				local rename_to_`n_rename' = regexs(1)
-
-				//	di "n_rename: `n_rename'"
-				//	di "	from: `rename_from_`n_rename''"
-				//	di "	to:   `rename_to_`n_rename''" 
+					//	di "n_rename: `n_rename'"
+					//	di "	from: `rename_from_`n_rename''"
+					//	di "	to:   `rename_to_`n_rename''"
+				}
 			}
 		}
 	}
