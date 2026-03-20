@@ -1221,19 +1221,20 @@ program pq_save
 		if ("`noautorename'" == "") {
 			//	capture: labels with backticks (e.g. `87) cause r(132) "too few quotes"
 			//	when expanded inside compound quotes -- silently skip rename check
-			capture {
-				local labeli: variable label `vari'
-				if regexm(`"`labeli'"', "^\{parquet_name:([^}]*)\}") {
-					//	Extract the value between "parquet_name:" and "}"
 
-					local n_rename = `n_rename' + 1
-					local rename_from_`n_rename' `vari'
-					local rename_to_`n_rename' = regexs(1)
+			local labeli: variable label `vari'
+			local labeli: subinstr local labeli "\`" "'", all
 
-					//	di "n_rename: `n_rename'"
-					//	di "	from: `rename_from_`n_rename''"
-					//	di "	to:   `rename_to_`n_rename''"
-				}
+			if regexm(`"`labeli'"', "^\{parquet_name:([^}]*)\}") {
+				//	Extract the value between "parquet_name:" and "}"
+
+				local n_rename = `n_rename' + 1
+				local rename_from_`n_rename' `vari'
+				local rename_to_`n_rename' = regexs(1)
+
+				//	di "n_rename: `n_rename'"
+				//	di "	from: `rename_from_`n_rename''"
+				//	di "	to:   `rename_to_`n_rename''"
 			}
 		}
 	}
