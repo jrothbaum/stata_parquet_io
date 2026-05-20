@@ -15,7 +15,6 @@ pub mod fast_cache;
 
 use std::ptr;
 
-
 use stata_interface::{
     display,
     ST_retcode,
@@ -227,6 +226,16 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                         return 198 as ST_retcode;
                     }
                 };
+                let cast_buf_arg = if subfunction_args.len() > 14 { subfunction_args[14] } else { "" };
+                let user_cast_json_owned: String;
+                let user_cast_json: &str = if cast_buf_arg == "pq_cast_buf" {
+                    user_cast_json_owned = stata_interface::get_macro("pq_cast_buf", false, Some(1024 * 1024));
+                    &user_cast_json_owned
+                } else {
+                    cast_buf_arg
+                };
+                let binary_to_string = if subfunction_args.len() > 15 { subfunction_args[15] == "1" } else { false };
+                let cast_strict = if subfunction_args.len() > 16 { subfunction_args[16] != "0" } else { true };
                 return file_summary(
                         subfunction_args[0],
                         subfunction_args[1].parse::<u8>().unwrap_or(0) != 0,
@@ -243,6 +252,9 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                         auto_fast_limit_mb,
                         columns_varlist,
                         drop_list,
+                        user_cast_json,
+                        binary_to_string,
+                        cast_strict,
                     ) as ST_retcode;
             },
             "save" => {
@@ -391,7 +403,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
             "if" => {
                 let sql_if = sql_from_if::stata_to_sql(subfunction_args[0] as &str);
                 stata_interface::set_macro("sql_if", &sql_if, false);
-                
+
             },
             _ => {
                 stata_interface::display(&format!("Error: Unknown subfunction '{}'", subfunction_name));

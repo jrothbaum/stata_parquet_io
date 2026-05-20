@@ -22,13 +22,14 @@ program define build_bench_data
 	gen str20  s2   = "row_" + string(_n) + "_g" + string(grp)
 end
 
-local n_rows = 100000
+local n_rows = 1000000
 local reps = 3
 
 set seed 20260301
 build_bench_data, n_rows(`n_rows')
 
-tempfile base pq_tmp native_tmp
+tempfile base pq_tmp 
+tempfile native_tmp
 save "`base'", replace
 
 local pq_csv : subinstr local pq_tmp ".tmp" "_pq.csv", all

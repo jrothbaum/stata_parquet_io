@@ -48,7 +48,7 @@ use crate::utilities::{
     SEC_SHIFT_SAS_STATA
 };
 
-use crate::downcast::apply_cast;
+use crate::downcast::{apply_cast, apply_user_cast};
 
 fn adaptive_batch_size(requested_rows: usize, n_cols: usize, n_rows: usize) -> usize {
     if n_rows == 0 {
@@ -902,12 +902,20 @@ fn apply_sql_filter_to_batch(batch: DataFrame, sql_if: Option<&str>) -> PolarsRe
     ctx.execute(&format!("SELECT * FROM df WHERE {}", sql_if))?.collect()
 }
 
-fn apply_cast_to_batch(batch: DataFrame, cast_json: &str) -> PolarsResult<DataFrame> {
-    if cast_json.is_empty() {
-        return Ok(batch);
+fn apply_cast_to_batch(
+    batch: DataFrame,
+    cast_json: &str,
+    user_cast_json: &str,
+    cast_strict: bool,
+) -> PolarsResult<DataFrame> {
+    let mut batch = batch;
+    if !user_cast_json.is_empty() {
+        batch = apply_user_cast(batch.lazy(), user_cast_json, cast_strict)?.collect()?;
     }
-
-    apply_cast(batch.lazy(), cast_json)?.collect()
+    if !cast_json.is_empty() {
+        batch = apply_cast(batch.lazy(), cast_json)?.collect()?;
+    }
+    Ok(batch)
 }
 
 fn read_to_stata_from_readstat_batches(
@@ -919,6 +927,8 @@ fn read_to_stata_from_readstat_batches(
     offset: usize,
     sql_if: Option<&str>,
     cast_json: &str,
+    user_cast_json: &str,
+    cast_strict: bool,
     stata_offset: usize,
     batch_size: Option<usize>,
     preserve_order: bool,
@@ -999,10 +1009,12 @@ fn read_to_stata_from_readstat_batches(
             }
         };
 
-        batch = match apply_cast_to_batch(batch, cast_json) {
+        batch = match apply_cast_to_batch(batch, cast_json, user_cast_json, cast_strict) {
             Ok(df) => df,
             Err(e) => {
-                display(&format!("Cast failed with error: {}", e));
+                let msg = format!("cast failed: {}", e);
+                set_macro("pq_cast_error", &msg, false);
+                display(&msg);
                 return Ok(198);
             }
         };
@@ -1077,6 +1089,9 @@ pub fn read_to_stata(
     parse_dates: bool,
     columns_varlist: &str,
 ) -> Result<i32, Box<dyn Error>> {
+    // Clear any stale cast error from a previous call
+    set_macro("pq_cast_error", "", false);
+
     let prof = profile_timing_enabled();
     let t_total = Instant::now();
     let mut t_scan = Duration::ZERO;
@@ -1125,12 +1140,9 @@ pub fn read_to_stata(
 
     //  display(&format!("Column information: {:?}", all_columns));
 
-    //  Set cast macro to empty
-    let cast_json = get_macro(
-        &"cast_json",
-        false,
-        None,
-    );
+    let cast_json = get_macro("cast_json", false, None);
+    let user_cast_json = get_macro("pq_user_cast_json", false, None);
+    let cast_strict = get_macro("pq_cast_strict", false, None) != "0";
 
     let has_strl = !strl_col_names.is_empty() && !strl_dta_path.is_empty();
     let has_glob = path.contains('*') || path.contains('?') || path.contains('[');
@@ -1185,6 +1197,8 @@ pub fn read_to_stata(
             offset,
             sql_if,
             &cast_json,
+            &user_cast_json,
+            cast_strict,
             stata_offset,
             batch_size,
             preserve_order,
@@ -1215,6 +1229,23 @@ pub fn read_to_stata(
     }; // end cached_lf else branch
     if prof {
         t_scan += t0.elapsed();
+    }
+
+    // Apply user-specified cast (binary_to_string / cast() option) before compress cast and SQL filter
+    if !user_cast_json.is_empty() {
+        let t0 = Instant::now();
+        df = match apply_user_cast(df, &user_cast_json, cast_strict) {
+            Ok(lf) => lf,
+            Err(e) => {
+                let msg = format!("cast failed: {}", e);
+                display(&msg);
+                set_macro("pq_cast_error", &msg, false);
+                return Ok(198);
+            }
+        };
+        if prof {
+            t_apply_cast += t0.elapsed();
+        }
     }
 
     //  display(&format!("Cast: {}", cast_json));
@@ -1378,7 +1409,9 @@ pub fn read_to_stata(
         {
             Ok(d) => d,
             Err(e) => {
-                display(&format!("Error collecting frame for strl write: {:?}", e));
+                let msg = format!("{:?}", e);
+                set_macro("pq_cast_error", &msg, false);
+                display(&format!("Error collecting frame for strl write: {}", msg));
                 return Ok(198);
             }
         };
@@ -1475,7 +1508,9 @@ pub fn read_to_stata(
 
     let t0 = Instant::now();
     if let Err(e) = sink_lf.collect() {
-        display(&format!("Error collecting streamed batches: {:?}", e));
+        let msg = format!("{:?}", e);
+        set_macro("pq_cast_error", &msg, false);
+        display(&format!("Error collecting streamed batches: {}", msg));
         return Ok(198);
     }
     if prof {

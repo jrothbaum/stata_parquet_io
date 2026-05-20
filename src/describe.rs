@@ -23,8 +23,10 @@ use crate::read::{
 };
 
 use crate::downcast::{
+    apply_user_cast,
     intelligent_downcast,
-    DowncastConfig
+    validate_user_type,
+    DowncastConfig,
 };
 
 pub fn file_summary(
@@ -43,6 +45,9 @@ pub fn file_summary(
     auto_fast_limit_mb: u64,
     columns_varlist: &str,
     drop_list: &str,
+    user_cast_json: &str,
+    binary_to_string: bool,
+    cast_strict: bool,
 ) -> i32 {
     let prof = profile_timing_enabled();
     let t_total = Instant::now();
@@ -105,13 +110,85 @@ pub fn file_summary(
         t_scan += t0.elapsed();
     }
 
-    //  Set cast macro to empty
-    set_macro(
-        &"cast_json",
-        &"",
-        false
-    );
-    
+    set_macro("cast_json", "", false);
+    set_macro("pq_user_cast_json", "", false);
+    set_macro("pq_cast_strict", if cast_strict { "1" } else { "0" }, false);
+    set_macro("pq_cast_error", "", false);
+
+    // Apply user cast (binary_to_string + cast option) BEFORE compress and schema computation
+    // so that string lengths, types, and the fast cache all reflect the cast types.
+    if binary_to_string || !user_cast_json.is_empty() {
+        let scan_schema = match df.collect_schema() {
+            Ok(s) => s,
+            Err(e) => {
+                display(&format!("Error reading schema for cast: {:?}", e));
+                return 198;
+            }
+        };
+
+        let mut cast_map: HashMap<String, String> = HashMap::new();
+
+        if binary_to_string {
+            for (name, dtype) in scan_schema.iter() {
+                if matches!(dtype, DataType::Binary) {
+                    cast_map.insert(name.to_string(), "string".to_string());
+                }
+            }
+        }
+
+        if !user_cast_json.is_empty() {
+            let col_to_type: HashMap<String, Value> = match serde_json::from_str(user_cast_json) {
+                Ok(m) => m,
+                Err(e) => {
+                    let msg = format!("cast: invalid JSON: {}", e);
+                    display(&msg);
+                    set_macro("pq_cast_error", &msg, false);
+                    return 198;
+                }
+            };
+            for (col_name, type_val) in col_to_type {
+                let type_str = match type_val.as_str() {
+                    Some(s) => s.to_lowercase(),
+                    None => {
+                        let msg = format!("cast: type for '{}' must be a string", col_name);
+                        display(&msg);
+                        set_macro("pq_cast_error", &msg, false);
+                        return 198;
+                    }
+                };
+                if let Err(e) = validate_user_type(&type_str) {
+                    let msg = format!("cast({}): {}", col_name, e);
+                    display(&msg);
+                    set_macro("pq_cast_error", &msg, false);
+                    return 198;
+                }
+                if scan_schema.get(col_name.as_str()).is_none() {
+                    let msg = format!("cast: column '{}' not found in file", col_name);
+                    display(&msg);
+                    set_macro("pq_cast_error", &msg, false);
+                    return 198;
+                }
+                cast_map.insert(col_name, type_str);
+            }
+        }
+
+        if !cast_map.is_empty() {
+            let combined_json = serde_json::to_string(&cast_map).unwrap_or_default();
+            df = match apply_user_cast(df, &combined_json, cast_strict) {
+                Ok(lf) => lf,
+                Err(e) => {
+                    let msg = format!("cast failed: {}", e);
+                    display(&msg);
+                    set_macro("pq_cast_error", &msg, false);
+                    return 198;
+                }
+            };
+            set_macro("pq_user_cast_json", &combined_json, false);
+            // Invalidate cached data that doesn't have this cast applied
+            fast_cache::clear();
+        }
+    }
+
     if compress | compress_string_to_numeric {
         let t0 = Instant::now();
         let mut downcast_config = DowncastConfig::default();

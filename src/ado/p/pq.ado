@@ -372,7 +372,10 @@ program pq_use_append
 						drop_strl				///
 						format(string)			///
 						fast					///
-						append]
+						append				///
+						cast(string asis)		///
+						lax				///
+						binary_to_string]
 
 	local pq_namelist_buf `"`namelist'"'
 		
@@ -495,7 +498,14 @@ program pq_use_append
 	//	di `"plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' "`sql_if'" "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric'"'
 	// Rust resolves wildcards and applies drop() inside file_summary(), then sets
 	// matched_vars. drop_strl columns (binary parquet type) are filtered below.
-	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric' "`source_format'" `infer_schema_length_for_plugin' `parse_dates_for_plugin' `b_fast' 100 "pq_namelist_buf" "`drop'"
+	local b_binary_to_string = ("`binary_to_string'" != "")
+	local b_cast_strict = ("`lax'" == "")
+	local pq_cast_buf `cast'
+	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric' "`source_format'" `infer_schema_length_for_plugin' `parse_dates_for_plugin' `b_fast' 100 "pq_namelist_buf" "`drop'" "pq_cast_buf" `b_binary_to_string' `b_cast_strict'
+	if (_rc) {
+		if (`"`pq_cast_error'"' != "") di as error "`pq_cast_error'"
+		exit _rc
+	}
 
 	local vars_in_file
 	local n_renamed = 0
@@ -757,7 +767,15 @@ program pq_use_append
 
 	//	strl col names and dta path are passed so the plugin writes the strl .dta
 	//	in the same scan as the non-strl columns (consistent sampling)
-	plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed' `batch_size_for_plugin' "`strl_col_names'" "`temp_strl_dta'" "`source_format'" `b_preserve_order' `infer_schema_length_for_plugin' `parse_dates_for_plugin'
+	capture noisily plugin call polars_parquet_plugin, read "`using'" "from_macro" `row_to_read' `offset' `"`sql_if'"' `"`mapping'"' `vertical_relaxed' "`asterisk_to_variable'" "`sort'" `n_obs_already' `random_share' `random_seed' `batch_size_for_plugin' "`strl_col_names'" "`temp_strl_dta'" "`source_format'" `b_preserve_order' `infer_schema_length_for_plugin' `parse_dates_for_plugin'
+	local _read_rc = _rc
+	if (`_read_rc') {
+		if (`b_append' & !`all_strl_append' & `n_obs_already' < _N) {
+			quietly keep in 1/`n_obs_already'
+		}
+		if (`"`pq_cast_error'"' != "") di as error "`pq_cast_error'"
+		exit `_read_rc'
+	}
 
 	//	Merge strL columns from .dta written by plugin into the current dataset
 	//	The .dta always contains _pq_strl_key (1-based row index) added by Rust.

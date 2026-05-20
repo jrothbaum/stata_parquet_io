@@ -424,14 +424,14 @@ pub fn apply_cast(
     mut df: LazyFrame,
     type_mapping_json: &str
 ) -> PolarsResult<LazyFrame> {
-    
+
     let type_mapping: Map<String, Value> = serde_json::from_str(type_mapping_json)
         .map_err(|e| PolarsError::ComputeError(format!("Invalid JSON: {}", e).into()))?;
-    
+
     // Get the schema to check which columns exist
     let schema = df.collect_schema()?;
     let mut cast_exprs = Vec::new();
-    
+
     for (type_str, columns_value) in type_mapping {
         if let Value::Array(columns_array) = columns_value {
             let target_type:Option<DataType> = match parse_data_type(&type_str) {
@@ -441,7 +441,7 @@ pub fn apply_cast(
                     None
                 }
             };
-            
+
             match target_type {
                 Some(valid_type) => {
                     for column_value in columns_array {
@@ -460,12 +460,12 @@ pub fn apply_cast(
                 None => {
                     //  Do nothing
                 }
-                
+
             }
-            
+
         }
     }
-    
+
     if cast_exprs.is_empty() {
         Ok(df)
     } else {
@@ -473,23 +473,97 @@ pub fn apply_cast(
     }
 }
 
-/// Parse string representation back to DataType
-fn parse_data_type(type_str: &str) -> PolarsResult<DataType> {
+/// Apply user-specified casts from column->type JSON: {"col1":"int32","col2":"string"}
+/// strict=true uses strict_cast (errors on invalid values); strict=false uses lenient cast (nulls).
+/// Errors surface at LazyFrame collect time for value-level failures.
+pub fn apply_user_cast(
+    mut df: LazyFrame,
+    cast_json: &str,
+    strict: bool,
+) -> PolarsResult<LazyFrame> {
+    if cast_json.is_empty() {
+        return Ok(df);
+    }
+
+    let col_to_type: HashMap<String, Value> = serde_json::from_str(cast_json)
+        .map_err(|e| PolarsError::ComputeError(format!("Invalid user cast JSON: {}", e).into()))?;
+
+    if col_to_type.is_empty() {
+        return Ok(df);
+    }
+
+    let schema = df.collect_schema()?;
+    let mut cast_exprs = Vec::new();
+
+    for (col_name, type_val) in &col_to_type {
+        let type_str = match type_val.as_str() {
+            Some(s) => s,
+            None => continue,
+        };
+        if schema.get(col_name.as_str()).is_none() {
+            continue;
+        }
+        let target_type = parse_data_type(type_str)?;
+        let expr = if strict {
+            col(col_name.as_str()).strict_cast(target_type).alias(col_name.as_str())
+        } else {
+            col(col_name.as_str()).cast(target_type).alias(col_name.as_str())
+        };
+        cast_exprs.push(expr);
+    }
+
+    if cast_exprs.is_empty() {
+        Ok(df)
+    } else {
+        Ok(df.with_columns(cast_exprs))
+    }
+}
+
+/// Validate a user-supplied type string. Returns Ok(()) or Err with a human-readable message.
+pub fn validate_user_type(type_str: &str) -> Result<(), String> {
+    parse_data_type(type_str).map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Map a user-supplied Polars type string to its Stata storage type name.
+pub fn polars_type_to_stata_type(type_str: &str) -> &'static str {
     match type_str {
-        "boolean" => Ok(DataType::Boolean),
+        "string" | "utf8" | "str" | "binary" => "string",
+        "int8" | "byte" => "byte",
+        "int16" | "int" => "int",
+        "int32" | "long" => "long",
+        "int64" => "double",
+        "uint8" => "int",
+        "uint16" | "uint32" => "long",
+        "uint64" => "double",
+        "float32" | "float" => "float",
+        "float64" | "double" => "double",
+        "boolean" | "bool" => "byte",
+        _ => "double",
+    }
+}
+
+/// Parse string representation back to DataType (case-insensitive, accepts common aliases)
+pub fn parse_data_type(type_str: &str) -> PolarsResult<DataType> {
+    match type_str.to_lowercase().as_str() {
+        "boolean" | "bool" => Ok(DataType::Boolean),
         "uint8" => Ok(DataType::UInt8),
         "uint16" => Ok(DataType::UInt16),
         "uint32" => Ok(DataType::UInt32),
         "uint64" => Ok(DataType::UInt64),
-        "int8" => Ok(DataType::Int8),
-        "int16" => Ok(DataType::Int16), 
-        "int32" => Ok(DataType::Int32),
+        "int8" | "byte" => Ok(DataType::Int8),
+        "int16" | "int" => Ok(DataType::Int16),
+        "int32" | "long" => Ok(DataType::Int32),
         "int64" => Ok(DataType::Int64),
-        "float32" => Ok(DataType::Float32),
-        "float64" => Ok(DataType::Float64),
-        "string" => Ok(DataType::String),
+        "float32" | "float" => Ok(DataType::Float32),
+        "float64" | "double" => Ok(DataType::Float64),
+        "string" | "utf8" | "str" => Ok(DataType::String),
+        "binary" => Ok(DataType::Binary),
         _ => Err(PolarsError::ComputeError(
-            format!("Unknown data type: {}", type_str).into()
+            format!(
+                "Unknown type '{}'. Valid: boolean, int8/byte, int16/int, int32/long, int64, \
+                 uint8, uint16, uint32, uint64, float32/float, float64/double, string, binary",
+                type_str
+            ).into()
         ))
     }
 }
