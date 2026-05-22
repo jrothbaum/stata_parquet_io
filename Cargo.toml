@@ -49,11 +49,11 @@ sqlparser = { version = "0.60", features = ["visitor"] }
 libc = "0.2"
 
 
-# [profile.release]
-# strip = "symbols"  # Remove debug info but keep symbols needed for performance
-# panic = "unwind"     # Default panic behavior (often better for libraries)
-# lto = "fat"         # More aggressive link-time optimization for speed
-# codegen-units = 1   # Fewer codegen units allow more optimization
+[profile.release]
+strip = "symbols"  # Remove debug info but keep symbols needed for performance
+panic = "unwind"     # Default panic behavior (often better for libraries)
+lto = "fat"         # More aggressive link-time optimization for speed
+codegen-units = 1   # Fewer codegen units allow more optimization
 
 [profile.dev]
 split-debuginfo = "packed"
