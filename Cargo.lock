@@ -2044,9 +2044,9 @@ dependencies = [
 
 [[package]]
 name = "polars-readstat-rs"
-version = "0.9.0"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "785c289379a88d25325ddd2e428a748ec61011e64529b6aeae68517b765adadf"
+checksum = "93175f1f81cba82cbfc3a0c34de19ef7690550a9090cc950eb1ed646773d7073"
 dependencies = [
  "byteorder",
  "chrono",
