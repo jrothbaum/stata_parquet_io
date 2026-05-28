@@ -16,17 +16,17 @@ ssc install pq
 ## Quick Start
 
 ```stata
-pq use  mydata.parquet,     clear
-pq use  source.sas7bdat,    clear format(sas)
-pq use  source.sav,         clear format(spss)
-pq use  source.csv,         clear format(csv)
+pq use  mydata.parquet,  clear
+pq use  source.sas7bdat, clear
+pq use  source.sav,      clear
+pq use  source.csv,      clear
 
-pq save mydata.parquet,     replace
-pq save out.sav,            replace format(spss)
-pq save out.csv,            replace format(csv)
+pq save mydata.parquet,  replace
+pq save out.sav,         replace
+pq save out.csv,         replace
 ```
 
-`format()` defaults to `parquet` if omitted. `pq use_sas`, `pq use_spss`, and `pq use_csv` are convenience shortcuts that set `format()` automatically.
+Format is inferred from the file extension (`.sav`/`.zsav` → spss, `.csv` → csv, else → parquet).
 
 ## Key Options
 
@@ -70,10 +70,10 @@ pq use /data/cps_*.parquet, clear asterisk_to_variable(year)
 pq append extra.parquet, compress
 
 * SAS read preserving source order
-pq use survey.sas7bdat, clear format(sas) preserve_order
+pq use survey.sas7bdat, clear preserve_order
 
 * CSV read with date parsing
-pq use raw.csv, clear format(csv) parse_dates
+pq use raw.csv, clear parse_dates
 
 * Save partitioned by state and year
 pq save /output/data, replace partition_by(state year)

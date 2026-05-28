@@ -9,13 +9,14 @@
 {title:Syntax}
 
 {phang}
-Import a file into Stata (default is Parquet):
+Import a file into Stata (format inferred from file extension; override with {opt format()}):
 
 {p 8 17 2}
 {cmd:pq use} [{varlist}] {cmd:using} {it:filename} [, {opt clear} {opt append} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt sort(varlist)} {opt preserve_order}
 {opt compress} {opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer)}
 {opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt parse_dates}
-{opt format(string)} {opt fast} {opt drop(varlist)} {opt drop_strl}]
+{opt format(string)} {opt fast} {opt drop(varlist)} {opt drop_strl}
+{opt cast(json)} {opt lax} {opt binary_to_string}]
 
 {phang}
 Format-specific shortcuts for import:
@@ -30,22 +31,24 @@ Format-specific shortcuts for import:
 {cmd:pq use_csv} [{varlist}] {cmd:using} {it:filename} [, {it:use_options} {opt infer_schema_length(integer 10000)} {opt parse_dates}]
 
 {phang}
-Append a file to existing data (default is Parquet):
+Append a file to existing data (format inferred from file extension; override with {opt format()}):
 
 {p 8 17 2}
 {cmd:pq append} [{varlist}] {cmd:using} {it:filename} [, {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt sort(varlist)} {opt preserve_order} {opt compress}
 {opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer)}
 {opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt parse_dates}
-{opt format(string)} {opt drop(varlist)} {opt drop_strl}]
+{opt format(string)} {opt drop(varlist)} {opt drop_strl}
+{opt cast(json)} {opt lax} {opt binary_to_string}]
 
 {phang}
-Merge a file with existing data (default is Parquet):
+Merge a file with existing data (format inferred from file extension; override with {opt format()}):
 
 {p 8 17 2}
 {cmd:pq merge} {it:merge_type} [{varlist}] {cmd:using} {it:filename} [, {merge_options} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt sort(varlist)} {opt preserve_order} {opt compress}
 {opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer)}
 {opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt parse_dates}
-{opt format(string)} {opt drop(varlist)} {opt drop_strl}]
+{opt format(string)} {opt drop(varlist)} {opt drop_strl}
+{opt cast(json)} {opt lax} {opt binary_to_string}]
 
 {phang}
 Format-specific shortcuts for merge:
@@ -218,12 +221,27 @@ variables require special batch processing. Can be combined with {opt drop()} to
 variables.
 
 {phang}
-{opt format(string)} sets input format for {cmd:pq use}/{cmd:pq append}/{cmd:pq merge}; supported values are
-{cmd:parquet}, {cmd:sas}, {cmd:spss}, and {cmd:csv}. The shortcut commands set this automatically.
+{opt format(string)} overrides the input format for {cmd:pq use}/{cmd:pq append}/{cmd:pq merge}.
+Supported values are {cmd:parquet}, {cmd:sas}, {cmd:spss}, and {cmd:csv}.
+If omitted, the format is inferred from the file extension: {cmd:.sas7bdat} → sas,
+{cmd:.sav}/{cmd:.zsav} → spss, {cmd:.csv} → csv, anything else → parquet.
+The shortcut commands ({cmd:pq use_sas}, etc.) set this automatically.
 
 {phang}
 {opt fast} enables cached "describe+read" behavior for smaller files to avoid a second file pass.
 Only available with {cmd:pq use}.
+
+{phang}
+{opt cast(json)} specifies type casts to apply on load as a JSON object, e.g. {cmd:cast({"col":"int32"})}.
+Keys are column names; values are target types ({cmd:int32}, {cmd:int64}, {cmd:float32}, {cmd:float64}, {cmd:string}, etc.).
+By default, a cast that fails on any value returns an error. Use {opt lax} to produce nulls instead.
+
+{phang}
+{opt lax} makes {opt cast()} non-strict: values that cannot be converted become missing rather than causing an error.
+
+{phang}
+{opt binary_to_string} decodes binary columns (Parquet {cmd:Binary} type) as strings rather than dropping them.
+Without this option, binary columns are silently dropped on import.
 
 {dlgtab:Options for pq merge}
 
@@ -326,7 +344,7 @@ additional file to a partition (like a new year of data) without overwriting the
 {opt do_not_reload} with {opt stream} keeps memory clear after write instead of reloading the original data.
 
 {phang}
-{opt format(string)} sets output format for {cmd:pq save}; supported values are {cmd:parquet}, {cmd:spss}, and {cmd:csv}.
+{opt format(string)} sets the output format for {cmd:pq save}. If omitted, format is inferred from the file extension: {cmd:.sav}/{cmd:.zsav} → {cmd:spss}; {cmd:.csv} → {cmd:csv}; anything else → {cmd:parquet}. Supported values: {cmd:parquet}, {cmd:spss}, {cmd:csv}.
 
 
 {dlgtab:Options for pq describe}
@@ -477,7 +495,7 @@ When you later save the data with {cmd:pq save}, these columns will be automatic
 to their original Parquet names unless you specify the {opt noautorename} option.
 
 {pstd}
-Binary columns in Parquet files are not currently supported and will be automatically dropped when importing.
+Binary columns in Parquet files are dropped on import unless {opt binary_to_string} is specified, which decodes them as string variables.
 
 {pstd}
 The {opt if()} condition syntax uses SQL-style comparisons, which differ from Stata in that missing values 

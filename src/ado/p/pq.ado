@@ -384,8 +384,8 @@ program pq_use_append
 	
 	pq_convert_path `"`using'"'
 	local using = r(fullpath)
-	local source_format = lower("`format'")
-	if ("`source_format'" == "") local source_format parquet
+	pq_infer_format, path("`using'") format("`format'")
+	local source_format = r(format)
 	if !inlist("`source_format'", "parquet", "sas", "spss", "csv") {
 		display as error `"Unsupported format(`format'): expected parquet, sas, spss, or csv"'
 		exit 198
@@ -1037,8 +1037,8 @@ program pq_describe, rclass
 	
 	pq_convert_path `"`using'"'
 	local using = r(fullpath)
-	local source_format = lower("`format'")
-	if ("`source_format'" == "") local source_format parquet
+	pq_infer_format, path("`using'") format("`format'")
+	local source_format = r(format)
 	if !inlist("`source_format'", "parquet", "sas", "spss", "csv") {
 		display as error `"Unsupported format(`format'): expected parquet, sas, spss, or csv"'
 		exit 198
@@ -1165,8 +1165,8 @@ program pq_save
 	
 	pq_convert_path `"`using'"'
 	local using = r(fullpath)
-	local source_format = lower("`format'")
-	if ("`source_format'" == "") local source_format parquet
+	pq_infer_format, path("`using'") format("`format'")
+	local source_format = r(format)
 	if !inlist("`source_format'", "parquet", "spss", "csv") {
 		display as error `"Unsupported save format(`format'): expected parquet, spss, or csv"'
 		exit 198
@@ -1428,8 +1428,8 @@ program pq_write_overflow_dta
 		exit 198
 	}
 
-	local source_format = lower("`format'")
-	if ("`source_format'" == "") local source_format parquet
+	pq_infer_format, path("`using'") format("`format'")
+	local source_format = r(format)
 	if !inlist("`source_format'", "parquet", "sas", "spss", "csv") {
 		display as error `"Unsupported format(`format'): expected parquet, sas, spss, or csv"'
 		exit 198
@@ -1515,6 +1515,21 @@ program pq_register_plugin
 end
 
 
+
+
+program define pq_infer_format, rclass
+	version 16
+	syntax, path(string) [format(string)]
+	local fmt = lower("`format'")
+	if ("`fmt'" == "") {
+		local p = lower("`path'")
+		if regexm("`p'", "\.sas7bdat$")       local fmt sas
+		else if regexm("`p'", "\.(sav|zsav)$") local fmt spss
+		else if regexm("`p'", "\.csv$")        local fmt csv
+		else                                    local fmt parquet
+	}
+	return local format "`fmt'"
+end
 
 
 program define pq_convert_path, rclass

@@ -10,7 +10,7 @@ if _rc != 0 {
 }
 
 // Load once to establish row count and build dynamic variable subsets.
-pq use_sas "`sas_file'", clear
+pq use "`sas_file'", clear
 count
 local n_rows = r(N)
 ds
