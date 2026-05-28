@@ -5,7 +5,7 @@ set varabbrev off
 //
 // fast   : describe collects full DataFrame into RAM and caches it;
 //          the subsequent read skips the second disk scan entirely.
-// normal : auto_fast_limit(0) ensures auto-fast never fires.
+// normal : omit fast option (streaming path).
 
 local sas_file "C:\Users\jonro\OneDrive\Documents\Coding\polars_readstat\crates\polars_readstat_rs\tests\sas\data\too_big\hhpub25.sas7bdat"
 local reps = 5
@@ -17,7 +17,7 @@ if _rc != 0 {
 }
 
 // Determine row count once (normal mode to avoid warming cache)
-pq use_sas using "`sas_file'", clear auto_fast_limit(0)
+pq use_sas using "`sas_file'", clear
 count
 local n_rows = r(N)
 
@@ -34,7 +34,7 @@ timer clear
 forvalues r = 1/`reps' {
 	clear
 	timer on 1
-	pq use_sas using "`sas_file'", clear auto_fast_limit(0)
+	pq use_sas using "`sas_file'", clear
 	timer off 1
 	assert _N == `n_rows'
 }

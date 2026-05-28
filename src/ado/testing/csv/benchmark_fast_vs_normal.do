@@ -9,7 +9,7 @@ set varabbrev off
 //
 // Controls:
 //   fast mode  -- explicit "fast" option (overrides auto_fast_limit)
-//   normal mode -- auto_fast_limit(0) guarantees auto-fast never fires
+//   normal mode -- omit fast option (streaming path)
 
 capture program drop build_bench_data
 program define build_bench_data
@@ -61,7 +61,7 @@ foreach n of local sizes {
 	forvalues r = 1/`reps' {
 		clear
 		timer on 1
-		pq use_csv using "`csv_file'", clear auto_fast_limit(0)
+		pq use_csv using "`csv_file'", clear
 		timer off 1
 		assert _N == `n'
 	}

@@ -16,47 +16,46 @@ ssc install pq
 ## Quick Start
 
 ```stata
-* Parquet
-pq use mydata.parquet, clear
-pq save mydata.parquet, replace
+pq use  mydata.parquet,     clear
+pq use  source.sas7bdat,    clear format(sas)
+pq use  source.sav,         clear format(spss)
+pq use  source.csv,         clear format(csv)
 
-* Format shortcuts (set format automatically)
-pq use_sas   source.sas7bdat, clear
-pq use_spss  source.sav, clear
-pq use_csv   source.csv, clear
-pq save_spss out.sav, replace
-pq save_csv  out.csv, replace
+pq save mydata.parquet,     replace
+pq save out.sav,            replace format(spss)
+pq save out.csv,            replace format(csv)
 ```
 
-pq use/append/merge/save commands also accept `format(parquet|sas|spss|csv)` as an option.
+`format()` defaults to `parquet` if omitted. `pq use_sas`, `pq use_spss`, and `pq use_csv` are convenience shortcuts that set `format()` automatically.
 
 ## Key Options
 
-**Reading** (`use`, `append`, `merge`, and format shortcuts):
+**Reading:**
 
 | Option | Description |
 |--------|-------------|
-| `if(expr)` | SQL predicate pushdown — filters at read time |
+| `if(expr)` | SQL predicate pushdown — filters rows at read time |
 | `in(range)` | Row range, e.g. `in(1/1000)` |
-| varlist | Load only selected columns, e.g. `pq use id age using data.parquet` |
+| varlist | Load only selected columns: `pq use id age using data.parquet` |
 | `compress` | Downcast numerics to smallest lossless type |
 | `sort(varlist)` | Sort on load; prefix `-` for descending |
 | `drop(varlist)` | Exclude columns by name or pattern |
-| `preserve_order` | Maintain source row order (SAS/SPSS) |
+| `cast(json)` | Cast columns to specified types, e.g. `cast({"col":"int32"})` |
+| `lax` | With `cast()`, produce nulls instead of erroring on bad values |
 | `parse_dates` | Auto-detect and convert date strings (CSV) |
+| `preserve_order` | Maintain source row order (SAS/SPSS) |
 | `relaxed` | Union files with mismatched schemas (Parquet) |
-| `asterisk_to_variable(name)` | Extract wildcard match into a variable (Parquet) |
 
-**Saving** (`save`, `save_spss`, `save_csv`):
+**Saving:**
 
 | Option | Description |
 |--------|-------------|
 | `replace` | Overwrite existing file |
-| `if(expr)` | Save a filtered subset with stata if syntax |
+| `if(expr)` | Save a filtered subset using Stata if syntax |
 | `partition_by(varlist)` | Hive-partitioned output directory (Parquet) |
 | `compression(type)` | `zstd` (default), `snappy`, `gzip`, etc. (Parquet) |
 
-For the full option reference, run `help pq` after installing.
+Run `help pq` for the full reference.
 
 ## Examples
 
@@ -67,17 +66,14 @@ pq use id year earnings using cps.parquet, clear if(year >= 2010 & !missing(earn
 * Load multiple files; extract year from filename
 pq use /data/cps_*.parquet, clear asterisk_to_variable(year)
 
-* Combine Parquet files with slightly different schemas
-pq use /data/*.parquet, clear relaxed
-
 * Append a second file, compressing on load
 pq append extra.parquet, compress
 
 * SAS read preserving source order
-pq use_sas survey.sas7bdat, clear preserve_order
+pq use survey.sas7bdat, clear format(sas) preserve_order
 
 * CSV read with date parsing
-pq use_csv raw.csv, clear parse_dates
+pq use raw.csv, clear format(csv) parse_dates
 
 * Save partitioned by state and year
 pq save /output/data, replace partition_by(state year)
@@ -93,55 +89,28 @@ pq save /output/data, replace partition_by(state year)
 | Boolean | `byte` | 0/1 |
 | Date | `long` (%td) | |
 | DateTime | `double` (%tc) | |
-| Time | `double` (%tchh:mm:ss) | |
-| Binary | *dropped* | Not supported by Stata plugin API |
-
-## Limitations
-
-- **Binary columns** are silently dropped.
-- **strL reads** are slower than str# due to Stata plugin constraints.
-- **`if()` uses SQL semantics**: missing values are not treated as greater than any value (unlike Stata's native `if`).
-- **CSV date filters**: use ISO literals (`DATE '2020-01-05'`, `TIMESTAMP '2020-01-05 00:00:00'`) rather than Stata's `td()`/`tc()` functions in `if()`.
+| Binary | `str#` / *dropped* | Pass `binary_to_string` to decode as string; otherwise dropped |
 
 ## Performance
 
-Benchmarks run on AMD Ryzen 7 8845HS (16 cores), 14 GB RAM, Windows 11, Stata 17 SE.
+Benchmarks run on AMD Ryzen 7 8845HS, 14 GB RAM, Windows 11, Stata 17 SE. See [benchmarks.md](benchmarks.md) for full tables.
 
-**Parquet vs `.dta`** — 100,000 rows × 1,000 columns:
+| Format | Operation | pq speedup vs native |
+|--------|-----------|---------------------|
+| CSV | Write | **12× faster** than `export delimited` |
+| CSV | Read | **2.6–3× faster** than `import delimited` |
+| SPSS | Read (1M rows) | **12.5× faster** than `import spss` |
+| SPSS | Read subset cols (1M rows) | **18× faster** than `import spss` |
+| SAS | Read | **6.6× faster** than `import sas` |
+| Parquet | Full read | Can be slower than `.dta` or `import parquet` |
+| Parquet | Filtered read (`if(year > 2010)`) | Predicate pushdown skips rows before loading, not an option for `import parquet' |
+| Parquet | Random sample (`random_share(0.01)`) | Reproducible sample without reading the full file |
+| Parquet | Column subset on wide files | Faster than `.dta` when reading a few columns from many |
+| Parquet | Write | Allows better integration with non-Stata pipelines.  Not available natively in Stata. |
 
-| Operation | Stata `.dta` | `pq` |
-|---|---|---|
-| Write | 0.20s | 2.15s |
-| Full read | 0.13s | 2.52s |
-| Read 5 of 1,000 columns | 0.09s | **0.03s** |
+## Limitations
 
-Write and full read are slower than `.dta` (Stata's native format is highly optimized). The value is **roundtripping with Python, R, Spark, etc.** — Stata has no native Parquet writer (with a newly available and fast reader in Stata Now). Column selection on very wide Parquet files is 3× faster than `.dta`.
-
-
-**CSV** — 100,000 rows × 10 variables, average of 3 runs:
-
-| Operation | `pq` | Stata native | Speedup |
-|-----------|------|--------------|---------|
-| Write | 0.035s | 0.384s (`export delimited`) | **11×** |
-| Read — all columns | 0.100s | 0.714s (`import delimited`) | **7×** |
-| Read — 4 of 10 columns | 0.073s | 0.362s (`import delimited` + `keep`) | **5×** |
-
-`import delimited` does not support column projection (outside of contiguous columns by index with colrange); the Stata "subset" time is a full load followed by `keep`. `pq` skips parsing of unused fields in the lazy CSV scan.
-
-**SAS** — 88,932 rows, average of 5 runs:
-
-| Operation | `pq` | `import sas` | Speedup |
-|-----------|------|--------------|---------|
-| Full read | 0.71s | 3.50s | **5×** |
-| Subset columns | 0.27s | 0.14s | — |
-
-
-**SPSS** — GSS 2024 survey (3,309 rows × 813 variables), average of 5 runs:
-
-| Operation | `pq` | Stata native | Notes |
-|-----------|------|--------------|-------|
-| Read — all columns | 0.68s | 1.61s (`import spss`) | **2.4× faster** |
-| Write — all columns | 0.43s | — | **No Stata equivalent** |
-
-Stata can read SPSS files but has no `export spss` command. `pq save_spss` enables full roundtripping.
-
+- **Binary columns** are silently dropped unless `binary_to_string` is passed, which decodes them as strings.
+- **strL reads** are slower than `str#` due to Stata plugin constraints.
+- **`if()` uses SQL semantics**: missing values are not treated as greater than any value (unlike Stata's native `if`).
+- **CSV date filters**: use ISO literals (`DATE '2020-01-05'`) rather than Stata's `td()`/`tc()` functions inside `if()`.

@@ -1,5 +1,6 @@
 *! pq - read/write parquet files with stata
-*! Version 3.0.5 - Fix random_n() off-by-one; fix pq use with wide varlists hitting Stata's plugin-call
+*! Version 3.0.6 - Update underlying rust library for better SPSS write compatibility
+*!         3.0.5 - Fix random_n() off-by-one; fix pq use with wide varlists hitting Stata's plugin-call
 *!                 string limit; aggressive memory return on Linux for HPC/cgroup environments. Fix for weird label char edge case
 *!         3.0.0 - Add robust SPSS/CSV round-trip support, faster CSV read/write than native stata CSV
 *! 				   faster SAS reads.
