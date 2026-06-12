@@ -1188,6 +1188,7 @@ program pq_save
 	local StataColumnInfo from_macros
 	local var_count = 0
 	local n_rename = 0
+	unab _all_variables_ordered : _all
 	
 
 
@@ -1235,6 +1236,7 @@ program pq_save
 		local dtype_`var_count' `typei'
 		local format_`var_count' `formati'
 		local str_length_`var_count' `str_length'
+		local col_`var_count' : list posof "`vari'" in _all_variables_ordered
 		
 		//	Rename?
 		if ("`noautorename'" == "") {

@@ -847,11 +847,15 @@ fn column_info_from_macros(
             }
         };
         
+        let stata_col_str = get_macro(&format!("col_{}", i+1), false, None);
+        let stata_col = stata_col_str.parse::<usize>().unwrap_or(0);
+
         column_infos.push(StataColumnInfo {
             name,
             dtype,
             format,
-            str_length
+            str_length,
+            stata_col,
         });
     }
     
@@ -1229,7 +1233,13 @@ fn read_single_batch(
     
     // Process columns sequentially, rows in parallel
     let columns_result: PolarsResult<Vec<Series>> = sds.all_columns.iter().enumerate()
-        .map(|(col_idx, col_name)| {
+        .map(|(varlist_idx, col_name)| {
+            // stata_col is the 1-based column position in the full dataset.
+            // Fall back to the varlist position+1 when stata_col is 0 (unset/old ado).
+            let col_idx = match sds.column_info.get(varlist_idx) {
+                Some(ci) if ci.stata_col > 0 => ci.stata_col - 1,
+                _ => varlist_idx,
+            };
             match process_column(col_idx, col_name, n_rows_to_read, offset, true, &sds.schema, &sds.column_info)? {
                 Some(series) => Ok(series),
                 None => Err(PolarsError::ComputeError(

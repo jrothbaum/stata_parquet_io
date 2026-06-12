@@ -139,6 +139,8 @@ pub struct StataColumnInfo {
     pub dtype: String,
     pub format: String,
     pub str_length: usize,
+    #[serde(default)]
+    pub stata_col: usize,  // 1-based position in the Stata dataset; 0 = unset (use enumerate index)
 }
 
 pub fn stata_column_info_to_schema(

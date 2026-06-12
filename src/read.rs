@@ -354,7 +354,7 @@ fn scan_lazyframe_parquet(
     
     // Check if it's a directory (hive partitioned dataset)
     if path_obj.is_dir() {
-        return scan_hive_partitioned(path);
+        return scan_hive_partitioned(path, safe_relaxed);
     }
     
     // Handle glob patterns with special options
@@ -481,32 +481,35 @@ fn scan_lazyframe_csv(
     reader.finish()
 }
 
-fn scan_hive_partitioned(dir_path: &str) -> Result<LazyFrame, PolarsError> {
+fn scan_hive_partitioned(dir_path: &str, safe_relaxed: bool) -> Result<LazyFrame, PolarsError> {
     // Detect hive partitioning structure and create appropriate glob
     let mut glob_pattern = String::from(dir_path);
-    
+
     // Remove trailing slash if present
     if glob_pattern.ends_with('/') {
         glob_pattern.pop();
     }
-    
+
     // Normalize for Windows
     if cfg!(windows) {
         glob_pattern = glob_pattern.replace('\\', "/");
     }
-    
+
     // Check for common hive patterns
     let test_patterns = vec![
         format!("{}/**/*.parquet", glob_pattern),
         format!("{}/*/*.parquet", glob_pattern),
         format!("{}/*/*/*.parquet", glob_pattern),
     ];
-    
+
     // Find the pattern that matches files
     for pattern in test_patterns {
         if let Ok(paths) = glob(&pattern) {
             let files: Vec<_> = paths.filter_map(Result::ok).collect();
             if !files.is_empty() {
+                if safe_relaxed {
+                    return scan_with_diagonal_relaxed(&pattern);
+                }
                 let mut scan_args = ScanArgsParquet::default();
                 scan_args.allow_missing_columns = true;
                 scan_args.cache = false;
@@ -514,7 +517,7 @@ fn scan_hive_partitioned(dir_path: &str) -> Result<LazyFrame, PolarsError> {
             }
         }
     }
-    
+
     Err(PolarsError::ComputeError(format!("No parquet files found in hive partitioned structure: {}", dir_path).into()))
 }
 
