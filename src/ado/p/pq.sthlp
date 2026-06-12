@@ -498,6 +498,9 @@ to their original Parquet names unless you specify the {opt noautorename} option
 Binary columns in Parquet files are dropped on import unless {opt binary_to_string} is specified, which decodes them as string variables.
 
 {pstd}
+Parquet files written by R (e.g. via {cmd:haven} or {cmd:arrow}) may contain columns with Arrow extension types such as {cmd:arrow.r.vctrs} (used for labelled variables). These are automatically loaded as their underlying storage type (typically {cmd:double}); value label metadata is not preserved.
+
+{pstd}
 The {opt if()} condition syntax uses SQL-style comparisons, which differ from Stata in that missing values 
 are not considered greater than any value when using the {cmd:>} operator.
 
