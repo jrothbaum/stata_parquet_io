@@ -29,6 +29,7 @@ polars = { version = "0.53", features=["lazy",
     "dtype-i16",
     "dtype-u8",
     "dtype-u16",
+    "dtype-extension",
 ] }
 polars-sql = "0.53"
 polars-parquet = "0.53"

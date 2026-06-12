@@ -36,6 +36,9 @@ pub extern "C" fn pginit(p: *mut stata_sys::ST_plugin) -> stata_sys::ST_retcode 
     unsafe {
         _stata_ = p;
     }
+    polars::datatypes::extension::set_unknown_extension_type_behavior(
+        polars::datatypes::extension::UnknownExtensionTypeBehavior::LoadAsStorage,
+    );
     stata_sys::SD_PLUGINVER
 }
 
