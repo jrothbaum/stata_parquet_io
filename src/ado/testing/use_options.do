@@ -104,7 +104,7 @@ assert `n_diff' == 0
 pq use * using "`tparquet'.parquet", clear compress
 assert _N == 100000
 local c4type: type c_4
-assert "`c4type'" == "byte"
+assert "`c4type'" == "int"
 describe
 sum
 cf _all using "`tparquet'"

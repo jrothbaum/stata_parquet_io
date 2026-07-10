@@ -17,11 +17,11 @@ assert bin_col[3] == "foo"
 di "PASS: binary_to_string"
 
 
-// --- Test 2: cast int64 -> int32 (long in Stata) ---
+// --- Test 2: cast int64 -> int32 (double in Stata; int32 upcasts to double to avoid reserved range) ---
 pq use "`f'", clear cast(`"{"int_col":"int32"}"')
 assert _N == 3
 local t: type int_col
-assert "`t'" == "long"
+assert "`t'" == "double"
 assert int_col[1] == 100
 di "PASS: cast int64->int32"
 
@@ -53,7 +53,7 @@ assert _N == 3
 confirm string variable bin_col
 assert bin_col[1] == "hello"
 local t: type int_col
-assert "`t'" == "long"
+assert "`t'" == "double"
 di "PASS: binary_to_string + cast combined"
 
 

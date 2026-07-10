@@ -122,7 +122,7 @@ local c10type: type c_10
 assert "`c10type'" == "double"
 
 local c1type: type c_1
-assert "`c1type'" == "long"
+assert "`c1type'" == "double"
 
 clear
 set obs 4

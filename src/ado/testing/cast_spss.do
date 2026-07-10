@@ -7,7 +7,7 @@ local f "cast_test.sav"
 pq use_spss "`f'", clear cast(`"{"num_col":"int32"}"')
 assert _N == 3
 local t: type num_col
-assert "`t'" == "long"
+assert "`t'" == "double"
 assert num_col[1] == 10
 assert num_col[2] == 20
 assert num_col[3] == 30
@@ -18,7 +18,7 @@ di "PASS SPSS: strict cast float64->int32"
 pq use_spss "`f'", clear cast(`"{"str_col":"int32"}"') lax
 assert _N == 3
 local t: type str_col
-assert "`t'" == "long"
+assert "`t'" == "double"
 assert str_col[1] == 100
 assert str_col[2] == 200
 assert missing(str_col[3])
