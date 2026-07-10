@@ -1,5 +1,6 @@
 *! pq - read/write parquet files with stata
-*! Version 3.0.7 - Fix for write subset of variables, support for arrow extension types
+*! Version 3.0.8 - Fix overflow/null regression (cast to larger type to avoid losing values to reserved nulls)
+*!         3.0.7 - Fix for write subset of variables, support for arrow extension types
 *!				   Fix for relaxed on directory read
 *!				   Auto infer file format on pq read-like
 *!         3.0.6 - Update underlying rust library for better SPSS write compatibility
