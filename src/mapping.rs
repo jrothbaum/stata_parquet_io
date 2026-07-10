@@ -61,9 +61,9 @@ pub fn map_polars_to_stata(
         //  Boolean
         DataType::Boolean => StataType::Byte,
         // Integers
-        DataType::Int8 => StataType::Byte,
-        DataType::Int16 => StataType::Int,
-        DataType::Int32 => StataType::Long,
+        DataType::Int8 => StataType::Int,    // byte's reserved range (101-127) is below Int8 max
+        DataType::Int16 => StataType::Long, // int's reserved range (32741-32767) is below Int16 max
+        DataType::Int32 => StataType::Double, // long's reserved range (2147483621-2147483647) is below Int32 max
         DataType::Int64 => StataType::Double, // Only double can contain the set of possible values
         DataType::UInt8 => StataType::Int, 
         DataType::UInt16 => StataType::Long,
