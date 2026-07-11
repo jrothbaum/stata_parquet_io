@@ -83,6 +83,10 @@ jobs:
           fi
         shell: bash
 
+      - name: Patch ethnum (non-Linux)
+        if: matrix.config.platform_name != 'linux'
+        run: cargo update -p ethnum
+
       - name: Build release (Linux)
         if: matrix.config.platform_name == 'linux'
         run: |
@@ -90,18 +94,21 @@ jobs:
             set -ex
             # Install basic build tools and repos
             dnf install -y gcc gcc-c++ make cmake curl wget git epel-release
-            
+
             # Install LLVM and Clang
             dnf install -y clang-devel llvm-devel
-            
+
             # Find libclang path and set environment variables
             export LIBCLANG_PATH=\$(find /usr/lib64 /usr/lib -name \"libclang.so*\" | head -n 1 | xargs dirname)
             export LD_LIBRARY_PATH=\${LIBCLANG_PATH}:\${LD_LIBRARY_PATH}
-            
+
             # Install Rust
             curl https://sh.rustup.rs -sSf | sh -s -- -y
             source \$HOME/.cargo/env
-            
+
+            # Patch ethnum to fix transmute compile error on stable Rust
+            cargo update -p ethnum
+
             # Build your project
             rustup target add x86_64-unknown-linux-gnu
             cargo build --release --target x86_64-unknown-linux-gnu
@@ -112,7 +119,7 @@ jobs:
         run: |
           # Build for x86_64 (Intel)
           cargo build --release --target x86_64-apple-darwin
-          
+
           # Build for aarch64 (ARM)
           cargo build --release --target aarch64-apple-darwin
         env:
