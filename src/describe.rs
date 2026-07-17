@@ -48,6 +48,7 @@ pub fn file_summary(
     user_cast_json: &str,
     binary_to_string: bool,
     cast_strict: bool,
+    safe_int64: bool,
 ) -> i32 {
     let prof = profile_timing_enabled();
     let t_total = Instant::now();
@@ -117,76 +118,128 @@ pub fn file_summary(
 
     // Apply user cast (binary_to_string + cast option) BEFORE compress and schema computation
     // so that string lengths, types, and the fast cache all reflect the cast types.
-    if binary_to_string || !user_cast_json.is_empty() {
-        let scan_schema = match df.collect_schema() {
-            Ok(s) => s,
+    // Schema is needed regardless of these options to check for Int64/UInt64 precision
+    // overflow below, so it's always computed here.
+    let scan_schema = match df.collect_schema() {
+        Ok(s) => s,
+        Err(e) => {
+            display(&format!("Error reading schema for cast: {:?}", e));
+            return 198;
+        }
+    };
+
+    let mut cast_map: HashMap<String, String> = HashMap::new();
+
+    if binary_to_string {
+        for (name, dtype) in scan_schema.iter() {
+            if matches!(dtype, DataType::Binary) {
+                cast_map.insert(name.to_string(), "string".to_string());
+            }
+        }
+    }
+
+    if !user_cast_json.is_empty() {
+        let col_to_type: HashMap<String, Value> = match serde_json::from_str(user_cast_json) {
+            Ok(m) => m,
             Err(e) => {
-                display(&format!("Error reading schema for cast: {:?}", e));
+                let msg = format!("cast: invalid JSON: {}", e);
+                display(&msg);
+                set_macro("pq_cast_error", &msg, false);
                 return 198;
             }
         };
-
-        let mut cast_map: HashMap<String, String> = HashMap::new();
-
-        if binary_to_string {
-            for (name, dtype) in scan_schema.iter() {
-                if matches!(dtype, DataType::Binary) {
-                    cast_map.insert(name.to_string(), "string".to_string());
-                }
-            }
-        }
-
-        if !user_cast_json.is_empty() {
-            let col_to_type: HashMap<String, Value> = match serde_json::from_str(user_cast_json) {
-                Ok(m) => m,
-                Err(e) => {
-                    let msg = format!("cast: invalid JSON: {}", e);
+        for (col_name, type_val) in col_to_type {
+            let type_str = match type_val.as_str() {
+                Some(s) => s.to_lowercase(),
+                None => {
+                    let msg = format!("cast: type for '{}' must be a string", col_name);
                     display(&msg);
                     set_macro("pq_cast_error", &msg, false);
                     return 198;
                 }
             };
-            for (col_name, type_val) in col_to_type {
-                let type_str = match type_val.as_str() {
-                    Some(s) => s.to_lowercase(),
-                    None => {
-                        let msg = format!("cast: type for '{}' must be a string", col_name);
-                        display(&msg);
-                        set_macro("pq_cast_error", &msg, false);
-                        return 198;
+            if let Err(e) = validate_user_type(&type_str) {
+                let msg = format!("cast({}): {}", col_name, e);
+                display(&msg);
+                set_macro("pq_cast_error", &msg, false);
+                return 198;
+            }
+            if scan_schema.get(col_name.as_str()).is_none() {
+                let msg = format!("cast: column '{}' not found in file", col_name);
+                display(&msg);
+                set_macro("pq_cast_error", &msg, false);
+                return 198;
+            }
+            cast_map.insert(col_name, type_str);
+        }
+    }
+
+    // Stata has no native 64-bit integer type, so Int64/UInt64 columns are stored as
+    // doubles. Doubles only preserve integer precision up to +/-2^53, so values
+    // outside that range silently collide (distinct ids can become indistinguishable).
+    // Columns the user already cast explicitly above are left alone.
+    let int64_candidates: Vec<PlSmallStr> = scan_schema
+        .iter()
+        .filter_map(|(name, dtype)| {
+            if matches!(dtype, DataType::Int64 | DataType::UInt64)
+                && !cast_map.contains_key(name.as_str())
+            {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if !int64_candidates.is_empty() {
+        match find_int64_precision_overflow_columns(&df, &int64_candidates) {
+            Ok(overflow_cols) if !overflow_cols.is_empty() => {
+                if safe_int64 {
+                    for name in &overflow_cols {
+                        cast_map.insert(name.to_string(), "string".to_string());
                     }
-                };
-                if let Err(e) = validate_user_type(&type_str) {
-                    let msg = format!("cast({}): {}", col_name, e);
+                } else {
+                    let col_list = overflow_cols
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let msg = format!(
+                        "Column(s) {} contain Int64/UInt64 values outside +/-2^53 \
+                         (9,007,199,254,740,992). Stata has no 64-bit integer type, so these \
+                         values would silently lose precision as a double (distinct values can \
+                         become indistinguishable). Use cast({{\"col\":\"string\"}}) to load the \
+                         affected column(s) as strings, or pass the safe_int64 option to do this \
+                         automatically.",
+                        col_list
+                    );
                     display(&msg);
                     set_macro("pq_cast_error", &msg, false);
                     return 198;
                 }
-                if scan_schema.get(col_name.as_str()).is_none() {
-                    let msg = format!("cast: column '{}' not found in file", col_name);
-                    display(&msg);
-                    set_macro("pq_cast_error", &msg, false);
-                    return 198;
-                }
-                cast_map.insert(col_name, type_str);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                display(&format!("Error checking Int64 precision range: {:?}", e));
+                return 198;
             }
         }
+    }
 
-        if !cast_map.is_empty() {
-            let combined_json = serde_json::to_string(&cast_map).unwrap_or_default();
-            df = match apply_user_cast(df, &combined_json, cast_strict) {
-                Ok(lf) => lf,
-                Err(e) => {
-                    let msg = format!("cast failed: {}", e);
-                    display(&msg);
-                    set_macro("pq_cast_error", &msg, false);
-                    return 198;
-                }
-            };
-            set_macro("pq_user_cast_json", &combined_json, false);
-            // Invalidate cached data that doesn't have this cast applied
-            fast_cache::clear();
-        }
+    if !cast_map.is_empty() {
+        let combined_json = serde_json::to_string(&cast_map).unwrap_or_default();
+        df = match apply_user_cast(df, &combined_json, cast_strict) {
+            Ok(lf) => lf,
+            Err(e) => {
+                let msg = format!("cast failed: {}", e);
+                display(&msg);
+                set_macro("pq_cast_error", &msg, false);
+                return 198;
+            }
+        };
+        set_macro("pq_user_cast_json", &combined_json, false);
+        // Invalidate cached data that doesn't have this cast applied
+        fast_cache::clear();
     }
 
     if compress | compress_string_to_numeric {
@@ -382,6 +435,42 @@ pub fn file_summary(
     }
 
     return 0 as ST_retcode;
+}
+
+/// Stata doubles only preserve integer precision up to 2^53. Return the subset of
+/// `candidates` (Int64/UInt64 columns) whose min or max, cast to f64, falls outside
+/// that range. Uses a single min/max aggregation over just the candidate columns
+/// rather than collecting the full frame.
+fn find_int64_precision_overflow_columns(
+    df: &LazyFrame,
+    candidates: &[PlSmallStr],
+) -> Result<Vec<PlSmallStr>, PolarsError> {
+    const MAX_SAFE_INT_AS_DOUBLE: f64 = 9_007_199_254_740_992.0; // 2^53
+
+    let stats_exprs: Vec<Expr> = candidates
+        .iter()
+        .flat_map(|name| {
+            vec![
+                col(name.as_str()).cast(DataType::Float64).min().alias(&format!("{}_min", name)),
+                col(name.as_str()).cast(DataType::Float64).max().alias(&format!("{}_max", name)),
+            ]
+        })
+        .collect();
+
+    let stats_df = df.clone().select(stats_exprs).collect()?;
+
+    let mut overflow_cols = Vec::new();
+    for name in candidates {
+        let min_val = stats_df.column(&format!("{}_min", name))?.f64()?.get(0);
+        let max_val = stats_df.column(&format!("{}_max", name))?.f64()?.get(0);
+        let overflows = min_val.map(|v| v < -MAX_SAFE_INT_AS_DOUBLE).unwrap_or(false)
+            || max_val.map(|v| v > MAX_SAFE_INT_AS_DOUBLE).unwrap_or(false);
+        if overflows {
+            overflow_cols.push(name.clone());
+        }
+    }
+
+    Ok(overflow_cols)
 }
 
 fn collect_row_count_and_string_lengths(

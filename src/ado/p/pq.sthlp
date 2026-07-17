@@ -16,7 +16,7 @@ Import a file into Stata (format inferred from file extension; override with {op
 {opt compress} {opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer)}
 {opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt parse_dates}
 {opt format(string)} {opt fast} {opt drop(varlist)} {opt drop_strl}
-{opt cast(json)} {opt lax} {opt binary_to_string}]
+{opt cast(json)} {opt lax} {opt safe_int64} {opt binary_to_string}]
 
 {phang}
 Format-specific shortcuts for import:
@@ -38,7 +38,7 @@ Append a file to existing data (format inferred from file extension; override wi
 {opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer)}
 {opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt parse_dates}
 {opt format(string)} {opt drop(varlist)} {opt drop_strl}
-{opt cast(json)} {opt lax} {opt binary_to_string}]
+{opt cast(json)} {opt lax} {opt safe_int64} {opt binary_to_string}]
 
 {phang}
 Merge a file with existing data (format inferred from file extension; override with {opt format()}):
@@ -48,7 +48,7 @@ Merge a file with existing data (format inferred from file extension; override w
 {opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer)}
 {opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt parse_dates}
 {opt format(string)} {opt drop(varlist)} {opt drop_strl}
-{opt cast(json)} {opt lax} {opt binary_to_string}]
+{opt cast(json)} {opt lax} {opt safe_int64} {opt binary_to_string}]
 
 {phang}
 Format-specific shortcuts for merge:
@@ -238,6 +238,13 @@ By default, a cast that fails on any value returns an error. Use {opt lax} to pr
 
 {phang}
 {opt lax} makes {opt cast()} non-strict: values that cannot be converted become missing rather than causing an error.
+
+{phang}
+{opt safe_int64} Stata has no native 64-bit integer type, so Parquet {cmd:Int64}/{cmd:UInt64} columns
+are stored as Stata doubles. Doubles only preserve integer precision up to +/-2^53, so larger values
+silently lose precision and distinct values can become indistinguishable. By default, {cmd:pq use}/{cmd:pq append}
+returns an error naming any column(s) whose values fall outside that range. Pass {opt safe_int64} to instead
+automatically load the affected column(s) as strings (equivalent to {cmd:cast({"col":"string"})} for those columns).
 
 {phang}
 {opt binary_to_string} decodes binary columns (Parquet {cmd:Binary} type) as strings rather than dropping them.

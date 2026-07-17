@@ -1,5 +1,9 @@
 *! pq - read/write parquet files with stata
-*! Version 3.0.8 - Fix overflow/null regression (cast to larger type to avoid losing values to reserved nulls)
+*! Version 3.0.9 - Add safe_int64 option: error (naming columns) when Int64/UInt64 values exceed
+*!                 +/-2^53 and would silently lose precision as a Stata double; safe_int64 auto-loads
+*!                 the affected columns as strings instead of erroring.
+*!                 Also fix regression to properly read columns with names longer than 32 characters.
+*!         3.0.8 - Fix overflow/null regression (cast to larger type to avoid losing values to reserved nulls)
 *!         3.0.7 - Fix for write subset of variables, support for arrow extension types
 *!				   Fix for relaxed on directory read
 *!				   Auto infer file format on pq read-like
@@ -380,6 +384,7 @@ program pq_use_append
 						append				///
 						cast(string asis)		///
 						lax				///
+						safe_int64			///
 						binary_to_string]
 
 	local pq_namelist_buf `"`namelist'"'
@@ -505,8 +510,9 @@ program pq_use_append
 	// matched_vars. drop_strl columns (binary parquet type) are filtered below.
 	local b_binary_to_string = ("`binary_to_string'" != "")
 	local b_cast_strict = ("`lax'" == "")
+	local b_safe_int64 = ("`safe_int64'" != "")
 	local pq_cast_buf `cast'
-	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric' "`source_format'" `infer_schema_length_for_plugin' `parse_dates_for_plugin' `b_fast' 100 "pq_namelist_buf" "`drop'" "pq_cast_buf" `b_binary_to_string' `b_cast_strict'
+	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric' "`source_format'" `infer_schema_length_for_plugin' `parse_dates_for_plugin' `b_fast' 100 "pq_namelist_buf" "`drop'" "pq_cast_buf" `b_binary_to_string' `b_cast_strict' `b_safe_int64'
 	if (_rc) {
 		if (`"`pq_cast_error'"' != "") di as error "`pq_cast_error'"
 		exit _rc
@@ -747,11 +753,14 @@ program pq_use_append
 
 		if (`i_matched' > 0) {
 			local v_to_read_index_`i_matched' `i'
-			local v_to_read_name_`i_matched' `vari'
+			//	Name used to look up the column in the Polars batch, which always
+			//	keeps the original (possibly >32 char) parquet column name - not
+			//	the (possibly truncated/renamed) Stata variable name `vari'.
+			local v_to_read_name_`i_matched' `vari_original'
 			local v_to_read_type_`i_matched': type `vari'
 			local v_to_read_type_`i_matched' = lower("`v_to_read_type_`i_matched''")
 			//	For getting the polars and polars assigned stata type and passing back to read
-			local i_original : list posof "`vari'" in vars_in_file
+			local i_original : list posof "`vari_original'" in vars_in_file
 
 
 			//	Get the originally set stata type

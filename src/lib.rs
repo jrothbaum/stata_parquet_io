@@ -239,6 +239,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 };
                 let binary_to_string = if subfunction_args.len() > 15 { subfunction_args[15] == "1" } else { false };
                 let cast_strict = if subfunction_args.len() > 16 { subfunction_args[16] != "0" } else { true };
+                let safe_int64 = if subfunction_args.len() > 17 { subfunction_args[17] == "1" } else { false };
                 return file_summary(
                         subfunction_args[0],
                         subfunction_args[1].parse::<u8>().unwrap_or(0) != 0,
@@ -258,6 +259,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                         user_cast_json,
                         binary_to_string,
                         cast_strict,
+                        safe_int64,
                     ) as ST_retcode;
             },
             "save" => {
