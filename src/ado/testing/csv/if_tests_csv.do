@@ -76,9 +76,14 @@ program define in_test_parquet_io_data
 	
 	local n_if = `n_if' + 1
 	local if_set`n_if' c_2 == "B" & !missing(c_4) & (c_5 > 100 & !missing(c_5))
-	local assert`n_if' 0
-	
-	
+	local assert`n_if' 1
+
+
+	//	No !missing(c_5) guard: Stata's `>' treats missing (.) as +infinity, so
+	//	`c_5 > 100' is true for missing c_5 in Stata's own `keep if'. The SQL
+	//	pushdown treats NULL as non-matching instead, so the two paths disagree
+	//	by design whenever c_5 has missing values. Left unasserted intentionally.
+	//	(Currently unreached: n_if_run caps at 5, kept in sync with if_tests.do.)
 	local n_if = `n_if' + 1
 	local if_set`n_if' c_2 == "B" & !missing(c_4) & c_5 > 100
 	local assert`n_if' 0
@@ -156,10 +161,10 @@ program define in_test_parquet_io_data
 
 		di `"N for `if_set`i'':	"' _N
 		di `"Disagreements in for `if_set`i'':"'
-		compare_files `all_vars'
+		compare_files `all_vars', `do_assert'
 
 		di _newline(2)
-		
+
 	}
 	
 	
