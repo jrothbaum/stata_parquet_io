@@ -112,6 +112,7 @@ capture mata: mata drop _pq_clear_stata_metadata()
 capture mata: mata drop _pq_capture_stata_metadata()
 capture mata: mata drop _pq_label_definition_equal()
 capture mata: mata drop _pq_apply_stata_metadata()
+capture mata: mata drop _pq_apply_stata_metadata_newvars()
 
 mata:
 _pq_metadata_variable_labels = J(0, 1, "")
@@ -245,6 +246,69 @@ void _pq_apply_stata_metadata(string scalar target_vars_local)
 		value_label_name = _pq_metadata_value_label_names[i]
 		if (value_label_name != "") {
 			st_varvaluelabel(variable_index, value_label_name)
+		}
+	}
+}
+
+void _pq_apply_stata_metadata_newvars(
+	string scalar target_vars_local,
+	string scalar existing_vars_local)
+{
+	external string colvector _pq_metadata_variable_labels
+	external string colvector _pq_metadata_value_label_names
+	external transmorphic scalar _pq_metadata_label_values
+	external transmorphic scalar _pq_metadata_label_texts
+
+	string rowvector target_vars, existing_vars
+	string scalar value_label_name
+	real colvector values
+	string colvector texts
+	real scalar i, variable_index, is_new
+
+	target_vars = tokens(st_local(target_vars_local))
+	existing_vars = tokens(st_local(existing_vars_local))
+	if (cols(target_vars) != rows(_pq_metadata_variable_labels)) {
+		errprintf("Invalid Stata metadata target map\n")
+		_error(198)
+	}
+
+	for (i = 1; i <= cols(target_vars); i++) {
+		variable_index = st_varindex(target_vars[i])
+		if (variable_index == .) {
+			errprintf("Stata metadata target variable not found: %s\n", target_vars[i])
+			_error(198)
+		}
+		value_label_name = _pq_metadata_value_label_names[i]
+		if (value_label_name != "") {
+			if (st_isstrvar(variable_index)) {
+				is_new = !anyof(existing_vars, target_vars[i])
+				if (is_new) {
+					errprintf("Cannot attach numeric value label to string variable: %s\n", target_vars[i])
+					_error(198)
+				}
+			}
+		}
+	}
+
+	for (i = 1; i <= cols(target_vars); i++) {
+		value_label_name = _pq_metadata_value_label_names[i]
+		if (value_label_name != "") {
+			if (!st_vlexists(value_label_name)) {
+				values = asarray(_pq_metadata_label_values, value_label_name)
+				texts = asarray(_pq_metadata_label_texts, value_label_name)
+				st_vlmodify(value_label_name, values, texts)
+			}
+		}
+	}
+	for (i = 1; i <= cols(target_vars); i++) {
+		is_new = !anyof(existing_vars, target_vars[i])
+		if (is_new) {
+			variable_index = st_varindex(target_vars[i])
+			st_varlabel(variable_index, _pq_metadata_variable_labels[i])
+			value_label_name = _pq_metadata_value_label_names[i]
+			if (value_label_name != "") {
+				st_varvaluelabel(variable_index, value_label_name)
+			}
 		}
 	}
 }
@@ -450,11 +514,9 @@ program pq_merge
 												`parse_dates'				///
 												`preserve_order'				///
 												`format_opt'					///
-												nostatametadata				///
 												drop(`drop')					///
 												`drop_strl'
 		quietly save `t_save'
-		sum
 	}
 	/*
 	di `"merge `origmtype' `varlist_n'`varlist' using "`t_save'",	gen(`generate') 	///"'
@@ -473,11 +535,12 @@ program pq_merge
 	di "Merging to data"
 	merge `origmtype' `varlist_n'`varlist' using "`t_save'",	gen(`generate') 	///
 													`nogenerate'			///
-													`nolabel'				///
-													`nonotes'				///
+													`labels'				///
+													`notes'					///
 													`update'				///
 													`replace'				///
-													`noreport'				///
+													`report'				///
+													`sorted'				///
 													`force'					///
 													assert(`assert')		///
 													keep(`keep')
@@ -549,8 +612,9 @@ program define pq_use_append, nclass
 	
 	pq_convert_path `"`using'"'
 	local using = r(fullpath)
-	pq_infer_format, path("`using'") format("`format'")
+	pq_infer_format, path("`using'") format("`format'") preserveexistingdir
 	local source_format = r(format)
+	local using `"`r(path)'"'
 	if !inlist("`source_format'", "parquet", "sas", "spss", "csv") {
 		display as error `"Unsupported format(`format'): expected parquet, sas, spss, or csv"'
 		exit 198
@@ -1080,8 +1144,7 @@ program define pq_use_append, nclass
 
 	// Apply the one agreed capsule only after all selected column data loaded.
 	// The capsule is data, never Stata code.
-	local restore_stata_metadata = `preflight_stata_metadata' & !`b_append'
-	if (`restore_stata_metadata') {
+	if (`preflight_stata_metadata') {
 		if ("`pq_meta_present'" == "1" & `pq_meta_count' > 0) {
 			local pq_capsule_vars
 			local pq_target_vars
@@ -1093,11 +1156,21 @@ program define pq_use_append, nclass
 				local pq_capsule_vars `pq_capsule_vars' `pq_meta_capsule_`i''
 				local pq_target_vars `pq_target_vars' `pq_meta_target_`i''
 			}
-			capture noisily pq_restore_stata_metadata, ///
-				capsule("`pq_metadata_capsule'") ///
-				allcapsulevars("`pq_all_capsule_vars'") ///
-				capsulevars("`pq_capsule_vars'") ///
-				targetvars("`pq_target_vars'")
+			if (`b_append') {
+				capture noisily pq_restore_stata_metadata_append, ///
+					capsule("`pq_metadata_capsule'") ///
+					allcapsulevars("`pq_all_capsule_vars'") ///
+					capsulevars("`pq_capsule_vars'") ///
+					targetvars("`pq_target_vars'") ///
+					existingvars("`all_vars'")
+			}
+			else {
+				capture noisily pq_restore_stata_metadata, ///
+					capsule("`pq_metadata_capsule'") ///
+					allcapsulevars("`pq_all_capsule_vars'") ///
+					capsulevars("`pq_capsule_vars'") ///
+					targetvars("`pq_target_vars'")
+			}
 			local _metadata_rc = _rc
 			capture erase "`pq_metadata_capsule'"
 			if (`_metadata_rc') exit `_metadata_rc'
@@ -1106,6 +1179,7 @@ program define pq_use_append, nclass
 			capture erase "`pq_metadata_capsule'"
 		}
 	}
+	quietly version
 	}
 	local rc = _rc
 	if ("`pq_metadata_capsule'" != "") capture erase "`pq_metadata_capsule'"
@@ -1235,7 +1309,10 @@ end
 capture program drop pq_describe
 program pq_describe, rclass
     version 16.0
-    
+	local _orig_varabbrev = c(varabbrev)
+	set varabbrev off
+	capture noisily {
+
 	local input_args = `"`0'"'
 
 	// Check if "using" is present in arguments
@@ -1275,8 +1352,9 @@ program pq_describe, rclass
 	
 	pq_convert_path `"`using'"'
 	local using = r(fullpath)
-	pq_infer_format, path("`using'") format("`format'")
+	pq_infer_format, path("`using'") format("`format'") preserveexistingdir
 	local source_format = r(format)
+	local using `"`r(path)'"'
 	if !inlist("`source_format'", "parquet", "sas", "spss", "csv") {
 		display as error `"Unsupported format(`format'): expected parquet, sas, spss, or csv"'
 		exit 198
@@ -1309,6 +1387,10 @@ program pq_describe, rclass
 	foreach maci in `macros_to_return' {
 		return local `maci' = `"``maci''"'
 	}
+	}
+	local rc = _rc
+	set varabbrev `_orig_varabbrev'
+	if `rc' exit `rc'
 end
 
 
@@ -1415,8 +1497,13 @@ program define pq_save, nclass
 	
 	pq_convert_path `"`using'"'
 	local using = r(fullpath)
-	pq_infer_format, path("`using'") format("`format'")
+	local directory_opt
+	if ("`partition_by'" != "" | (`=_N' > `chunk' & "`consolidate'" == "")) {
+		local directory_opt directory
+	}
+	pq_infer_format, path("`using'") format("`format'") `directory_opt'
 	local source_format = r(format)
+	local using `"`r(path)'"'
 	if !inlist("`source_format'", "parquet", "spss", "csv") {
 		display as error `"Unsupported save format(`format'): expected parquet, spss, or csv"'
 		exit 198
@@ -1700,6 +1787,7 @@ program define pq_save, nclass
 		local _save_rc = _rc
 		if (`_save_rc') exit `_save_rc'
 	}
+	quietly version
 	}
 	local rc = _rc
 
@@ -1818,6 +1906,63 @@ program define pq_restore_stata_metadata, nclass
 end
 
 
+capture program drop pq_restore_stata_metadata_append
+program define pq_restore_stata_metadata_append, nclass
+	version 16.0
+	local _orig_varabbrev = c(varabbrev)
+	set varabbrev off
+	tempname metadata_frame
+	local _frame_created = 0
+	capture noisily {
+		syntax, CAPSule(string) ALLCapsulevars(string) CAPSulevars(string) ///
+			TARGETvars(string) EXISTINGvars(string)
+		confirm file "`capsule'"
+		local all_capsule_count : word count `allcapsulevars'
+		local capsule_count : word count `capsulevars'
+		local target_count : word count `targetvars'
+		if (`all_capsule_count' == 0 | `capsule_count' == 0 | ///
+			`capsule_count' != `target_count') {
+			display as error "Invalid Stata metadata column map"
+			exit 198
+		}
+		foreach vari in `targetvars' {
+			confirm variable `vari', exact
+		}
+
+		frame create `metadata_frame'
+		local _frame_created = 1
+		frame `metadata_frame': quietly use "`capsule'", clear
+		frame `metadata_frame': quietly count
+		if (r(N) != 0) {
+			display as error "Embedded Stata metadata capsule must have zero observations"
+			exit 198
+		}
+		frame `metadata_frame': unab capsule_file_vars : _all
+		local capsule_file_vars_sorted : list sort capsule_file_vars
+		local mapped_capsule_vars_sorted : list sort allcapsulevars
+		if (`"`capsule_file_vars_sorted'"' != `"`mapped_capsule_vars_sorted'"') {
+			display as error "Embedded Stata metadata capsule variables do not match its column map"
+			display as error "  capsule variables: `capsule_file_vars_sorted'"
+			display as error "  mapped variables: `mapped_capsule_vars_sorted'"
+			exit 198
+		}
+		foreach vari in `capsulevars' {
+			frame `metadata_frame': confirm variable `vari', exact
+		}
+
+		frame `metadata_frame': mata: _pq_capture_stata_metadata("capsulevars")
+		mata: _pq_apply_stata_metadata_newvars("targetvars", "existingvars")
+	}
+	local rc = _rc
+	if (`_frame_created') capture frame drop `metadata_frame'
+	capture mata: _pq_clear_stata_metadata()
+	local _metadata_cleanup_rc = _rc
+	if (!`rc' & `_metadata_cleanup_rc') local rc = `_metadata_cleanup_rc'
+	set varabbrev `_orig_varabbrev'
+	if `rc' exit `rc'
+end
+
+
 capture program drop pq_write_overflow_dta
 program pq_write_overflow_dta
 	syntax, using(string) output(string) offset(integer) n_rows(integer) ///
@@ -1922,16 +2067,38 @@ end
 capture program drop pq_infer_format
 program define pq_infer_format, rclass
 	version 16
-	syntax, path(string) [format(string)]
-	local fmt = lower("`format'")
-	if ("`fmt'" == "") {
-		local p = lower("`path'")
-		if regexm("`p'", "\.sas7bdat$")       local fmt sas
-		else if regexm("`p'", "\.(sav|zsav)$") local fmt spss
-		else if regexm("`p'", "\.csv$")        local fmt csv
-		else                                    local fmt parquet
+	local _orig_varabbrev = c(varabbrev)
+	set varabbrev off
+	local fmt
+	local resolved_path
+	capture noisily {
+		syntax, path(string) [format(string) directory preserveexistingdir]
+		local resolved_path `"`path'"'
+		local fmt = lower("`format'")
+		if ("`fmt'" == "") {
+			local p = lower(`"`resolved_path'"')
+			if regexm("`p'", "\.sas7bdat$")       local fmt sas
+			else if regexm("`p'", "\.(sav|zsav)$") local fmt spss
+			else if regexm("`p'", "\.csv$")        local fmt csv
+			else                                    local fmt parquet
+		}
+
+		if ("`fmt'" == "parquet" & "`directory'" == "") {
+			local pq_path_is_directory = 0
+			if ("`preserveexistingdir'" != "") {
+				mata: st_local("pq_path_is_directory", strofreal(direxists(st_local("resolved_path"))))
+			}
+			if (!`pq_path_is_directory' & ///
+				!regexm(`"`resolved_path'"', "\.[^/\\]+$")) {
+				local resolved_path `"`resolved_path'.parquet"'
+			}
+		}
 	}
+	local rc = _rc
+	set varabbrev `_orig_varabbrev'
+	if `rc' exit `rc'
 	return local format "`fmt'"
+	return local path `"`resolved_path'"'
 end
 
 

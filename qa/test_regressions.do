@@ -26,38 +26,74 @@ adopath ++ "`ado_dir'"
 capture program drop polars_parquet_plugin
 program polars_parquet_plugin, plugin using("`plugin_file'")
 
-tempfile variable_label_base drop_strl_base long_name_base extensionless_file
+tempfile variable_label_base drop_strl_base long_name_base extensionless_seed
 local variable_label_file "`variable_label_base'.parquet"
 local drop_strl_file "`drop_strl_base'.parquet"
 local long_name_file "`long_name_base'.parquet"
+local extensionless_base = regexr(`"`extensionless_seed'"', "\.[^./]*$", "")
+local extensionless_base "`extensionless_base'_pq_extensionless"
+local extensionless_file "`extensionless_base'.parquet"
+local existing_dir "`extensionless_base'_existing_dir"
+local existing_dir_file "`existing_dir'.parquet"
 
 **# Metadata regressions
 
-**## Extensionless single-file round trip
+**## Extensionless Parquet paths across the command surface
 local ++test_count
 capture noisily {
     clear
     set obs 3
     generate byte id = _n
+    set varabbrev on
 
-    pq save using "`extensionless_file'", replace
-    capture noisily pq use using "`extensionless_file'", clear
-    local default_rc = _rc
-    capture noisily pq use using "`extensionless_file'", clear nostatametadata
-    local optout_rc = _rc
+    capture mkdir "`existing_dir'"
+    mata: st_local("existing_dir_ok", strofreal(direxists(st_local("existing_dir"))))
+    assert `existing_dir_ok' == 1
+    pq save using "`existing_dir'", replace
+    confirm file "`existing_dir_file'"
+    mata: st_local("existing_dir_ok", strofreal(direxists(st_local("existing_dir"))))
+    assert `existing_dir_ok' == 1
 
-    assert `default_rc' == 0
-    assert `optout_rc' == 0
+    pq save using "`extensionless_base'", replace
+    assert "`c(varabbrev)'" == "on"
+    confirm file "`extensionless_file'"
+    capture confirm file "`extensionless_base'"
+    assert _rc == 601
+
+    pq describe using "`extensionless_base'", quietly
+    assert "`c(varabbrev)'" == "on"
+    assert real("`r(n_rows)'") == 3
+
+    pq use using "`extensionless_base'", clear
     assert _N == 3
     assert id == _n
+
+    pq append using "`extensionless_base'"
+    assert _N == 6
+    assert id == cond(_n <= 3, _n, _n - 3)
+
+    clear
+    set obs 3
+    generate byte id = _n
+    generate byte master_only = 1
+    pq merge 1:1 id using "`extensionless_base'", nogenerate
+    assert _N == 3
+    assert id == _n
+    assert master_only == 1
+
+    capture noisily pq describe using "`extensionless_base'_missing", quietly
+    local missing_rc = _rc
+    assert `missing_rc' == 601
+    assert "`c(varabbrev)'" == "on"
+    set varabbrev off
 }
 local test_rc = _rc
 if (`test_rc' == 0) {
-    display as result "  PASS: extensionless single-file round trip"
+    display as result "  PASS: extensionless Parquet paths across commands"
     local ++pass_count
 }
 else {
-    display as error "  FAIL: extensionless single-file round trip (error `test_rc')"
+    display as error "  FAIL: extensionless Parquet paths across commands (error `test_rc')"
     local ++fail_count
     local failed_tests "`failed_tests' extensionless_file"
 }
@@ -162,9 +198,11 @@ else {
 
 **# Cleanup and summary
 
-foreach path in "`variable_label_file'" "`drop_strl_file'" "`long_name_file'" {
+foreach path in "`extensionless_base'" "`extensionless_file'" "`existing_dir_file'" ///
+    "`variable_label_file'" "`drop_strl_file'" "`long_name_file'" {
     capture erase "`path'"
 }
+capture rmdir "`existing_dir'"
 
 display as result "Test Results: `pass_count'/`test_count' passed, `fail_count' failed"
 display "RESULT: test_regressions tests=`test_count' pass=`pass_count' fail=`fail_count'"

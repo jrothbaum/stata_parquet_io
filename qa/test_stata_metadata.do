@@ -167,13 +167,13 @@ pq use using "`malformed_file'", clear nostatametadata
 assert x == 1000 + _n
 local ++pass_count
 
-**# Merge remains outside this metadata slice
+**# Merge carries labels from using dataset
 local ++test_count
 clear
 set obs 2
 generate byte id = _n
 generate byte source_code = _n
-label variable source_code "Must not transfer through pq merge"
+label variable source_code "Source code label"
 label define Merge_Scope_Label 1 "one" 2 "two"
 label values source_code Merge_Scope_Label
 pq save using "`merge_file'", replace statametadata
@@ -184,8 +184,27 @@ pq merge 1:1 id using "`merge_file'", nogenerate
 assert source_code == _n
 local merged_variable_label : variable label source_code
 local merged_value_label : value label source_code
-assert `"`merged_variable_label'"' == ""
-assert "`merged_value_label'" == ""
+assert `"`merged_variable_label'"' == "Source code label"
+assert "`merged_value_label'" == "Merge_Scope_Label"
+mata: st_local("merged_mapping_1", st_vlmap("Merge_Scope_Label", 1))
+mata: st_local("merged_mapping_2", st_vlmap("Merge_Scope_Label", 2))
+assert "`merged_mapping_1'" == "one"
+assert "`merged_mapping_2'" == "two"
+local ++pass_count
+
+**# Merge: master value-label definition wins over using
+local ++test_count
+clear
+set obs 2
+generate byte id = _n
+generate byte source_code = _n
+label define Merge_Scope_Label 1 "master-one" 2 "master-two"
+label values source_code Merge_Scope_Label
+pq merge 1:1 id using "`merge_file'", nogenerate
+mata: st_local("master_wins_1", st_vlmap("Merge_Scope_Label", 1))
+mata: st_local("master_wins_2", st_vlmap("Merge_Scope_Label", 2))
+assert "`master_wins_1'" == "master-one"
+assert "`master_wins_2'" == "master-two"
 local ++pass_count
 
 **# Empty dataset

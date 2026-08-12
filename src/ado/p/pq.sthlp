@@ -225,6 +225,9 @@ variables.
 Supported values are {cmd:parquet}, {cmd:sas}, {cmd:spss}, and {cmd:csv}.
 If omitted, the format is inferred from the file extension: {cmd:.sas7bdat} → sas,
 {cmd:.sav}/{cmd:.zsav} → spss, {cmd:.csv} → csv, anything else → parquet.
+For Parquet input and single-file output, a filename with no extension is resolved as
+{cmd:filename.parquet}. Existing input directories and directory-style partitioned or chunked
+output retain the path exactly as specified.
 The shortcut commands ({cmd:pq use_sas}, etc.) set this automatically.
 
 {phang}
@@ -544,8 +547,16 @@ key or carry valid, semantically identical metadata; mixed, malformed, or confli
 sets return {cmd:r(198)} before the current dataset is cleared or extended. Harmless
 capsule-header differences do not conflict, but physical column maps, variable labels,
 value-label names, every value mapping, and shared definitions must agree. {cmd:pq append}
-performs the same preflight but does not apply the capsule to existing Stata variables;
-{cmd:pq merge} retains its existing data-only metadata behavior.
+performs the same preflight and restores metadata for variables that are new
+to the master dataset (matching native Stata {cmd:append} behavior): existing
+variables keep the master's labels, and conflicting value-label definitions
+are silently kept from the master.
+{cmd:pq merge} restores metadata in the using dataset before merging, so variable
+labels and value-label definitions from the Parquet file carry through to the
+merged result. When a value-label name already exists in the master dataset,
+the master's definition is kept (standard Stata {cmd:merge} behavior).
+Specify {opt nolabels} to suppress copying value-label definitions from the
+using dataset.
 
 {pstd}
 Binary columns in Parquet files are dropped on import unless {opt binary_to_string} is specified, which decodes them as string variables.

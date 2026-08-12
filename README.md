@@ -26,7 +26,7 @@ pq save out.sav,         replace
 pq save out.csv,         replace
 ```
 
-Format is inferred from the file extension (`.sav`/`.zsav` → spss, `.csv` → csv, else → parquet).
+Format is inferred from the file extension (`.sav`/`.zsav` → spss, `.csv` → csv, else → parquet). For Parquet input and single-file output, a filename with no extension is resolved as `filename.parquet`; existing input directories and directory-style partitioned or chunked output keep the path exactly as supplied.
 
 ## Key Options
 
