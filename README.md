@@ -45,6 +45,7 @@ Format is inferred from the file extension (`.sav`/`.zsav` → spss, `.csv` → 
 | `parse_dates` | Auto-detect and convert date strings (CSV) |
 | `preserve_order` | Maintain source row order (SAS/SPSS) |
 | `relaxed` | Union files with mismatched schemas (Parquet) |
+| `nostatametadata` | Skip embedded-metadata validation and restoration for Parquet files, directories, or globs |
 
 **Saving:**
 
@@ -54,6 +55,9 @@ Format is inferred from the file extension (`.sav`/`.zsav` → spss, `.csv` → 
 | `if(expr)` | Save a filtered subset using Stata if syntax |
 | `partition_by(varlist)` | Hive-partitioned output directory (Parquet) |
 | `compression(type)` | `zstd` (default), `snappy`, `gzip`, etc. (Parquet) |
+| `statametadata` | Embed Stata variable/value labels while keeping numeric columns numeric |
+
+`statametadata` supports ordinary, partitioned, chunked, streamed, and consolidated Parquet output. When selected variables have label state, every physical fragment carries one semantically identical metadata envelope; with no variable or value labels, ordinary metadata-free Parquet is written. Directory and glob reads validate every footer before loading data, then apply the agreed capsule once. Mixed, missing, malformed, or conflicting fragment metadata returns an error without clearing the current dataset. `nostatametadata` is the explicit data-only escape hatch. `label` retains its older decode-to-string behavior and cannot be combined with `statametadata`; the combination of `partition_by()` with `consolidate` cannot be combined with it.
 
 Run `help pq` for the full reference.
 
@@ -77,6 +81,12 @@ pq use raw.csv, clear parse_dates
 
 * Save partitioned by state and year
 pq save /output/data, replace partition_by(state year)
+
+* Preserve Stata labels in every partition fragment
+pq save /output/labeled, replace partition_by(state) statametadata
+
+* Write labeled chunks and consolidate them transactionally
+pq save labeled.parquet, replace chunk(100000) stream consolidate statametadata
 ```
 
 ## Data Types

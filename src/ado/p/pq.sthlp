@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 3.0.0 March 2026}{...}
+{* *! version 3.0.10 August 2026}{...}
 {title:Title}
 
 {phang}
@@ -16,7 +16,7 @@ Import a file into Stata (format inferred from file extension; override with {op
 {opt compress} {opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer)}
 {opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt parse_dates}
 {opt format(string)} {opt fast} {opt drop(varlist)} {opt drop_strl}
-{opt cast(json)} {opt lax} {opt safe_int64} {opt binary_to_string}]
+{opt cast(json)} {opt lax} {opt safe_int64} {opt nostatametadata} {opt binary_to_string}]
 
 {phang}
 Format-specific shortcuts for import:
@@ -38,7 +38,7 @@ Append a file to existing data (format inferred from file extension; override wi
 {opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer)}
 {opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt parse_dates}
 {opt format(string)} {opt drop(varlist)} {opt drop_strl}
-{opt cast(json)} {opt lax} {opt safe_int64} {opt binary_to_string}]
+{opt cast(json)} {opt lax} {opt safe_int64} {opt nostatametadata} {opt binary_to_string}]
 
 {phang}
 Merge a file with existing data (format inferred from file extension; override with {opt format()}):
@@ -68,7 +68,7 @@ Save Stata data to a file (default is Parquet):
 {p 8 17 2}
 {cmd:pq save} [{varlist}] {cmd:using} {it:filename} [, {opt replace} {opt if(expression)} {opt noautorename} {opt partition_by(varlist)} {opt compression(string)} {opt compression_level(integer)} {opt nopartitionoverwrite} {opt compress} 
 {opt compress_string_to_numeric} {opt chunk(integer 2147483647)} {opt stream} {opt consolidate}
-{opt do_not_reload} {opt label} {opt format(string)} ]
+{opt do_not_reload} {opt label} {opt statametadata} {opt format(string)} ]
 
 {phang}
 Format-specific shortcuts for save:
@@ -250,6 +250,12 @@ automatically load the affected column(s) as strings (equivalent to {cmd:cast({"
 {opt binary_to_string} decodes binary columns (Parquet {cmd:Binary} type) as strings rather than dropping them.
 Without this option, binary columns are silently dropped on import.
 
+{phang}
+{opt nostatametadata} suppresses automatic restoration of metadata embedded by
+{cmd:pq save, statametadata}. For a Parquet file, directory, or glob it skips both
+footer-uniformity validation and label restoration while leaving the data read unchanged.
+Files whose fragments all lack embedded metadata continue to load normally without it.
+
 {dlgtab:Options for pq merge}
 
 {phang}
@@ -308,7 +314,7 @@ This will load the data using {cmd:pq use} in a temporary frame, {cmd:save} it t
 as in SQL, which is different than Stata (it will not include missing values as greater than any value).
 
 {phang}
-{opt noautorename} prevents automatic renaming of variables based on Parquet metadata stored in variable labels.
+{opt noautorename} prevents automatic renaming of variables based on Parquet column-name metadata.
 By default, variables that were renamed when imported will be restored to their original Parquet column names when saved.
 
 {phang}
@@ -339,13 +345,28 @@ additional file to a partition (like a new year of data) without overwriting the
 {opt label} saves labeled variables as strings.
 
 {phang}
+{opt statametadata} embeds a compressed, non-executable Stata metadata capsule in a
+Parquet footer while leaving labeled variables numeric. It supports ordinary,
+partitioned, chunked, streamed, and consolidated output; every physical fragment
+carries the same logical envelope when selected variables have label state. With no
+variable or value labels, ordinary metadata-free Parquet is written. A later
+{cmd:pq use} validates every selected footer before loading data, then restores
+variable labels, exact value-label names,
+shared definitions, unused mappings, Unicode, and extended-missing mappings once.
+{opt label} and {opt statametadata} may not be combined. The combination of
+{opt partition_by(varlist)} and {opt consolidate} with {opt statametadata} is rejected.
+With {opt nopartitionoverwrite}, all existing fragments are validated before output
+is changed.
+
+{phang}
 {opt chunk(integer 2147483647)} sets maximum rows per chunk for streaming writes.
 
 {phang}
 {opt stream} enables low-memory chunked writing.
 
 {phang}
-{opt consolidate} combines chunked parquet output files into one file after streaming.
+{opt consolidate} combines chunked Parquet output files into one file after the chunk loop.
+It works with ordinary chunked output and with {opt stream}.
 
 {phang}
 {opt do_not_reload} with {opt stream} keeps memory clear after write instead of reloading the original data.
@@ -487,6 +508,15 @@ that would be created from the asterisk pattern.
 {pstd}Save with optimization options:{p_end}
 {phang2}{cmd:. pq save using optimized.parquet, replace compress compress_string_to_numeric}{p_end}
 
+{pstd}Save numeric values with Stata labels embedded in the Parquet footer:{p_end}
+{phang2}{cmd:. pq save using labeled.parquet, replace statametadata}{p_end}
+
+{pstd}Preserve labels in every partition fragment:{p_end}
+{phang2}{cmd:. pq save using labeled_parts, replace partition_by(group) statametadata}{p_end}
+
+{pstd}Write labeled chunks and consolidate them into one Parquet file:{p_end}
+{phang2}{cmd:. pq save using labeled.parquet, replace chunk(100000) stream consolidate statametadata}{p_end}
+
 {marker remarks}{...}
 {title:Remarks}
 
@@ -496,10 +526,26 @@ efficient reading and writing of Parquet files. The implementation supports vari
 string, numeric, datetime, date, time, and strL variables.
 
 {pstd}
-When you import a Parquet file with {cmd:pq use}, the original column names from the Parquet file
-are stored as variable labels with the format {cmd:{parquet_name:original_name}}.
+When you import a Parquet file with {cmd:pq use}, original Parquet column names that
+cannot be used directly in Stata are stored in the variable characteristic
+{cmd:_pq_parquet_name}. The older variable-label marker is still recognized when saving
+datasets imported by earlier {cmd:pq} versions.
 When you later save the data with {cmd:pq save}, these columns will be automatically renamed back
 to their original Parquet names unless you specify the {opt noautorename} option.
+
+{pstd}
+Embedded Stata metadata uses the namespaced Parquet footer key
+{cmd:org.stata.pq.labels.v1}. Generic Parquet readers ignore this key and continue to
+read the ordinary numeric columns. On load, {cmd:pq} validates bounded compressed and
+decompressed sizes, opens the zero-observation capsule as data in a temporary frame,
+and never executes footer text or embedded Stata commands. File, directory, and glob
+reads resolve one sorted physical fragment set. All fragments must either lack the
+key or carry valid, semantically identical metadata; mixed, malformed, or conflicting
+sets return {cmd:r(198)} before the current dataset is cleared or extended. Harmless
+capsule-header differences do not conflict, but physical column maps, variable labels,
+value-label names, every value mapping, and shared definitions must agree. {cmd:pq append}
+performs the same preflight but does not apply the capsule to existing Stata variables;
+{cmd:pq merge} retains its existing data-only metadata behavior.
 
 {pstd}
 Binary columns in Parquet files are dropped on import unless {opt binary_to_string} is specified, which decodes them as string variables.
@@ -582,7 +628,7 @@ excellent performance for large datasets.
 {it:U.S. Census Bureau}
 
 {pstd}
-stata_parquet_io package. Version 1.5.1.
+stata_parquet_io package. Version 3.0.10.
 
 {pstd}
 For bug reports, feature requests, or other issues, please see {it:https://github.com/jrothbaum/stata_parquet_io}.

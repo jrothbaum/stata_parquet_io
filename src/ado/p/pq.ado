@@ -1,5 +1,8 @@
-*! pq - read/write parquet files with stata
-*! Version 3.0.9 - Add safe_int64 option: error (naming columns) when Int64/UInt64 values exceed
+*! pq Version 3.0.10 12aug2026
+*! Read/write Parquet files with Stata
+*! Version 3.0.10 - Extend statametadata to partitioned, chunked, streamed, and consolidated
+*!                  Parquet output with uniform-footer preflight and transactional consolidation.
+*!         3.0.9 - Add safe_int64 option: error (naming columns) when Int64/UInt64 values exceed
 *!                 +/-2^53 and would silently lose precision as a Stata double; safe_int64 auto-loads
 *!                 the affected columns as strings instead of erroring.
 *!                 Also fix regression to properly read columns with names longer than 32 characters.
@@ -98,6 +101,153 @@ program define pq
         disp as err `"Unknown sub-comand `todo'"'
         exit 198
     }
+end
+
+
+capture mata: mata drop _pq_metadata_variable_labels
+capture mata: mata drop _pq_metadata_value_label_names
+capture mata: mata drop _pq_metadata_label_values
+capture mata: mata drop _pq_metadata_label_texts
+capture mata: mata drop _pq_clear_stata_metadata()
+capture mata: mata drop _pq_capture_stata_metadata()
+capture mata: mata drop _pq_label_definition_equal()
+capture mata: mata drop _pq_apply_stata_metadata()
+
+mata:
+_pq_metadata_variable_labels = J(0, 1, "")
+_pq_metadata_value_label_names = J(0, 1, "")
+_pq_metadata_label_values = asarray_create("string", 1)
+_pq_metadata_label_texts = asarray_create("string", 1)
+
+void _pq_clear_stata_metadata()
+{
+	external string colvector _pq_metadata_variable_labels
+	external string colvector _pq_metadata_value_label_names
+	external transmorphic scalar _pq_metadata_label_values
+	external transmorphic scalar _pq_metadata_label_texts
+
+	_pq_metadata_variable_labels = J(0, 1, "")
+	_pq_metadata_value_label_names = J(0, 1, "")
+	_pq_metadata_label_values = asarray_create("string", 1)
+	_pq_metadata_label_texts = asarray_create("string", 1)
+}
+
+void _pq_capture_stata_metadata(string scalar capsule_vars_local)
+{
+	external string colvector _pq_metadata_variable_labels
+	external string colvector _pq_metadata_value_label_names
+	external transmorphic scalar _pq_metadata_label_values
+	external transmorphic scalar _pq_metadata_label_texts
+
+	string rowvector capsule_vars
+	string scalar value_label_name
+	real colvector values
+	string colvector texts
+	real scalar i, variable_index
+
+	capsule_vars = tokens(st_local(capsule_vars_local))
+	_pq_clear_stata_metadata()
+	_pq_metadata_variable_labels = J(cols(capsule_vars), 1, "")
+	_pq_metadata_value_label_names = J(cols(capsule_vars), 1, "")
+
+	for (i = 1; i <= cols(capsule_vars); i++) {
+		variable_index = st_varindex(capsule_vars[i])
+		if (variable_index == .) {
+			errprintf("Stata metadata capsule variable not found: %s\n", capsule_vars[i])
+			_error(198)
+		}
+		_pq_metadata_variable_labels[i] = st_varlabel(variable_index)
+		value_label_name = st_varvaluelabel(variable_index)
+		_pq_metadata_value_label_names[i] = value_label_name
+		if (value_label_name != "" &
+			!asarray_contains(_pq_metadata_label_values, value_label_name)) {
+			st_vlload(value_label_name, values, texts)
+			asarray(_pq_metadata_label_values, value_label_name, values)
+			asarray(_pq_metadata_label_texts, value_label_name, texts)
+		}
+	}
+}
+
+real scalar _pq_label_definition_equal(
+	string scalar value_label_name,
+	real colvector expected_values,
+	string colvector expected_texts)
+{
+	real colvector existing_values
+	string colvector existing_texts
+
+	st_vlload(value_label_name, existing_values, existing_texts)
+	if (rows(existing_values) != rows(expected_values) |
+		rows(existing_texts) != rows(expected_texts)) return(0)
+	if (rows(expected_values) > 0 &
+		any(existing_values :!= expected_values)) return(0)
+	if (rows(expected_texts) > 0 &
+		any(existing_texts :!= expected_texts)) return(0)
+	return(1)
+}
+
+void _pq_apply_stata_metadata(string scalar target_vars_local)
+{
+	external string colvector _pq_metadata_variable_labels
+	external string colvector _pq_metadata_value_label_names
+	external transmorphic scalar _pq_metadata_label_values
+	external transmorphic scalar _pq_metadata_label_texts
+
+	string rowvector target_vars
+	string scalar value_label_name
+	real colvector values
+	string colvector texts
+	real scalar i, variable_index
+
+	target_vars = tokens(st_local(target_vars_local))
+	if (cols(target_vars) != rows(_pq_metadata_variable_labels)) {
+		errprintf("Invalid Stata metadata target map\n")
+		_error(198)
+	}
+
+	// Validate every target and every existing definition before changing metadata.
+	for (i = 1; i <= cols(target_vars); i++) {
+		variable_index = st_varindex(target_vars[i])
+		if (variable_index == .) {
+			errprintf("Stata metadata target variable not found: %s\n", target_vars[i])
+			_error(198)
+		}
+		value_label_name = _pq_metadata_value_label_names[i]
+		if (value_label_name != "") {
+			if (st_isstrvar(variable_index)) {
+				errprintf("Cannot attach numeric value label to string variable: %s\n", target_vars[i])
+				_error(198)
+			}
+			values = asarray(_pq_metadata_label_values, value_label_name)
+			texts = asarray(_pq_metadata_label_texts, value_label_name)
+			if (st_vlexists(value_label_name) &
+				!_pq_label_definition_equal(value_label_name, values, texts)) {
+				errprintf("Conflicting value-label definition: %s\n", value_label_name)
+				_error(198)
+			}
+		}
+	}
+
+	// Define each shared mapping once, then attach exact names and variable labels.
+	for (i = 1; i <= cols(target_vars); i++) {
+		value_label_name = _pq_metadata_value_label_names[i]
+		if (value_label_name != "") {
+			if (!st_vlexists(value_label_name)) {
+				values = asarray(_pq_metadata_label_values, value_label_name)
+				texts = asarray(_pq_metadata_label_texts, value_label_name)
+				st_vlmodify(value_label_name, values, texts)
+			}
+		}
+	}
+	for (i = 1; i <= cols(target_vars); i++) {
+		variable_index = st_varindex(target_vars[i])
+		st_varlabel(variable_index, _pq_metadata_variable_labels[i])
+		value_label_name = _pq_metadata_value_label_names[i]
+		if (value_label_name != "") {
+			st_varvaluelabel(variable_index, value_label_name)
+		}
+	}
+}
 end
 
 capture program drop pq_use_sas
@@ -300,6 +450,7 @@ program pq_merge
 												`parse_dates'				///
 												`preserve_order'				///
 												`format_opt'					///
+												nostatametadata				///
 												drop(`drop')					///
 												`drop_strl'
 		quietly save `t_save'
@@ -339,9 +490,13 @@ end
 
 
 capture program drop pq_use_append
-program pq_use_append
-    version 16.0
-    
+program define pq_use_append, nclass
+	    version 16.0
+	local _orig_varabbrev = c(varabbrev)
+	set varabbrev off
+	local pq_metadata_capsule
+	capture noisily {
+
     local input_args = `"`0'"'
 
 	// Check if "using" is present in arguments
@@ -385,6 +540,7 @@ program pq_use_append
 						cast(string asis)		///
 						lax				///
 						safe_int64			///
+						NOSTATAMETADATA		///
 						binary_to_string]
 
 	local pq_namelist_buf `"`namelist'"'
@@ -403,8 +559,7 @@ program pq_use_append
 	local b_append = "`append'" != ""
 
 	
-	if (!`b_append' & "`clear'" != "")	clear
-	if (`=_N' > 0 & !`b_append') {
+	if (`=_N' > 0 & !`b_append' & "`clear'" == "") {
 		display as error "There is already data loaded, pass clear if you want to load a file"
 		exit 2000
 	}
@@ -452,6 +607,8 @@ program pq_use_append
 	local infer_schema_length_for_plugin = r(infer_schema_length_for_plugin)
 	local parse_dates_for_plugin = r(parse_dates_for_plugin)
 	local b_fast = "`fast'" != ""
+	local preflight_stata_metadata = "`source_format'" == "parquet" & ///
+		"`nostatametadata'" == ""
 	local batch_size_for_plugin -1
 	if ("`batch_size'" != "") local batch_size_for_plugin = real("`batch_size'")
 
@@ -512,6 +669,14 @@ program pq_use_append
 	local b_cast_strict = ("`lax'" == "")
 	local b_safe_int64 = ("`safe_int64'" != "")
 	local pq_cast_buf `cast'
+	// Validate footer uniformity before describe can scan or cache source data.
+	// Name mapping still occurs after describe establishes physical/final names.
+	if (`preflight_stata_metadata') {
+		capture noisily plugin call polars_parquet_plugin, validate_stata_metadata ///
+			"`using'"
+		local _metadata_rc = _rc
+		if (`_metadata_rc') exit `_metadata_rc'
+	}
 	plugin call polars_parquet_plugin, describe "`using'" `b_quiet' `b_detailed' `"`sql_if'"' "`asterisk_to_variable'" `b_compress' `b_compress_string_to_numeric' "`source_format'" `infer_schema_length_for_plugin' `parse_dates_for_plugin' `b_fast' 100 "pq_namelist_buf" "`drop'" "pq_cast_buf" `b_binary_to_string' `b_cast_strict' `b_safe_int64'
 	if (_rc) {
 		if (`"`pq_cast_error'"' != "") di as error "`pq_cast_error'"
@@ -548,8 +713,26 @@ program pq_use_append
 				}
 			}
 			local matched_vars `new_matched'
+			local matched_var_count : word count `matched_vars'
+			if (`matched_var_count' > 0) {
+				forvalues i = 1/`matched_var_count' {
+					local matched_var_`i' : word `i' of `matched_vars'
+				}
+			}
 		}
 	}
+
+	// Validate every selected Parquet footer before clearing or extending data.
+	// nostatametadata skips both this preflight and later restoration.
+	if (`preflight_stata_metadata') {
+		tempfile pq_metadata_capsule
+		capture noisily plugin call polars_parquet_plugin, extract_stata_metadata ///
+			"`using'" "`pq_metadata_capsule'"
+		local _metadata_rc = _rc
+		if (`_metadata_rc') exit `_metadata_rc'
+	}
+
+	if (!`b_append' & "`clear'" != "") clear
 
 	local match_all = ("`namelist'" == "" | "`namelist'" == "*") & "`drop'" == ""
 	
@@ -658,6 +841,7 @@ program pq_use_append
 	local var_position = 0
 	local rename_count = 0
 	local rename_list
+	local strl_rename_count = 0
 	foreach vari in `matched_vars' {
 		local var_position = `var_position' + 1
 		local var_number: list posof "`vari'" in vars_in_file
@@ -683,16 +867,14 @@ program pq_use_append
 		//	This includes parquet type "strl" and promoted long strings.
 		local is_strl_col : list posof "`vari'" in strl_col_names
 		if ("`type'" == "strl" | `is_strl_col' > 0) {
-			//	Handle renames for strL columns loaded from .dta
+			// Defer characteristics until the strL .dta has created the variable.
 			if ("`rename_to'" != "") {
-				capture confirm variable `vari', exact
-				if (_rc == 0) {
-					rename `vari' `name_to_create'
-				}
 				local rename_list `rename_list' `name_to_create'
 				local rename_count = `rename_count' + 1
 				local rename_from_`rename_count' `vari'
-				label variable `name_to_create' "{parquet_name:`vari'}"
+				local strl_rename_count = `strl_rename_count' + 1
+				local strl_rename_target_`strl_rename_count' `name_to_create'
+				local strl_rename_source_`strl_rename_count' `vari'
 			}
 			//	Don't add strL to match_vars_non_binary - they're not sent to read plugin
 			continue
@@ -723,7 +905,7 @@ program pq_use_append
 			local rename_count = `rename_count' + 1
 			local rename_from_`rename_count' `vari'
 
-			label variable `name_to_create' "{parquet_name:`vari'}"
+			char `name_to_create'[_pq_parquet_name] `"`vari'"'
 		}
 
 		if (`keep') {
@@ -823,6 +1005,15 @@ program pq_use_append
 		quietly capture drop _pq_strl_key
 		capture erase "`temp_strl_dta'"
 
+		if (`strl_rename_count' > 0) {
+			forvalues i = 1/`strl_rename_count' {
+				local strl_target `strl_rename_target_`i''
+				local strl_source `strl_rename_source_`i''
+				confirm variable `strl_target', exact
+				char `strl_target'[_pq_parquet_name] `"`strl_source'"'
+			}
+		}
+
 		//	Restore original column order
 		local ordered_vars
 		foreach vari in `matched_vars' {
@@ -886,6 +1077,40 @@ program pq_use_append
 
 		display as text "Overflow batch complete. Total rows loaded: `=_N'"
 	}
+
+	// Apply the one agreed capsule only after all selected column data loaded.
+	// The capsule is data, never Stata code.
+	local restore_stata_metadata = `preflight_stata_metadata' & !`b_append'
+	if (`restore_stata_metadata') {
+		if ("`pq_meta_present'" == "1" & `pq_meta_count' > 0) {
+			local pq_capsule_vars
+			local pq_target_vars
+			local pq_all_capsule_vars
+			forvalues i = 1/`pq_meta_all_count' {
+				local pq_all_capsule_vars `pq_all_capsule_vars' `pq_meta_all_capsule_`i''
+			}
+			forvalues i = 1/`pq_meta_count' {
+				local pq_capsule_vars `pq_capsule_vars' `pq_meta_capsule_`i''
+				local pq_target_vars `pq_target_vars' `pq_meta_target_`i''
+			}
+			capture noisily pq_restore_stata_metadata, ///
+				capsule("`pq_metadata_capsule'") ///
+				allcapsulevars("`pq_all_capsule_vars'") ///
+				capsulevars("`pq_capsule_vars'") ///
+				targetvars("`pq_target_vars'")
+			local _metadata_rc = _rc
+			capture erase "`pq_metadata_capsule'"
+			if (`_metadata_rc') exit `_metadata_rc'
+		}
+		else {
+			capture erase "`pq_metadata_capsule'"
+		}
+	}
+	}
+	local rc = _rc
+	if ("`pq_metadata_capsule'" != "") capture erase "`pq_metadata_capsule'"
+	set varabbrev `_orig_varabbrev'
+	if `rc' exit `rc'
 end
 
 capture program drop pq_gen_or_recast
@@ -1090,9 +1315,15 @@ end
 
 
 capture program drop pq_save
-program pq_save
+program define pq_save, nclass
 	version 16.0
-	
+	local _orig_varabbrev = c(varabbrev)
+	set varabbrev off
+	local original_frame
+	local save_for_chunks
+	local _stream_saved = 0
+	capture noisily {
+
 	
     local input_args = `"`0'"'
     //	di `"`input_args"'
@@ -1129,8 +1360,14 @@ program pq_save
 						   CONSolidate						///
 						   DO_not_reload					///
 						   label 							///	
+						   STATAMETADATA					///
 						   format(string)					///
 						   ]	//	in(string) 
+
+	if ("`label'" != "" & "`statametadata'" != "") {
+		display as error "label and statametadata may not be combined"
+		exit 198
+	}
         
 	//	if "`partition_by'" != "" {
 	//		di as error "Hive partitioning not implemented yet"
@@ -1184,6 +1421,15 @@ program pq_save
 		display as error `"Unsupported save format(`format'): expected parquet, spss, or csv"'
 		exit 198
 	}
+	if ("`statametadata'" != "" & "`source_format'" != "parquet") {
+		display as error "statametadata is only supported for Parquet output"
+		exit 198
+	}
+	if ("`statametadata'" != "" & "`consolidate'" != "" & ///
+		"`partition_by'" != "") {
+		display as error "statametadata with partition_by() and consolidate is not supported"
+		exit 198
+	}
 
 	if "`replace'" == "" {
 		//	Check if file exists as file or path
@@ -1207,6 +1453,19 @@ program pq_save
 
 	local vars_labeled	
 	local original_order
+	local stata_metadata_vars
+	local stata_metadata_varlist
+	local metadata_capsule
+	if ("`statametadata'" != "") {
+		foreach vari in `varlist' {
+			local pq_metadata_candidate `vari'
+			mata: st_local("pq_has_var_label", st_varlabel(st_varindex(st_local("pq_metadata_candidate"))) != "" ? "1" : "0")
+			local pq_value_label : value label `vari'
+			if (`pq_has_var_label' | "`pq_value_label'" != "") {
+				local stata_metadata_vars `stata_metadata_vars' `vari'
+			}
+		}
+	}
 	if ("`label'" == "label") {
 		quietly ds
 		local original_order `r(varlist)'
@@ -1253,6 +1512,13 @@ program pq_save
 		
 		//	Rename?
 		if ("`noautorename'" == "") {
+			local parquet_name_char : char `vari'[_pq_parquet_name]
+			if (`"`parquet_name_char'"' != "") {
+				local n_rename = `n_rename' + 1
+				local rename_from_`n_rename' `vari'
+				local rename_to_`n_rename' `parquet_name_char'
+				continue
+			}
 			//	capture: labels with backticks (e.g. `87) cause r(132) "too few quotes"
 			//	when expanded inside compound quotes -- silently skip rename check
 
@@ -1331,6 +1597,16 @@ program pq_save
 
 
 	local n_rows = _N
+	if ("`partition_by'" != "" & `n_rows' == 0) {
+		display as error "partition_by() requires at least one observation"
+		exit 198
+	}
+	if ("`statametadata'" != "" & "`stata_metadata_vars'" != "") {
+		tempfile metadata_capsule
+		pq_make_stata_metadata_capsule, capsule("`metadata_capsule'") ///
+			variables("`stata_metadata_vars'")
+		local stata_metadata_varlist `stata_metadata_vars'
+	}
 
 	if (`n_rows' > `chunk') {
 		if ("`partition_by'" != "") & (`b_compress' | `b_compress_string_to_numeric') {
@@ -1344,7 +1620,9 @@ program pq_save
 
 		* check and delete file
 		local needs_dir = "`partition_by'" == ""
-		plugin call polars_parquet_plugin, clean_path "`using'" `needs_dir'
+		if ("`partition_by'" == "" | `overwrite_partition') {
+			plugin call polars_parquet_plugin, clean_path "`using'" `needs_dir'
+		}
 		
 		local n_chunks = ceil(`n_rows'/`chunk')
 		di "Writing file in `n_chunks' chunks of up to `=strtrim(string(`chunk',"%20.0gc"))' rows"
@@ -1353,6 +1631,7 @@ program pq_save
 			di "	streaming, save temporary file"
 			tempfile save_for_chunks
 			quietly save "`save_for_chunks'"
+			local _stream_saved = 1
 		}
 		else {
 			tempname save_for_chunks
@@ -1367,7 +1646,8 @@ program pq_save
 		forvalues i = 1/`n_chunks' {
 			if ("`partition_by'" == "")	local chunk_suffix /data_`i'.parquet
 
-			local overwrite_partition = `overwrite_partition' & (`i' == 1)
+			local overwrite_chunk_output = `overwrite_partition' & (`i' == 1)
+			local append_chunk_partition = !`overwrite_chunk_output'
 
 			local start_row = `end_row' + 1
 			local end_row = `start_row' + `chunk' - 1
@@ -1386,7 +1666,7 @@ program pq_save
 			}
 
 			//	di "`using'`chunk_suffix'"
-			plugin call polars_parquet_plugin, save "`using'`chunk_suffix'" "from_macro" `rows_to_read' 0 `"`sql_if'"' `"`StataColumnInfo'"' "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric' 1 `overwrite_partition' "`source_format'"
+			plugin call polars_parquet_plugin, save "`using'`chunk_suffix'" "from_macro" `rows_to_read' 0 `"`sql_if'"' `"`StataColumnInfo'"' "`partition_by'" "`compression'" "`compression_level'" `overwrite_chunk_output' `b_compress' `b_compress_string_to_numeric' 1 `append_chunk_partition' "`source_format'" "`metadata_capsule'" "from_macro"
 
 
 			if ("`stream'" == "") {
@@ -1415,19 +1695,126 @@ program pq_save
 	}
 	else {
 		//	di `"plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' "`sql_if'" "`StataColumnInfo'" "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric' 0"'
-		plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' `"`sql_if'"' `"`StataColumnInfo'"' "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric' 0 0 "`source_format'"
+		local append_partition = ("`partition_by'" != "" & !`overwrite_partition')
+		capture noisily plugin call polars_parquet_plugin, save "`using'" "from_macro" `n_rows' `offset' `"`sql_if'"' `"`StataColumnInfo'"' "`partition_by'" "`compression'" "`compression_level'" `overwrite_partition' `b_compress' `b_compress_string_to_numeric' 0 `append_partition' "`source_format'" "`metadata_capsule'" "from_macro"
+		local _save_rc = _rc
+		if (`_save_rc') exit `_save_rc'
 	}
+	}
+	local rc = _rc
+
+	// Centralized cleanup for all ordinary, chunked, and streamed exits.
+	if ("`original_frame'" != "") {
+		capture frame change `original_frame'
+		capture frame drop `save_for_chunks'
+	}
+	if ("`stream'" != "" & "`save_for_chunks'" != "") {
+		if (`rc' & `_stream_saved') capture noisily use "`save_for_chunks'", clear
+		capture erase "`save_for_chunks'"
+		capture erase "`save_for_chunks'.dta"
+	}
+	if ("`metadata_capsule'" != "") capture erase "`metadata_capsule'"
+
+	// Reset variables temporarily decoded by label after returning to the source frame.
+	local _restore_decoded = "`vars_labeled'" != ""
+	if (!`rc' & "`stream'" != "" & "`do_not_reload'" != "") local _restore_decoded = 0
+	if (`_restore_decoded') {
+		capture noisily {
+			foreach vari in `vars_labeled' {
+				quietly drop `vari'
+				quietly rename ``vari'' `vari'
+			}
+			quietly order `original_order'
+		}
+		local _label_cleanup_rc = _rc
+		if (!`rc' & `_label_cleanup_rc') local rc = `_label_cleanup_rc'
+	}
+	set varabbrev `_orig_varabbrev'
+	if `rc' exit `rc'
+end
 
 
-	//	Reset the labeled variables to their original value
-	if ("`vars_labeled'" != "") {
-		foreach vari in `vars_labeled' {
-			quietly drop `vari'
-			quietly rename ``vari'' `vari'
+capture program drop pq_make_stata_metadata_capsule
+program define pq_make_stata_metadata_capsule, nclass
+	version 16.0
+	local _orig_varabbrev = c(varabbrev)
+	set varabbrev off
+	tempname metadata_frame
+	local _frame_created = 0
+	capture noisily {
+		syntax, CAPSule(string) VARiables(varlist)
+		local source_n = _N
+		if (`source_n' == 0) {
+			frame put `variables', into(`metadata_frame')
+		}
+		else {
+			frame put `variables' in 1, into(`metadata_frame')
+		}
+		local _frame_created = 1
+		if (`source_n' > 0) frame `metadata_frame': quietly drop in 1
+		frame `metadata_frame': quietly save "`capsule'", replace
+	}
+	local rc = _rc
+	if (`_frame_created') capture frame drop `metadata_frame'
+	if (`rc') capture erase "`capsule'"
+	set varabbrev `_orig_varabbrev'
+	if `rc' exit `rc'
+end
+
+
+capture program drop pq_restore_stata_metadata
+program define pq_restore_stata_metadata, nclass
+	version 16.0
+	local _orig_varabbrev = c(varabbrev)
+	set varabbrev off
+	tempname metadata_frame
+	local _frame_created = 0
+	capture noisily {
+		syntax, CAPSule(string) ALLCapsulevars(string) CAPSulevars(string) TARGETvars(string)
+		confirm file "`capsule'"
+		local all_capsule_count : word count `allcapsulevars'
+		local capsule_count : word count `capsulevars'
+		local target_count : word count `targetvars'
+		if (`all_capsule_count' == 0 | `capsule_count' == 0 | ///
+			`capsule_count' != `target_count') {
+			display as error "Invalid Stata metadata column map"
+			exit 198
+		}
+		foreach vari in `targetvars' {
+			confirm variable `vari', exact
 		}
 
-		quietly order `original_order'
+		frame create `metadata_frame'
+		local _frame_created = 1
+		frame `metadata_frame': quietly use "`capsule'", clear
+		frame `metadata_frame': quietly count
+		if (r(N) != 0) {
+			display as error "Embedded Stata metadata capsule must have zero observations"
+			exit 198
+		}
+		frame `metadata_frame': unab capsule_file_vars : _all
+		local capsule_file_vars_sorted : list sort capsule_file_vars
+		local mapped_capsule_vars_sorted : list sort allcapsulevars
+		if (`"`capsule_file_vars_sorted'"' != `"`mapped_capsule_vars_sorted'"') {
+			display as error "Embedded Stata metadata capsule variables do not match its column map"
+			display as error "  capsule variables: `capsule_file_vars_sorted'"
+			display as error "  mapped variables: `mapped_capsule_vars_sorted'"
+			exit 198
+		}
+		foreach vari in `capsulevars' {
+			frame `metadata_frame': confirm variable `vari', exact
+		}
+
+		frame `metadata_frame': mata: _pq_capture_stata_metadata("capsulevars")
+		mata: _pq_apply_stata_metadata("targetvars")
 	}
+	local rc = _rc
+	if (`_frame_created') capture frame drop `metadata_frame'
+	capture mata: _pq_clear_stata_metadata()
+	local _metadata_cleanup_rc = _rc
+	if (!`rc' & `_metadata_cleanup_rc') local rc = `_metadata_cleanup_rc'
+	set varabbrev `_orig_varabbrev'
+	if `rc' exit `rc'
 end
 
 
@@ -1532,6 +1919,7 @@ end
 
 
 
+capture program drop pq_infer_format
 program define pq_infer_format, rclass
 	version 16
 	syntax, path(string) [format(string)]
@@ -1547,6 +1935,7 @@ program define pq_infer_format, rclass
 end
 
 
+capture program drop pq_convert_path
 program define pq_convert_path, rclass
 	version 16
     syntax anything

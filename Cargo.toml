@@ -6,7 +6,7 @@ members = [
 
 [package]
 name = "stata_parquet_io"
-version = "3.0.9"
+version = "3.0.10"
 authors = ["Jon Rothbaum <jlrothbaum@gmail.com>"]
 edition = "2021"
 rust-version = "1.93"
@@ -40,6 +40,8 @@ rayon = "1.11"
 env_logger = "0.11.8"
 serde = "1.0.228"
 serde_json = "1.0.145"
+base64 = "0.22.1"
+zstd = "0.13.3"
 glob = "0.3.3"
 regex = "1.12.2"
 polars-readstat-rs = "0.20.1"

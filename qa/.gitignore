@@ -1,0 +1,6 @@
+*.log
+*.smcl
+*.parquet
+*.ok
+*.pyc
+__pycache__/

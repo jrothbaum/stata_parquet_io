@@ -350,38 +350,23 @@ fn scan_lazyframe_parquet(
     safe_relaxed: bool,
     asterisk_to_variable_name: Option<&str>,
 ) -> Result<LazyFrame, PolarsError> {
-    let path_obj = Path::new(path);
-    
-    // Check if it's a directory (hive partitioned dataset)
-    if path_obj.is_dir() {
-        return scan_hive_partitioned(path, safe_relaxed);
-    }
-    
-    // Handle glob patterns with special options
+    let file_paths = crate::stata_metadata::resolve_parquet_fragments(path)
+        .map_err(|e| PolarsError::ComputeError(e.into()))?;
+
     match (safe_relaxed, asterisk_to_variable_name) {
-        (_, Some(var_name)) => scan_with_filename_extraction(path, var_name),
-        (true, _) => scan_with_diagonal_relaxed(path),
+        (_, Some(var_name)) => scan_with_filename_extraction(path, var_name, &file_paths),
+        (true, _) => scan_with_diagonal_relaxed(&file_paths),
         _ => {
-            // Default behavior - direct scan_parquet on glob (with pattern normalization)
-            let mut normalized_pattern = if cfg!(windows) {
-                path.replace('\\', "/")
-            } else {
-                path.to_string()
-            };
-            
-            // Fix "**.ext" to "**/*.ext"
-            if normalized_pattern.contains("**.") {
-                normalized_pattern = normalized_pattern.replace("**.", "**/*.");
-            }
-            
             let mut scan_args = ScanArgsParquet::default();
             scan_args.allow_missing_columns = true;
             scan_args.cache = false;
-            LazyFrame::scan_parquet(normalized_pattern.as_str().into(), scan_args.clone())
+            let paths = file_paths
+                .iter()
+                .map(|path| PlRefPath::try_from_path(path))
+                .collect::<PolarsResult<Vec<_>>>()?;
+            LazyFrame::scan_parquet_files(paths.into(), scan_args)
         }
     }
-
-    
 }
 
 fn scan_lazyframe_readstat(
@@ -481,71 +466,7 @@ fn scan_lazyframe_csv(
     reader.finish()
 }
 
-fn scan_hive_partitioned(dir_path: &str, safe_relaxed: bool) -> Result<LazyFrame, PolarsError> {
-    // Detect hive partitioning structure and create appropriate glob
-    let mut glob_pattern = String::from(dir_path);
-
-    // Remove trailing slash if present
-    if glob_pattern.ends_with('/') {
-        glob_pattern.pop();
-    }
-
-    // Normalize for Windows
-    if cfg!(windows) {
-        glob_pattern = glob_pattern.replace('\\', "/");
-    }
-
-    // Check for common hive patterns
-    let test_patterns = vec![
-        format!("{}/**/*.parquet", glob_pattern),
-        format!("{}/*/*.parquet", glob_pattern),
-        format!("{}/*/*/*.parquet", glob_pattern),
-    ];
-
-    // Find the pattern that matches files
-    for pattern in test_patterns {
-        if let Ok(paths) = glob(&pattern) {
-            let files: Vec<_> = paths.filter_map(Result::ok).collect();
-            if !files.is_empty() {
-                if safe_relaxed {
-                    return scan_with_diagonal_relaxed(&pattern);
-                }
-                let mut scan_args = ScanArgsParquet::default();
-                scan_args.allow_missing_columns = true;
-                scan_args.cache = false;
-                return LazyFrame::scan_parquet(pattern.as_str().into(), scan_args.clone());
-            }
-        }
-    }
-
-    Err(PolarsError::ComputeError(format!("No parquet files found in hive partitioned structure: {}", dir_path).into()))
-}
-
-fn scan_with_diagonal_relaxed(glob_path: &str) -> Result<LazyFrame, PolarsError> {
-    // Normalize pattern for Windows and fix recursive wildcards
-    let mut normalized_pattern = if cfg!(windows) {
-        glob_path.replace('\\', "/")
-    } else {
-        glob_path.to_string()
-    };
-    
-    // Fix "**.ext" to "**/*.ext"
-    if normalized_pattern.contains("**.") {
-        normalized_pattern = normalized_pattern.replace("**.", "**/*.");
-    }
-    
-    // Get all matching files
-    let paths = glob(&normalized_pattern)
-        .map_err(|e| PolarsError::ComputeError(format!("Invalid glob pattern: {}", e).into()))?;
-        
-    let file_paths: Result<Vec<PathBuf>, _> = paths.collect();
-    let file_paths = file_paths
-        .map_err(|e| PolarsError::ComputeError(format!("Failed to read glob results: {}", e).into()))?;
-    
-    if file_paths.is_empty() {
-        return Err(PolarsError::ComputeError(format!("No files found matching pattern: {}", normalized_pattern).into()));
-    }
-    
+fn scan_with_diagonal_relaxed(file_paths: &[PathBuf]) -> Result<LazyFrame, PolarsError> {
     // Create individual lazy frames for each file
     let mut scan_args = ScanArgsParquet::default();
     scan_args.allow_missing_columns = true;
@@ -579,7 +500,8 @@ fn scan_with_diagonal_relaxed(glob_path: &str) -> Result<LazyFrame, PolarsError>
 
 fn scan_with_filename_extraction(
     glob_path: &str, 
-    variable_name: &str
+    variable_name: &str,
+    file_paths: &[PathBuf],
 ) -> Result<LazyFrame, PolarsError> {
     // Normalize pattern for Windows and fix recursive wildcards
     let mut normalized_pattern = if cfg!(windows) {
@@ -608,18 +530,6 @@ fn scan_with_filename_extraction(
     let regex_pattern = format!("{}(.+?){}", before_escaped, after_escaped);
     let re = Regex::new(&regex_pattern)
         .map_err(|e| PolarsError::ComputeError(format!("Invalid regex pattern: {}", e).into()))?;
-    
-    // Get all matching files using normalized pattern
-    let paths = glob(&normalized_pattern)
-        .map_err(|e| PolarsError::ComputeError(format!("Invalid glob pattern: {}", e).into()))?;
-        
-    let file_paths: Result<Vec<PathBuf>, _> = paths.collect();
-    let file_paths = file_paths
-        .map_err(|e| PolarsError::ComputeError(format!("Failed to read glob results: {}", e).into()))?;
-    
-    if file_paths.is_empty() {
-        return Err(PolarsError::ComputeError(format!("No files found matching pattern: {}", normalized_pattern).into()));
-    }
     
     // Create lazy frames with extracted values
     let lazy_frames: Result<Vec<LazyFrame>, PolarsError> = file_paths

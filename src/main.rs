@@ -19,6 +19,7 @@ pub mod stata_interface;
 pub mod utilities;
 pub mod downcast;
 pub mod fast_cache;
+pub mod stata_metadata;
 
 #[cfg(debug_assertions)]
 mod sql_from_if;
