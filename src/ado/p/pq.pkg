@@ -13,7 +13,7 @@ d KW: data science
 d
 d Requires: Stata version 16
 d
-d Distribution-Date: 20260305
+d Distribution-Date: 20260812
 d
 d Author:   Jon Rothbaum,  U.S. Census Bureau
 d Support: email jlrothbaum@@gmail.com
@@ -25,4 +25,3 @@ g MACINTEL64 pq_intel.dylib pq.plugin
 g MACARM64 pq_arm.dylib pq.plugin
 g WIN64 pq.dll pq.plugin
 h pq.plugin
-f pq_benchmark.do

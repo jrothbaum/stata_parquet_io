@@ -2,31 +2,22 @@ use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::slice;
 
-
-pub mod read;
-pub mod write;
-pub mod mapping;
-pub mod stata_interface;
 pub mod describe;
-pub mod sql_from_if;
-pub mod utilities;
 pub mod downcast;
 pub mod fast_cache;
+pub mod mapping;
+pub mod read;
+pub mod sql_from_if;
+pub mod stata_interface;
+pub mod stata_metadata;
+pub mod utilities;
+pub mod write;
 
 use std::ptr;
 
-use stata_interface::{
-    display,
-    ST_retcode,
-};
 use describe::file_summary;
-use read::{
-    InputFormat,
-    data_exists,
-    read_to_stata,
-    write_overflow_batch_to_dta
-};
-
+use read::{data_exists, read_to_stata, write_overflow_batch_to_dta, InputFormat};
+use stata_interface::{display, ST_retcode};
 
 #[no_mangle]
 pub static mut _stata_: *mut stata_sys::ST_plugin = ptr::null_mut();
@@ -287,6 +278,8 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                 let quietly = subfunction_args[12].parse::<u8>().unwrap_or(0) != 0;
                 let append_to_partition = subfunction_args[13].parse::<u8>().unwrap_or(0) != 0;
                 let output_format = if subfunction_args.len() > 14 { subfunction_args[14] } else { "parquet" };
+                let stata_metadata_capsule = if subfunction_args.len() > 15 { subfunction_args[15] } else { "" };
+                let stata_metadata_varlist = if subfunction_args.len() > 16 { subfunction_args[16] } else { "" };
                 
                 let output = match write::write_from_stata(
                     path,
@@ -304,11 +297,151 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     quietly,
                     append_to_partition,
                     output_format,
+                    stata_metadata_capsule,
+                    stata_metadata_varlist,
                 ) {
-                    Ok(_) => 0 as i32,
-                    Err(_e) => 198 as i32
+                    Ok(rc) => rc,
+                    Err(e) => {
+                        display(&format!("Error writing the file: {e}"));
+                        198
+                    }
                 };
                 return output as ST_retcode;
+            },
+            "extract_stata_metadata" => {
+                stata_interface::set_macro("pq_meta_present", "0", false);
+                stata_interface::set_macro("pq_meta_version", "", false);
+                stata_interface::set_macro("pq_meta_count", "0", false);
+                stata_interface::set_macro("pq_meta_all_count", "0", false);
+
+                if subfunction_args.len() < 2 {
+                    display("extract_stata_metadata requires a Parquet path and output path");
+                    return 198 as ST_retcode;
+                }
+                let path = subfunction_args[0];
+                let output_path = subfunction_args[1];
+
+                let extracted = match stata_metadata::extract_capsule_from_parquet_input(path, output_path) {
+                    Ok(Some(metadata)) => metadata,
+                    Ok(None) => return 0 as ST_retcode,
+                    Err(e) => {
+                        display(&format!("Error reading embedded Stata metadata: {e}"));
+                        return 198 as ST_retcode;
+                    }
+                };
+
+                let n_columns = stata_interface::get_macro("n_columns", false, None)
+                    .parse::<usize>()
+                    .unwrap_or(0);
+                let mut final_names = std::collections::HashMap::with_capacity(n_columns);
+                for index in 1..=n_columns {
+                    let parquet_name = stata_interface::get_macro(
+                        &format!("name_{index}"),
+                        false,
+                        None,
+                    );
+                    let renamed = stata_interface::get_macro(
+                        &format!("rename_{index}"),
+                        false,
+                        None,
+                    );
+                    let final_name = if renamed.is_empty() {
+                        parquet_name.clone()
+                    } else {
+                        renamed
+                    };
+                    if final_names.insert(parquet_name.clone(), final_name).is_some() {
+                        display(&format!("Duplicate Parquet column name: {parquet_name}"));
+                        let _ = std::fs::remove_file(output_path);
+                        return 198 as ST_retcode;
+                    }
+                }
+
+                let matched_count = stata_interface::get_macro("matched_var_count", false, None)
+                    .parse::<usize>()
+                    .unwrap_or(0);
+                let matched_names: std::collections::HashSet<String> = (1..=matched_count)
+                    .map(|index| {
+                        stata_interface::get_macro(
+                            &format!("matched_var_{index}"),
+                            false,
+                            None,
+                        )
+                    })
+                    .collect();
+
+                let mut selected = Vec::new();
+                let mut selected_targets = std::collections::HashSet::new();
+                for column in &extracted.columns {
+                    if !matched_names.contains(&column.parquet_name) {
+                        continue;
+                    }
+                    let Some(target_name) = final_names.get(&column.parquet_name) else {
+                        display(&format!(
+                            "Stata metadata refers to a missing Parquet column: {}",
+                            column.parquet_name
+                        ));
+                        let _ = std::fs::remove_file(output_path);
+                        return 198 as ST_retcode;
+                    };
+                    if !selected_targets.insert(target_name.clone()) {
+                        display(&format!(
+                            "Stata metadata maps more than one column to target variable: {target_name}"
+                        ));
+                        let _ = std::fs::remove_file(output_path);
+                        return 198 as ST_retcode;
+                    }
+                    selected.push((column.capsule_name.clone(), target_name.clone()));
+                }
+
+                for (index, column) in extracted.columns.iter().enumerate() {
+                    stata_interface::set_macro(
+                        &format!("pq_meta_all_capsule_{}", index + 1),
+                        &column.capsule_name,
+                        false,
+                    );
+                }
+
+                for (index, (capsule_name, target_name)) in selected.iter().enumerate() {
+                    stata_interface::set_macro(
+                        &format!("pq_meta_capsule_{}", index + 1),
+                        capsule_name,
+                        false,
+                    );
+                    stata_interface::set_macro(
+                        &format!("pq_meta_target_{}", index + 1),
+                        target_name,
+                        false,
+                    );
+                }
+                stata_interface::set_macro("pq_meta_present", "1", false);
+                stata_interface::set_macro(
+                    "pq_meta_version",
+                    &extracted.format_version.to_string(),
+                    false,
+                );
+                stata_interface::set_macro(
+                    "pq_meta_count",
+                    &selected.len().to_string(),
+                    false,
+                );
+                stata_interface::set_macro(
+                    "pq_meta_all_count",
+                    &extracted.columns.len().to_string(),
+                    false,
+                );
+                return 0 as ST_retcode;
+            },
+            "validate_stata_metadata" => {
+                if subfunction_args.is_empty() {
+                    display("validate_stata_metadata requires a Parquet path");
+                    return 198 as ST_retcode;
+                }
+                if let Err(e) = stata_metadata::validate_parquet_input_metadata(subfunction_args[0]) {
+                    display(&format!("Error reading embedded Stata metadata: {e}"));
+                    return 198 as ST_retcode;
+                }
+                return 0 as ST_retcode;
             },
             "write_overflow_dta" => {
                 if !data_exists(&subfunction_args[0]) {
@@ -435,6 +568,3 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
         198 as ST_retcode
     })
 }
-
-
-
