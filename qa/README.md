@@ -39,7 +39,7 @@ Build the release plugin first with `cargo build --release`. Read the terminal `
 | File | Covers |
 |---|---|
 | `test_regressions.do` | Automatic `.parquet` resolution across save/use/describe/append/merge, variable-label-only metadata, `drop_strl` metadata filtering, and long physical names on strL columns. |
-| `test_stata_metadata.do` | Numeric and label round trips, projection, opt-out, malformed metadata, merge scope, empty data, and rejected option compositions. |
+| `test_stata_metadata.do` | Numeric and label round trips, display-format/variable-note/dataset-label/dataset-note round trips, storage-type restoration including a file whose data outgrew its saved type, format-only data with no labels, per-column `cast()` and whole-dataset `compress` overrides, a dataset label containing `$` and backticks, `pq append` dataset-level scoping, projection, opt-out, malformed metadata, merge scope, empty data, and rejected option compositions. |
 | `test_stata_metadata_multifile.do` | Partition, chunk, stream, consolidation, combined writer modes, small/unlabeled state, plain/mixed/conflicting extension preflight, `pq append`, empty inputs, selection/filter/sample/cast/compress reads, relaxed schemas, long names, mixed/conflicting footers, transaction, and generic-reader contracts. |
 | `test_package_release.do` | Help rendering, version/date and documentation sync, package-manifest targets, QA structure, and the targeted Rust lint regression. |
 

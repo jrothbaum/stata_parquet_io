@@ -2,6 +2,10 @@
 *! Read/write Parquet files with Stata
 *! Version 3.0.10 - Extend statametadata to partitioned, chunked, streamed, and consolidated
 *!                  Parquet output with uniform-footer preflight and transactional consolidation.
+*!                  Round-trip display formats, variable notes, the dataset label,
+*!                  dataset notes, and original storage types alongside variable and
+*!                  value labels.  A storage type is restored by a verified post-load
+*!                  recast, so data that no longer fits keeps the wider loaded type.
 *!         3.0.9 - Add safe_int64 option: error (naming columns) when Int64/UInt64 values exceed
 *!                 +/-2^53 and would silently lose precision as a Stata double; safe_int64 auto-loads
 *!                 the affected columns as strings instead of erroring.
@@ -108,9 +112,19 @@ capture mata: mata drop _pq_metadata_variable_labels
 capture mata: mata drop _pq_metadata_value_label_names
 capture mata: mata drop _pq_metadata_label_values
 capture mata: mata drop _pq_metadata_label_texts
+capture mata: mata drop _pq_metadata_formats
+capture mata: mata drop _pq_metadata_is_string
+capture mata: mata drop _pq_metadata_notes
+capture mata: mata drop _pq_metadata_data_notes
+capture mata: mata drop _pq_metadata_types
+capture mata: mata drop _pq_restore_storage_type()
+capture mata: mata drop _pq_recast_excluded()
+capture mata: mata drop _pq_cast_targets()
 capture mata: mata drop _pq_clear_stata_metadata()
 capture mata: mata drop _pq_capture_stata_metadata()
 capture mata: mata drop _pq_label_definition_equal()
+capture mata: mata drop _pq_read_notes()
+capture mata: mata drop _pq_write_notes()
 capture mata: mata drop _pq_apply_stata_metadata()
 capture mata: mata drop _pq_apply_stata_metadata_newvars()
 
@@ -119,6 +133,11 @@ _pq_metadata_variable_labels = J(0, 1, "")
 _pq_metadata_value_label_names = J(0, 1, "")
 _pq_metadata_label_values = asarray_create("string", 1)
 _pq_metadata_label_texts = asarray_create("string", 1)
+_pq_metadata_formats = J(0, 1, "")
+_pq_metadata_is_string = J(0, 1, .)
+_pq_metadata_notes = asarray_create("string", 1)
+_pq_metadata_data_notes = J(0, 1, "")
+_pq_metadata_types = J(0, 1, "")
 
 void _pq_clear_stata_metadata()
 {
@@ -126,11 +145,155 @@ void _pq_clear_stata_metadata()
 	external string colvector _pq_metadata_value_label_names
 	external transmorphic scalar _pq_metadata_label_values
 	external transmorphic scalar _pq_metadata_label_texts
+	external string colvector _pq_metadata_formats
+	external real colvector _pq_metadata_is_string
+	external transmorphic scalar _pq_metadata_notes
+	external string colvector _pq_metadata_data_notes
+	external string colvector _pq_metadata_types
 
 	_pq_metadata_variable_labels = J(0, 1, "")
 	_pq_metadata_value_label_names = J(0, 1, "")
 	_pq_metadata_label_values = asarray_create("string", 1)
 	_pq_metadata_label_texts = asarray_create("string", 1)
+	_pq_metadata_formats = J(0, 1, "")
+	_pq_metadata_is_string = J(0, 1, .)
+	_pq_metadata_notes = asarray_create("string", 1)
+	_pq_metadata_data_notes = J(0, 1, "")
+	_pq_metadata_types = J(0, 1, "")
+}
+
+//	Notes are stored as the characteristics note0 (count) and note1..noteN
+//	(text).  Reading and writing them through st_global() keeps the text out
+//	of command-line position entirely, so note text containing quotes,
+//	backticks, or dollar signs round-trips verbatim.
+string colvector _pq_read_notes(string scalar owner)
+{
+	string colvector notes
+	real scalar count, i
+
+	count = strtoreal(st_global(owner + "[note0]"))
+	if (count >= . | count < 1) return(J(0, 1, ""))
+	count = floor(count)
+	notes = J(count, 1, "")
+	for (i = 1; i <= count; i++) {
+		notes[i] = st_global(owner + "[note" + strofreal(i) + "]")
+	}
+	return(notes)
+}
+
+void _pq_write_notes(string scalar owner, string colvector notes)
+{
+	real scalar existing, i
+
+	//	Clear any pre-existing notes first so the restore is exact rather
+	//	than a merge with whatever the target already carried.
+	existing = strtoreal(st_global(owner + "[note0]"))
+	if (existing < . & existing >= 1) {
+		for (i = 1; i <= floor(existing); i++) {
+			st_global(owner + "[note" + strofreal(i) + "]", "")
+		}
+	}
+	st_global(owner + "[note0]", "")
+
+	if (rows(notes) == 0) return
+	for (i = 1; i <= rows(notes); i++) {
+		st_global(owner + "[note" + strofreal(i) + "]", notes[i])
+	}
+	st_global(owner + "[note0]", strofreal(rows(notes)))
+}
+
+//	Was this column's type chosen by the caller via cast()?  cast() keys are
+//	physical Parquet column names, so a column renamed on import is matched
+//	through the _pq_parquet_name characteristic that records its origin.
+real scalar _pq_recast_excluded(string scalar variable_name,
+	string rowvector skip_vars)
+{
+	string scalar physical_name
+
+	if (cols(skip_vars) == 0) return(0)
+	if (anyof(skip_vars, variable_name)) return(1)
+	physical_name = st_global(variable_name + "[_pq_parquet_name]")
+	if (physical_name != "" & anyof(skip_vars, physical_name)) return(1)
+	return(0)
+}
+
+//	Restore one variable's original Stata storage type.
+//
+//	This is deliberately a post-load recast rather than a declared type
+//	forced on the reader.  The capsule records the type the data had when
+//	it was saved; the file may since have been rewritten by another tool,
+//	widened by a relaxed multi-file union, or promoted by safe_int64, and a
+//	type asserted before the values are seen would push out-of-range values
+//	into missing at rc 0.  recast checks the actual values instead.
+//
+//	recast REFUSES a lossy change but still returns rc 0 -- it prints
+//	"N values would be changed; not changed" -- so success is confirmed by
+//	re-reading the type, never by the return code.  A refusal leaves the
+//	wider loaded type in place, which holds every value exactly.
+void _pq_restore_storage_type(string scalar variable_name,
+	string scalar wanted_type)
+{
+	real scalar variable_index
+
+	if (wanted_type == "") return
+	variable_index = st_varindex(variable_name)
+	if (variable_index == .) return
+	if (st_vartype(variable_index) == wanted_type) return
+	//	recast cannot cross the string/numeric boundary, and a read-time
+	//	cast that changed the class is the user's request, not drift to undo.
+	if (st_isstrvar(variable_index) != (substr(wanted_type, 1, 3) == "str")) {
+		return
+	}
+	_stata("quietly recast " + wanted_type + " " + variable_name)
+}
+
+//	Column names named as keys in a cast() JSON payload, e.g.
+//	{"a":"float","b":"string"}.  Only those columns had their type chosen by
+//	the caller; every other column should still get its saved type back.
+//	Scanned character by character rather than tokenised: Mata's tokens()
+//	treats the double quote as a delimiter, so it cannot be used to walk a
+//	JSON payload.  A quoted token counts as a key only when the next
+//	non-blank character is ':'; the value that follows is then skipped so
+//	its text can never be mistaken for a key.
+void _pq_cast_targets(string scalar cast_local, string scalar out_local)
+{
+	string scalar payload, targets, key
+	real scalar position, length, quote_start
+
+	payload = st_local(cast_local)
+	targets = ""
+	length = strlen(payload)
+	position = 1
+	while (position <= length) {
+		if (substr(payload, position, 1) != char(34)) {
+			position++
+			continue
+		}
+		quote_start = position + 1
+		position = quote_start
+		while (position <= length &
+			substr(payload, position, 1) != char(34)) position++
+		key = substr(payload, quote_start, position - quote_start)
+		position++
+		while (position <= length &
+			substr(payload, position, 1) == " ") position++
+		if (position <= length & substr(payload, position, 1) == ":") {
+			if (key != "") {
+				targets = targets + (targets == "" ? "" : " ") + key
+			}
+			position++
+			while (position <= length &
+				substr(payload, position, 1) == " ") position++
+			if (position <= length &
+				substr(payload, position, 1) == char(34)) {
+				position++
+				while (position <= length &
+					substr(payload, position, 1) != char(34)) position++
+				position++
+			}
+		}
+	}
+	st_local(out_local, targets)
 }
 
 void _pq_capture_stata_metadata(string scalar capsule_vars_local)
@@ -139,6 +302,11 @@ void _pq_capture_stata_metadata(string scalar capsule_vars_local)
 	external string colvector _pq_metadata_value_label_names
 	external transmorphic scalar _pq_metadata_label_values
 	external transmorphic scalar _pq_metadata_label_texts
+	external string colvector _pq_metadata_formats
+	external real colvector _pq_metadata_is_string
+	external transmorphic scalar _pq_metadata_notes
+	external string colvector _pq_metadata_data_notes
+	external string colvector _pq_metadata_types
 
 	string rowvector capsule_vars
 	string scalar value_label_name
@@ -150,6 +318,9 @@ void _pq_capture_stata_metadata(string scalar capsule_vars_local)
 	_pq_clear_stata_metadata()
 	_pq_metadata_variable_labels = J(cols(capsule_vars), 1, "")
 	_pq_metadata_value_label_names = J(cols(capsule_vars), 1, "")
+	_pq_metadata_formats = J(cols(capsule_vars), 1, "")
+	_pq_metadata_is_string = J(cols(capsule_vars), 1, .)
+	_pq_metadata_types = J(cols(capsule_vars), 1, "")
 
 	for (i = 1; i <= cols(capsule_vars); i++) {
 		variable_index = st_varindex(capsule_vars[i])
@@ -158,6 +329,11 @@ void _pq_capture_stata_metadata(string scalar capsule_vars_local)
 			_error(198)
 		}
 		_pq_metadata_variable_labels[i] = st_varlabel(variable_index)
+		_pq_metadata_formats[i] = st_varformat(variable_index)
+		_pq_metadata_is_string[i] = st_isstrvar(variable_index)
+		_pq_metadata_types[i] = st_vartype(variable_index)
+		asarray(_pq_metadata_notes, strofreal(i),
+			_pq_read_notes(capsule_vars[i]))
 		value_label_name = st_varvaluelabel(variable_index)
 		_pq_metadata_value_label_names[i] = value_label_name
 		if (value_label_name != "" &
@@ -167,6 +343,8 @@ void _pq_capture_stata_metadata(string scalar capsule_vars_local)
 			asarray(_pq_metadata_label_texts, value_label_name, texts)
 		}
 	}
+
+	_pq_metadata_data_notes = _pq_read_notes("_dta")
 }
 
 real scalar _pq_label_definition_equal(
@@ -187,21 +365,35 @@ real scalar _pq_label_definition_equal(
 	return(1)
 }
 
-void _pq_apply_stata_metadata(string scalar target_vars_local)
+void _pq_apply_stata_metadata(string scalar target_vars_local,
+	real scalar allow_recast, string scalar recast_skip_local)
 {
 	external string colvector _pq_metadata_variable_labels
 	external string colvector _pq_metadata_value_label_names
 	external transmorphic scalar _pq_metadata_label_values
 	external transmorphic scalar _pq_metadata_label_texts
+	external string colvector _pq_metadata_formats
+	external real colvector _pq_metadata_is_string
+	external transmorphic scalar _pq_metadata_notes
+	external string colvector _pq_metadata_data_notes
+	external string colvector _pq_metadata_types
 
-	string rowvector target_vars
+	string rowvector target_vars, skip_vars
 	string scalar value_label_name
 	real colvector values
 	string colvector texts
 	real scalar i, variable_index
 
 	target_vars = tokens(st_local(target_vars_local))
-	if (cols(target_vars) != rows(_pq_metadata_variable_labels)) {
+	skip_vars = tokens(st_local(recast_skip_local))
+	//	Every captured attribute is a parallel array indexed by capsule
+	//	position.  Check all of them, not just the labels, so a vector left
+	//	stale or short can never be read against the wrong variable.
+	if (cols(target_vars) != rows(_pq_metadata_variable_labels) |
+		cols(target_vars) != rows(_pq_metadata_value_label_names) |
+		cols(target_vars) != rows(_pq_metadata_formats) |
+		cols(target_vars) != rows(_pq_metadata_is_string) |
+		cols(target_vars) != rows(_pq_metadata_types)) {
 		errprintf("Invalid Stata metadata target map\n")
 		_error(198)
 	}
@@ -241,25 +433,47 @@ void _pq_apply_stata_metadata(string scalar target_vars_local)
 		}
 	}
 	for (i = 1; i <= cols(target_vars); i++) {
+		if (allow_recast & !_pq_recast_excluded(target_vars[i], skip_vars)) {
+			_pq_restore_storage_type(target_vars[i], _pq_metadata_types[i])
+		}
 		variable_index = st_varindex(target_vars[i])
 		st_varlabel(variable_index, _pq_metadata_variable_labels[i])
+		//	A read-time cast can change a column's string/numeric class; a
+		//	format from the other class would be rejected, so skip it rather
+		//	than fail the whole restore.
+		if (_pq_metadata_formats[i] != "" &
+			st_isstrvar(variable_index) == _pq_metadata_is_string[i]) {
+			st_varformat(variable_index, _pq_metadata_formats[i])
+		}
+		_pq_write_notes(target_vars[i],
+			asarray(_pq_metadata_notes, strofreal(i)))
 		value_label_name = _pq_metadata_value_label_names[i]
 		if (value_label_name != "") {
 			st_varvaluelabel(variable_index, value_label_name)
 		}
 	}
+
+	//	Dataset-level notes belong to the file being loaded, so they are
+	//	restored only on this whole-dataset path, never when appending into
+	//	an existing dataset that already has its own.
+	_pq_write_notes("_dta", _pq_metadata_data_notes)
 }
 
 void _pq_apply_stata_metadata_newvars(
 	string scalar target_vars_local,
-	string scalar existing_vars_local)
+	string scalar existing_vars_local,
+	real scalar allow_recast, string scalar recast_skip_local)
 {
 	external string colvector _pq_metadata_variable_labels
 	external string colvector _pq_metadata_value_label_names
 	external transmorphic scalar _pq_metadata_label_values
 	external transmorphic scalar _pq_metadata_label_texts
+	external string colvector _pq_metadata_formats
+	external real colvector _pq_metadata_is_string
+	external transmorphic scalar _pq_metadata_notes
+	external string colvector _pq_metadata_types
 
-	string rowvector target_vars, existing_vars
+	string rowvector target_vars, existing_vars, skip_vars
 	string scalar value_label_name
 	real colvector values
 	string colvector texts
@@ -267,7 +481,15 @@ void _pq_apply_stata_metadata_newvars(
 
 	target_vars = tokens(st_local(target_vars_local))
 	existing_vars = tokens(st_local(existing_vars_local))
-	if (cols(target_vars) != rows(_pq_metadata_variable_labels)) {
+	skip_vars = tokens(st_local(recast_skip_local))
+	//	Every captured attribute is a parallel array indexed by capsule
+	//	position.  Check all of them, not just the labels, so a vector left
+	//	stale or short can never be read against the wrong variable.
+	if (cols(target_vars) != rows(_pq_metadata_variable_labels) |
+		cols(target_vars) != rows(_pq_metadata_value_label_names) |
+		cols(target_vars) != rows(_pq_metadata_formats) |
+		cols(target_vars) != rows(_pq_metadata_is_string) |
+		cols(target_vars) != rows(_pq_metadata_types)) {
 		errprintf("Invalid Stata metadata target map\n")
 		_error(198)
 	}
@@ -303,8 +525,19 @@ void _pq_apply_stata_metadata_newvars(
 	for (i = 1; i <= cols(target_vars); i++) {
 		is_new = !anyof(existing_vars, target_vars[i])
 		if (is_new) {
+			if (allow_recast &
+				!_pq_recast_excluded(target_vars[i], skip_vars)) {
+				_pq_restore_storage_type(target_vars[i],
+					_pq_metadata_types[i])
+			}
 			variable_index = st_varindex(target_vars[i])
 			st_varlabel(variable_index, _pq_metadata_variable_labels[i])
+			if (_pq_metadata_formats[i] != "" &
+				st_isstrvar(variable_index) == _pq_metadata_is_string[i]) {
+				st_varformat(variable_index, _pq_metadata_formats[i])
+			}
+			_pq_write_notes(target_vars[i],
+				asarray(_pq_metadata_notes, strofreal(i)))
 			value_label_name = _pq_metadata_value_label_names[i]
 			if (value_label_name != "") {
 				st_varvaluelabel(variable_index, value_label_name)
@@ -1156,20 +1389,39 @@ program define pq_use_append, nclass
 				local pq_capsule_vars `pq_capsule_vars' `pq_meta_capsule_`i''
 				local pq_target_vars `pq_target_vars' `pq_meta_target_`i''
 			}
+			//	compress and compress_string_to_numeric restate every
+			//	column's type, so they suppress the recast wholesale.  cast()
+			//	names specific columns, so only those are exempted and every
+			//	other column still gets its saved type back.
+			local pq_norecast
+			if ("`compress'" != "" | "`compress_string_to_numeric'" != "") {
+				local pq_norecast norecast
+			}
+			local pq_recast_skip
+			if (`"`cast'"' != "") {
+				//	cast(string asis) keeps the caller's compound-quote
+				//	delimiters in the macro value.  Assigning bare, as the
+				//	plugin call does, strips them; keeping them would
+				//	mis-pair every quote in the JSON payload.
+				local pq_cast_payload `cast'
+				mata: _pq_cast_targets("pq_cast_payload", "pq_recast_skip")
+			}
 			if (`b_append') {
 				capture noisily pq_restore_stata_metadata_append, ///
 					capsule("`pq_metadata_capsule'") ///
 					allcapsulevars("`pq_all_capsule_vars'") ///
 					capsulevars("`pq_capsule_vars'") ///
 					targetvars("`pq_target_vars'") ///
-					existingvars("`all_vars'")
+					existingvars("`all_vars'") `pq_norecast' ///
+					recastskip("`pq_recast_skip'")
 			}
 			else {
 				capture noisily pq_restore_stata_metadata, ///
 					capsule("`pq_metadata_capsule'") ///
 					allcapsulevars("`pq_all_capsule_vars'") ///
 					capsulevars("`pq_capsule_vars'") ///
-					targetvars("`pq_target_vars'")
+					targetvars("`pq_target_vars'") `pq_norecast' ///
+					recastskip("`pq_recast_skip'")
 			}
 			local _metadata_rc = _rc
 			capture erase "`pq_metadata_capsule'"
@@ -1544,14 +1796,20 @@ program define pq_save, nclass
 	local stata_metadata_varlist
 	local metadata_capsule
 	if ("`statametadata'" != "") {
-		foreach vari in `varlist' {
-			local pq_metadata_candidate `vari'
-			mata: st_local("pq_has_var_label", st_varlabel(st_varindex(st_local("pq_metadata_candidate"))) != "" ? "1" : "0")
-			local pq_value_label : value label `vari'
-			if (`pq_has_var_label' | "`pq_value_label'" != "") {
-				local stata_metadata_vars `stata_metadata_vars' `vari'
-			}
-		}
+		//	Capsule membership is every saved variable, unconditionally.
+		//
+		//	Two reasons it is not conditioned on the data having labels.
+		//	First, display formats and storage types are metadata too, and
+		//	every variable has both, so "this dataset has nothing to carry"
+		//	is never true once they are in scope -- an unlabelled byte/int
+		//	dataset is exactly the case where the saved type matters most.
+		//	Second, any trigger that consulted formats or types would not be
+		//	storage-type independent: "default format" is defined relative to
+		//	a storage type, and a relaxed schema can give one logical column
+		//	different types in different fragments, so the trigger could fire
+		//	for one fragment of a save and not another.  statametadata is an
+		//	explicit opt-in, so the capsule is simply always written.
+		local stata_metadata_vars `varlist'
 	}
 	if ("`label'" == "label") {
 		quietly ds
@@ -1858,7 +2116,8 @@ program define pq_restore_stata_metadata, nclass
 	tempname metadata_frame
 	local _frame_created = 0
 	capture noisily {
-		syntax, CAPSule(string) ALLCapsulevars(string) CAPSulevars(string) TARGETvars(string)
+		syntax, CAPSule(string) ALLCapsulevars(string) CAPSulevars(string) ///
+			TARGETvars(string) [NORECAST RECASTSKIP(string)]
 		confirm file "`capsule'"
 		local all_capsule_count : word count `allcapsulevars'
 		local capsule_count : word count `capsulevars'
@@ -1894,7 +2153,15 @@ program define pq_restore_stata_metadata, nclass
 		}
 
 		frame `metadata_frame': mata: _pq_capture_stata_metadata("capsulevars")
-		mata: _pq_apply_stata_metadata("targetvars")
+		frame `metadata_frame': local pq_data_label : data label
+		local pq_allow_recast = ("`norecast'" == "")
+		mata: _pq_apply_stata_metadata("targetvars", `pq_allow_recast', "recastskip")
+		//	The dataset label is the one attribute Mata cannot read or write,
+		//	so it is restored here.  Compound quotes handle an embedded double
+		//	quote, and macval() is required on top of them: without it Stata
+		//	rescans the substituted text, so a label containing $name is
+		//	replaced by that global's value and a `...' sequence is dropped.
+		label data `"`macval(pq_data_label)'"'
 	}
 	local rc = _rc
 	if (`_frame_created') capture frame drop `metadata_frame'
@@ -1915,7 +2182,7 @@ program define pq_restore_stata_metadata_append, nclass
 	local _frame_created = 0
 	capture noisily {
 		syntax, CAPSule(string) ALLCapsulevars(string) CAPSulevars(string) ///
-			TARGETvars(string) EXISTINGvars(string)
+			TARGETvars(string) EXISTINGvars(string) [NORECAST RECASTSKIP(string)]
 		confirm file "`capsule'"
 		local all_capsule_count : word count `allcapsulevars'
 		local capsule_count : word count `capsulevars'
@@ -1951,7 +2218,8 @@ program define pq_restore_stata_metadata_append, nclass
 		}
 
 		frame `metadata_frame': mata: _pq_capture_stata_metadata("capsulevars")
-		mata: _pq_apply_stata_metadata_newvars("targetvars", "existingvars")
+		local pq_allow_recast = ("`norecast'" == "")
+		mata: _pq_apply_stata_metadata_newvars("targetvars", "existingvars", `pq_allow_recast', "recastskip")
 	}
 	local rc = _rc
 	if (`_frame_created') capture frame drop `metadata_frame'

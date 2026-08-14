@@ -111,6 +111,45 @@ def strip_stata_metadata(source_path: Path, output_path: Path, sentinel_path: Pa
     sentinel_path.write_text("Stata metadata removed\n", encoding="utf-8")
 
 
+def widen_column(
+    source_path: Path,
+    output_path: Path,
+    column: str,
+    sentinel_path: Path,
+) -> None:
+    """Replace one column's values with ones too large for its saved Stata type.
+
+    The Stata metadata footer is copied over verbatim, so the capsule still
+    declares the original narrow storage type while the data no longer fits
+    it.  This is the drift a reader that trusts the declared type without
+    checking the values would silently push into missing.
+    """
+
+    # The Stata capsule is a file-level key/value pair.  It is not part of the
+    # Arrow schema, so table.schema.metadata does not carry it and reading it
+    # from there would silently produce a fixture with no metadata at all.
+    footer = parquet.read_metadata(source_path).metadata or {}
+    assert METADATA_KEY in footer, f"{source_path} carries no Stata metadata"
+
+    table = parquet.ParquetFile(source_path).read()
+    metadata = dict(table.schema.metadata or {})
+    metadata[METADATA_KEY] = footer[METADATA_KEY]
+
+    index = table.schema.get_field_index(column)
+    assert index >= 0, f"column {column!r} not found in {source_path}"
+
+    row_count = table.num_rows
+    widened = pa.array(
+        [1_000_000 + position for position in range(row_count)], type=pa.int64()
+    )
+    table = table.set_column(index, pa.field(column, pa.int64()), widened)
+    parquet.write_table(table.replace_schema_metadata(metadata), output_path)
+
+    written = parquet.read_metadata(output_path).metadata or {}
+    assert METADATA_KEY in written, "Stata metadata lost while widening"
+    sentinel_path.write_text(f"{column} widened beyond its saved type\n", encoding="utf-8")
+
+
 def snapshot_dataset(path_arg: str, output_path: Path) -> None:
     root = Path(path_arg)
     files = resolve_fragments(path_arg)
@@ -268,6 +307,10 @@ def main() -> None:
         )
     elif mode == "strip":
         strip_stata_metadata(Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]))
+    elif mode == "widen-column":
+        widen_column(
+            Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4], Path(sys.argv[5])
+        )
     elif mode == "snapshot":
         snapshot_dataset(sys.argv[2], Path(sys.argv[3]))
     elif mode == "compare-snapshot":

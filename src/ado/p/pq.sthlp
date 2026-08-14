@@ -256,7 +256,8 @@ Without this option, binary columns are silently dropped on import.
 {phang}
 {opt nostatametadata} suppresses automatic restoration of metadata embedded by
 {cmd:pq save, statametadata}. For a Parquet file, directory, or glob it skips both
-footer-uniformity validation and label restoration while leaving the data read unchanged.
+footer-uniformity validation and restoration of labels, display formats, notes, and
+the dataset label, while leaving the data read unchanged.
 Files whose fragments all lack embedded metadata continue to load normally without it.
 
 {dlgtab:Options for pq merge}
@@ -351,11 +352,29 @@ additional file to a partition (like a new year of data) without overwriting the
 {opt statametadata} embeds a compressed, non-executable Stata metadata capsule in a
 Parquet footer while leaving labeled variables numeric. It supports ordinary,
 partitioned, chunked, streamed, and consolidated output; every physical fragment
-carries the same logical envelope when selected variables have label state. With no
-variable or value labels, ordinary metadata-free Parquet is written. A later
+carries the same logical envelope. Because display formats and storage types are
+metadata too, and every variable has both, the capsule is written whenever
+{opt statametadata} is specified, including for data carrying no labels or notes.
+Omit the option to write ordinary metadata-free Parquet. A later
 {cmd:pq use} validates every selected footer before loading data, then restores
 variable labels, exact value-label names,
-shared definitions, unused mappings, Unicode, and extended-missing mappings once.
+shared definitions, unused mappings, Unicode, and extended-missing mappings once,
+together with display formats, variable notes, the dataset label, dataset notes, and
+the original Stata storage types.
+A display format is restored only when the column returns with the same string or
+numeric class it was saved with, so a read-time {opt cast(json)} does not fail the
+restore. {cmd:pq append} restores metadata for newly created variables only and
+never overwrites the existing dataset label or dataset notes.
+
+{phang}
+Storage types are restored by recasting after the data is read, and only when every
+loaded value fits the saved type exactly. If the file has since been rewritten by
+another tool, widened by a {opt relaxed} union, or promoted by {opt safe_int64}, the
+wider loaded type is kept and no value is changed. {opt compress} and
+{opt compress_string_to_numeric} restate every column's type, so they leave all
+storage types as the read produced them; {opt cast(json)} names specific columns, so
+only those keep the type the caller chose while every other column still gets its
+saved type back. The rest of the metadata is restored either way.
 {opt label} and {opt statametadata} may not be combined. The combination of
 {opt partition_by(varlist)} and {opt consolidate} with {opt statametadata} is rejected.
 With {opt nopartitionoverwrite}, all existing fragments are validated before output

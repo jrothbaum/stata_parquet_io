@@ -452,13 +452,19 @@ capture noisily {
     pq save using "`unlabeled_output'", replace partition_by(group) ///
         statametadata
     capture erase "`marker'"
-    shell python3 "`checker'" inspect-plain-dataset "`unlabeled_output'" ///
+    * statametadata is an explicit opt-in, so a capsule is written even with
+    * no labels: the storage types are themselves metadata worth carrying.
+    shell python3 "`checker'" inspect-dataset "`unlabeled_output'" ///
         "`marker'" . 5
     confirm file "`marker'"
     pq use using "`unlabeled_output'", clear
     assert _N == 5
     sort id
     assert id == _n
+    local unlabeled_id_type : type id
+    local unlabeled_group_type : type group
+    assert "`unlabeled_id_type'" == "long"
+    assert "`unlabeled_group_type'" == "byte"
 }
 local _test_rc = _rc
 if (`_test_rc' == 0) {

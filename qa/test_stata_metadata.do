@@ -20,6 +20,10 @@ local long_file "`qa_dir'/stata_metadata_long_name.parquet"
 local long_copy_file "`qa_dir'/stata_metadata_long_name_copy.parquet"
 local malformed_file "`qa_dir'/stata_metadata_malformed.parquet"
 local merge_file "`qa_dir'/stata_metadata_merge_scope.parquet"
+local format_file "`qa_dir'/stata_metadata_formats.parquet"
+local type_file "`qa_dir'/stata_metadata_types.parquet"
+local widened_file "`qa_dir'/stata_metadata_widened.parquet"
+local widened_ok "`qa_dir'/stata_metadata_widened.ok"
 local generic_ok "`qa_dir'/stata_metadata_generic.ok"
 local test_count = 0
 local pass_count = 0
@@ -29,10 +33,12 @@ capture program drop polars_parquet_plugin
 program polars_parquet_plugin, plugin using("`plugin_file'")
 
 foreach path in "`metadata_file'" "`plain_file'" "`empty_file'" "`reject_file'" ///
-	"`long_file'" "`long_copy_file'" "`malformed_file'" "`merge_file'" {
+	"`long_file'" "`long_copy_file'" "`malformed_file'" "`merge_file'" ///
+	"`format_file'" "`type_file'" "`widened_file'" {
     capture erase `path'
 }
 capture erase "`generic_ok'"
+capture erase "`widened_ok'"
 
 **# Numeric and label round trip
 local ++test_count
@@ -247,11 +253,254 @@ assert "`c(varabbrev)'" == "on"
 assert !fileexists("`reject_file'")
 local ++pass_count
 
+**# Display formats, variable notes, dataset label, and dataset notes
+local ++test_count
+clear
+set obs 3
+generate double priced = 10.5 * _n
+generate int counted = _n
+generate str12 named = "row" + strofreal(_n)
+format priced %12.4f
+format counted %8.0gc
+format named %-20s
+label variable priced "Price"
+notes priced: first note
+mata: st_global("priced[note2]", "second note with " + char(34) + "quotes" + char(34) + ", a " + char(96) + "backtick" + char(39) + " and a $dollar")
+mata: st_global("priced[note0]", "2")
+notes named: string column note
+label data `"Dataset label with "quotes" and 'apostrophes'"'
+notes _dta: dataset level note one
+notes _dta: dataset level note two
+
+pq save using "`format_file'", replace statametadata
+pq use using "`format_file'", clear
+
+assert _N == 3
+local got_format_priced : format priced
+local got_format_counted : format counted
+local got_format_named : format named
+assert "`got_format_priced'" == "%12.4f"
+assert "`got_format_counted'" == "%8.0gc"
+assert "`got_format_named'" == "%-20s"
+
+mata: st_local("priced_note_count", st_global("priced[note0]"))
+mata: st_local("priced_note_1", st_global("priced[note1]"))
+mata: st_local("priced_note_2", st_global("priced[note2]"))
+mata: st_local("named_note_count", st_global("named[note0]"))
+mata: st_local("named_note_1", st_global("named[note1]"))
+assert "`priced_note_count'" == "2"
+assert `"`priced_note_1'"' == "first note"
+mata: st_local("expected_note_2", "second note with " + char(34) + "quotes" + char(34) + ", a " + char(96) + "backtick" + char(39) + " and a $dollar")
+assert `"`priced_note_2'"' == `"`expected_note_2'"'
+assert "`named_note_count'" == "1"
+assert `"`named_note_1'"' == "string column note"
+
+local got_data_label : data label
+assert `"`got_data_label'"' == `"Dataset label with "quotes" and 'apostrophes'"'
+mata: st_local("dta_note_count", st_global("_dta[note0]"))
+mata: st_local("dta_note_1", st_global("_dta[note1]"))
+mata: st_local("dta_note_2", st_global("_dta[note2]"))
+assert "`dta_note_count'" == "2"
+assert `"`dta_note_1'"' == "dataset level note one"
+assert `"`dta_note_2'"' == "dataset level note two"
+local ++pass_count
+
+**# nostatametadata skips formats, notes, and the dataset label
+local ++test_count
+clear
+pq use using "`format_file'", clear nostatametadata
+assert _N == 3
+local optout_format : format priced
+assert "`optout_format'" != "%12.4f"
+mata: st_local("optout_note_count", st_global("priced[note0]"))
+assert "`optout_note_count'" == ""
+local optout_data_label : data label
+assert `"`optout_data_label'"' == ""
+local ++pass_count
+
+**# pq append keeps the existing dataset label and dataset notes
+local ++test_count
+clear
+set obs 2
+generate double priced = 1
+generate int counted = 1
+generate str12 named = "existing"
+label data "EXISTING DATASET LABEL"
+notes _dta: existing dataset note
+pq append using "`format_file'"
+assert _N == 5
+local append_data_label : data label
+assert `"`append_data_label'"' == "EXISTING DATASET LABEL"
+mata: st_local("append_dta_note_count", st_global("_dta[note0]"))
+mata: st_local("append_dta_note_1", st_global("_dta[note1]"))
+assert "`append_dta_note_count'" == "1"
+assert `"`append_dta_note_1'"' == "existing dataset note"
+local ++pass_count
+
+**# Storage types round trip
+local ++test_count
+clear
+set obs 3
+generate byte type_byte = _n
+generate int type_int = 1000 + _n
+generate long type_long = 100000 + _n
+generate float type_float = 1.5 * _n
+generate double type_double = 1.125 * _n
+generate str12 type_str = "abc"
+label variable type_byte "Trigger the capsule"
+
+pq save using "`type_file'", replace statametadata
+pq use using "`type_file'", clear
+
+assert _N == 3
+foreach v in type_byte type_int type_long type_float type_double type_str {
+    local saved_type_`v' : type `v'
+}
+assert "`saved_type_type_byte'" == "byte"
+assert "`saved_type_type_int'" == "int"
+assert "`saved_type_type_long'" == "long"
+assert "`saved_type_type_float'" == "float"
+assert "`saved_type_type_double'" == "double"
+assert "`saved_type_type_str'" == "str12"
+assert type_byte == _n
+assert type_int == 1000 + _n
+assert type_long == 100000 + _n
+assert type_str == "abc"
+local ++pass_count
+
+**# A saved type the data outgrew is refused, not forced
+local ++test_count
+clear
+set obs 4
+generate byte narrow = _n
+generate byte keeper = _n
+label variable narrow "Narrow column"
+pq save using "`type_file'", replace statametadata
+
+capture erase "`widened_ok'"
+shell python3 "`qa_dir'/check_stata_metadata.py" widen-column ///
+    "`type_file'" "`widened_file'" "narrow" "`widened_ok'"
+confirm file "`widened_ok'"
+erase "`widened_ok'"
+
+pq use using "`widened_file'", clear
+assert _N == 4
+* The capsule declares byte; the data no longer fits, so the wider loaded
+* type must be kept and every value must survive exactly.
+local widened_type : type narrow
+assert "`widened_type'" != "byte"
+assert narrow == 1000000 + _n - 1
+assert !missing(narrow)
+* A column that still fits its saved type is unaffected by its neighbour.
+local keeper_type : type keeper
+assert "`keeper_type'" == "byte"
+assert keeper == _n
+* Non-type metadata is still restored on the same pass.
+local widened_label : variable label narrow
+assert `"`widened_label'"' == "Narrow column"
+local ++pass_count
+
+**# An explicit cast outranks the saved storage type
+local ++test_count
+clear
+set obs 3
+generate int cast_me = 100 + _n
+label variable cast_me "Cast target"
+pq save using "`type_file'", replace statametadata
+pq use using "`type_file'", clear cast(`"{"cast_me":"float"}"')
+assert _N == 3
+local cast_type : type cast_me
+assert "`cast_type'" != "int"
+assert cast_me == 100 + _n
+local cast_label : variable label cast_me
+assert `"`cast_label'"' == "Cast target"
+local ++pass_count
+
+**# Format-only and type-only data still round-trips
+local ++test_count
+clear
+set obs 3
+* No variable label, no value label, no note, no dataset label anywhere.
+generate byte bare_byte = _n
+generate int bare_int = 500 + _n
+generate double bare_priced = 1.5 * _n
+format bare_priced %12.4f
+pq save using "`type_file'", replace statametadata
+pq use using "`type_file'", clear
+assert _N == 3
+local bare_byte_type : type bare_byte
+local bare_int_type : type bare_int
+local bare_format : format bare_priced
+assert "`bare_byte_type'" == "byte"
+assert "`bare_int_type'" == "int"
+assert "`bare_format'" == "%12.4f"
+assert bare_byte == _n
+assert bare_int == 500 + _n
+local ++pass_count
+
+**# A targeted cast() exempts only its own columns
+local ++test_count
+clear
+set obs 3
+generate int cast_target = 100 + _n
+generate int cast_neighbour = 200 + _n
+label variable cast_target "Cast target"
+pq save using "`type_file'", replace statametadata
+pq use using "`type_file'", clear cast(`"{"cast_target":"float"}"')
+assert _N == 3
+local targeted_type : type cast_target
+local neighbour_type : type cast_neighbour
+* The named column keeps the caller's chosen type ...
+assert "`targeted_type'" != "int"
+* ... while an uncast neighbour still gets its saved type back.
+assert "`neighbour_type'" == "int"
+assert cast_target == 100 + _n
+assert cast_neighbour == 200 + _n
+local ++pass_count
+
+**# A dataset label containing $ and backticks survives verbatim
+local ++test_count
+clear
+set obs 2
+generate byte labelled = _n
+label variable labelled "Trigger"
+global pq_should_not_expand SHOULD_NOT_APPEAR
+mata: st_local("tricky", "keep " + char(36) + "pq_should_not_expand and " + char(96) + "tick" + char(39) + " intact")
+label data `"`macval(tricky)'"'
+pq save using "`type_file'", replace statametadata
+pq use using "`type_file'", clear
+local restored_label : data label
+mata: st_local("expected_label", "keep " + char(36) + "pq_should_not_expand and " + char(96) + "tick" + char(39) + " intact")
+mata: assert(st_local("restored_label") == st_local("expected_label"))
+assert strpos(`"`macval(restored_label)'"', "SHOULD_NOT_APPEAR") == 0
+macro drop pq_should_not_expand
+local ++pass_count
+
+**# compress also outranks the saved storage type
+local ++test_count
+clear
+set obs 3
+generate double wide_col = _n
+label variable wide_col "Compress target"
+pq save using "`type_file'", replace statametadata
+pq use using "`type_file'", clear compress
+assert _N == 3
+* compress asked for the narrowest type that holds the data; restoring the
+* saved double would undo exactly what the caller requested.
+local compress_type : type wide_col
+assert "`compress_type'" != "double"
+assert wide_col == _n
+local compress_label : variable label wide_col
+assert `"`compress_label'"' == "Compress target"
+local ++pass_count
+
 foreach path in "`metadata_file'" "`plain_file'" "`empty_file'" "`reject_file'" ///
-	"`long_file'" "`long_copy_file'" "`malformed_file'" "`merge_file'" {
+	"`long_file'" "`long_copy_file'" "`malformed_file'" "`merge_file'" ///
+	"`format_file'" "`type_file'" "`widened_file'" {
     capture erase `path'
 }
 capture erase "`generic_ok'"
+capture erase "`widened_ok'"
 local fail_count = `test_count' - `pass_count'
 display "RESULT: test_stata_metadata tests=`test_count' pass=`pass_count' fail=`fail_count'"
 capture log close
