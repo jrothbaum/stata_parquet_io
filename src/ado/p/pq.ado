@@ -1,5 +1,9 @@
 *! pq - read/write parquet files with stata
-*! Version 3.0.9 - Add safe_int64 option: error (naming columns) when Int64/UInt64 values exceed
+*! Version 4.0.0 - Add Stata metadata round-tripping (variable/value labels, notes, formats,
+*!                 characteristics) through `pq save`/`pq use`. Faster `pq use`: batched variable
+*!                 allocation cuts load time up to ~4x on large files and ~7x on wide files
+*!                 (see benchmarks.md).
+*!         3.0.9 - Add safe_int64 option: error (naming columns) when Int64/UInt64 values exceed
 *!                 +/-2^53 and would silently lose precision as a Stata double; safe_int64 auto-loads
 *!                 the affected columns as strings instead of erroring.
 *!                 Also fix regression to properly read columns with names longer than 32 characters.
