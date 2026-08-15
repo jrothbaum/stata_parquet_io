@@ -16,6 +16,7 @@ pub mod write;
 pub mod describe;
 pub mod mapping;
 pub mod stata_interface;
+pub mod stata_metadata;
 pub mod utilities;
 pub mod downcast;
 pub mod fast_cache;

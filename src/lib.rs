@@ -7,6 +7,7 @@ pub mod read;
 pub mod write;
 pub mod mapping;
 pub mod stata_interface;
+pub mod stata_metadata;
 pub mod describe;
 pub mod sql_from_if;
 pub mod utilities;
@@ -133,6 +134,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     false
                 };
                 let columns_varlist = if subfunction_args.len() > 19 { subfunction_args[19] } else { "" };
+                let skip_metadata = subfunction_args.get(20).map(|s| *s == "1").unwrap_or(false);
                 let input_format = match InputFormat::from_str(format_arg) {
                     Some(f) => f,
                     None => {
@@ -162,6 +164,7 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     infer_schema_length,
                     parse_dates,
                     columns_varlist,
+                    skip_metadata,
                 );
         
                 // Use match to handle the Result
@@ -309,6 +312,19 @@ pub extern "C" fn stata_call(argc: c_int, argv: *const *const c_char) -> ST_retc
                     Err(_e) => 198 as i32
                 };
                 return output as ST_retcode;
+            },
+            "describe_stata_metadata" => {
+                if !data_exists(&subfunction_args[0]) {
+                    stata_interface::display(&format!("File does not exist ({})",subfunction_args[0]));
+                    return 601 as ST_retcode;
+                }
+                let path = subfunction_args[0];
+                let quietly = subfunction_args.get(1).map(|s| *s == "1").unwrap_or(false);
+                if let Err(e) = stata_metadata::describe_metadata(path, quietly) {
+                    display(&format!("Error reading embedded Stata metadata: {e}"));
+                    return 198 as ST_retcode;
+                }
+                return 0 as ST_retcode;
             },
             "write_overflow_dta" => {
                 if !data_exists(&subfunction_args[0]) {

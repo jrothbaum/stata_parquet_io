@@ -452,10 +452,16 @@ fn generate_rename_map(schema: &Schema) -> HashMap<String, String> {
         *name_counts.entry(new_name.clone()).or_insert(0) += 1;
     }
     
-    // Third pass: Resolve collisions and build final rename map
+    // Third pass: Resolve collisions and build final rename map. Iterates
+    // in schema (file column) order rather than draining the processed_names
+    // HashMap directly - HashMap iteration order is randomized per-process
+    // in Rust, so which colliding column got _001 vs _002 was not stable
+    // across separate loads/saves of the same file.
     let mut used_final_names: HashSet<String> = HashSet::new();
-    
-    for (original_name, processed_name) in processed_names {
+
+    for (pl_name, _) in schema.iter() {
+        let original_name = pl_name.to_string();
+        let processed_name = processed_names.get(&original_name).unwrap().clone();
         let name_count = *name_counts.get(&processed_name).unwrap();
         
         // If the original name doesn't need modification, skip it

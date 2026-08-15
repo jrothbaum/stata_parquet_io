@@ -11,12 +11,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::Path;
 use polars_parquet::write::{BrotliLevel, GzipLevel, ZstdLevel};
 
-use crate::{downcast, stata_interface};
+use crate::{downcast, stata_interface, stata_metadata};
 use crate::stata_interface::{
     display,
     get_macro
 };
 use crate::mapping::{self, StataColumnInfo};
+use polars::prelude::KeyValueMetadata;
 
 use crate::utilities::{
     DAY_SHIFT_SAS_STATA,
@@ -111,13 +112,16 @@ pub fn write_from_stata(
         //  display(&format!("from n = {}",n_vars));
         column_info_from_macros(
             n_vars,
-            rename_list
+            rename_list.clone()
         )
     } else {
         serde_json::from_str(mapping).unwrap()
     };
     //    println!("columns     = {:?}", all_columns);
     //    println!("column info = {:?}", column_info);
+
+    let key_value_metadata = stata_metadata::metadata_from_macros(&rename_list)
+        .and_then(|envelope| stata_metadata::build_key_value_metadata(&envelope));
 
     // Convert Option<&str> to Option<String>
     let sql_if_owned = sql_if.map(|s| s.to_string());
@@ -163,17 +167,19 @@ pub fn write_from_stata(
                 compress,
                 compress_string,
                 quietly,
-                append_to_partition
+                append_to_partition,
+                key_value_metadata,
             )
         } else {
             save_no_partition(
-                path, 
-                lf_unwrapped, 
+                path,
+                lf_unwrapped,
                 compression,
                 compression_level,
                 compress,
                 compress_string,
-                quietly
+                quietly,
+                key_value_metadata,
             )
         }
     } else {
@@ -275,6 +281,7 @@ fn save_partitioned(
     compress_string: bool,
     quietly: bool,
     append_to_partition: bool,
+    key_value_metadata: Option<KeyValueMetadata>,
 )  -> Result<i32,Box<dyn Error>> {
     let mut df = match lf.collect() {
         Err(e) => {
@@ -320,6 +327,7 @@ fn save_partitioned(
         false,
         quietly,
         append_to_partition,
+        key_value_metadata,
     )
 
     // let partition_variant = PartitionVariant::ByKey {
@@ -397,8 +405,9 @@ fn save_partitioned_sequential(
     compress_string: bool,
     quietly: bool,
     append_to_partition: bool,
+    key_value_metadata: Option<KeyValueMetadata>,
 ) -> Result<i32, Box<dyn Error>> {
-    let pqo = parquet_options(compression, compression_level);
+    let pqo = parquet_options(compression, compression_level, key_value_metadata);
     
     // First, get unique partition values by collecting only the partition columns
     let partition_values_df = lf.clone()
@@ -621,7 +630,14 @@ pub fn consolidate_parquet_dir(path: &str) -> Result<i32, Box<dyn Error>> {
     // Write to a temp file next to the directory, then swap
     let temp_path = format!("{}_consolidating.parquet", path);
 
-    let pqo = parquet_options("zstd", None);
+    // Carry the source files' Stata metadata (if any) into the consolidated
+    // file - the files are expected to agree, so the first one found is
+    // representative.
+    let key_value_metadata = stata_metadata::first_parquet_file(path)
+        .and_then(|p| stata_metadata::read_metadata_from_parquet(&p))
+        .and_then(|envelope| stata_metadata::build_key_value_metadata(&envelope));
+
+    let pqo = parquet_options("zstd", None, key_value_metadata);
     let mut df = match lf.collect() {
         Ok(df) => df,
         Err(e) => {
@@ -690,6 +706,7 @@ fn save_no_partition(
     compress:bool,
     compress_string: bool,
     quietly: bool,
+    key_value_metadata: Option<KeyValueMetadata>,
 ) -> Result<i32,Box<dyn Error>> {
 
     if compress | compress_string {
@@ -721,7 +738,7 @@ fn save_no_partition(
     }
 
 
-    let pqo = parquet_options(compression, compression_level);
+    let pqo = parquet_options(compression, compression_level, key_value_metadata);
     match lf.collect() {
         Err(e) => {
             display(&format!("Parquet collect error: {}", e));
@@ -751,8 +768,10 @@ fn save_no_partition(
 fn parquet_options(
     compression:&str,
     compression_level:Option<usize>,
+    key_value_metadata: Option<KeyValueMetadata>,
 ) -> ParquetWriteOptions {
     let mut pqo = ParquetWriteOptions::default();
+    pqo.key_value_metadata = key_value_metadata;
     pqo.compression = match compression {
         "lz4" => ParquetCompression::Lz4Raw,
         "uncompressed" => ParquetCompression::Uncompressed,

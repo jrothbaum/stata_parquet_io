@@ -1091,9 +1091,23 @@ pub fn read_to_stata(
     infer_schema_length: usize,
     parse_dates: bool,
     columns_varlist: &str,
+    skip_metadata: bool,
 ) -> Result<i32, Box<dyn Error>> {
     // Clear any stale cast error from a previous call
     set_macro("pq_cast_error", "", false);
+
+    if skip_metadata || !matches!(input_format, InputFormat::Parquet) {
+        crate::stata_metadata::clear_metadata_macro();
+    } else {
+        match crate::stata_metadata::read_metadata_validated(path) {
+            Ok(Some(envelope)) => crate::stata_metadata::push_metadata_to_macros(&envelope),
+            Ok(None) => crate::stata_metadata::clear_metadata_macro(),
+            Err(e) => {
+                display(&format!("Error reading embedded Stata metadata: {e}"));
+                return Ok(198);
+            }
+        }
+    }
 
     let prof = profile_timing_enabled();
     let t_total = Instant::now();
