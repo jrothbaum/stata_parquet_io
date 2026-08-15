@@ -19,7 +19,7 @@ Generated with polars-readstat-rs 0.9.4. All times in seconds (avg per rep).
 | 100,000 × 1,000 cols | 0.19 | 2.47 | 0.12 | 0.60 | 0.03 |
 
 > Parquet trades read/write speed for portability and column projection (5-var subset vs full read).
-> `pq use` is now within ~4× of native `.dta` at 10M rows (down from ~15×) and ~4-7× faster on wide files (100-1,000 cols), after replacing pq_use's per-variable `gen` allocation loop with a single batched Mata `st_addvar`/`set obs` pass — the loop had been redundantly re-initializing all rows once per variable instead of once total.
+> `pq use` is now within ~4× of native `.dta` at 10M rows (down from ~15×), and 4-7× faster than before on wide files (100-1,000 cols).
 
 ---
 
@@ -34,7 +34,7 @@ Generated with polars-readstat-rs 0.9.4. All times in seconds (avg per rep).
 | read — 5-var subset | 1.3070 | 3.0097 (`import delimited`) | **2.3×** |
 
 > `import delimited` has no column projection; the subset comparison reads all columns then drops.
-> CSV read speedup is essentially unchanged by the `pq use` variable-allocation fix below (Parquet/SPSS/SAS) - CSV read time is dominated by text parsing, not allocation, so that fix's savings (tens of ms here) don't move the needle against a ~1.3-1.5s total.
+> CSV read speed is essentially unchanged from before.
 
 ---
 
@@ -48,7 +48,7 @@ pq-generated `.sav` files, 10 variables (int/float/str mix), 5 reps. Subset: 4 v
 | 500,000 | 0.0900 | 2.0524 | **22.8×** | 0.0710 | 1.8262 | **25.7×** |
 | 1,000,000 | 0.1452 | 4.0696 | **28.0×** | 0.1150 | 3.6776 | **32.0×** |
 
-> Unlike CSV, SPSS is a binary format read via readstat, not text-parsed - so `pq use`'s variable-allocation fix (batched Mata `st_addvar`/`set obs` instead of one `gen' per variable) shows through directly: pq's own full-read time at 1M rows dropped from 0.2604s to 0.1452s.
+> pq's own full-read time at 1M rows is down from 0.2604s to 0.1452s, about 1.8× faster than before.
 
 ---
 
@@ -61,4 +61,4 @@ pq-generated `.sav` files, 10 variables (int/float/str mix), 5 reps. Subset: 4 v
 | read — full file (157 vars) | 0.1468 | 3.8346 (`import sas`) | **26.1×** |
 | read — 5-var subset | 0.0934 | 0.1758 (`import sas`) | **1.9×** |
 
-> The full read creates all 157 variables, exactly where the batched Mata allocation fix matters most (pq's own time dropped from 0.4928s to 0.1468s, a 3.4× improvement on top of the prior native-vs-pq comparison). The 5-var subset barely moves - only 5 variables to allocate either way.
+> Full read (157 vars) is now 3.4× faster than before (0.4928s → 0.1468s); the 5-var subset is about the same.
