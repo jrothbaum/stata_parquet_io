@@ -10,15 +10,16 @@ Generated with polars-readstat-rs 0.9.4. All times in seconds (avg per rep).
 
 | rows | Stata save | pq save | Stata use | pq use | pq use (5 vars) |
 |-----:|----------:|--------:|----------:|-------:|----------------:|
-| 1,000 | 0.00 | 0.06 | 0.00 | 0.01 | 0.00 |
+| 1,000 | 0.00 | 0.02 | 0.00 | 0.03 | 0.01 |
 | 10,000 | 0.00 | 0.01 | 0.00 | 0.01 | 0.01 |
-| 100,000 | 0.00 | 0.04 | 0.00 | 0.06 | 0.02 |
-| 1,000,000 | 0.03 | 0.22 | 0.01 | 0.23 | 0.12 |
-| 10,000,000 | 0.18 | 2.45 | 0.13 | 2.29 | 1.11 |
-| 1,000,000 × 100 cols | 0.17 | 1.71 | 0.11 | 2.77 | 0.16 |
-| 100,000 × 1,000 cols | 0.16 | 1.87 | 0.11 | 2.66 | 0.03 |
+| 100,000 | 0.01 | 0.04 | 0.01 | 0.03 | 0.02 |
+| 1,000,000 | 0.03 | 0.29 | 0.02 | 0.07 | 0.05 |
+| 10,000,000 | 0.26 | 2.82 | 0.15 | 0.61 | 0.40 |
+| 1,000,000 × 100 cols | 0.20 | 2.27 | 0.13 | 0.37 | 0.06 |
+| 100,000 × 1,000 cols | 0.19 | 2.47 | 0.12 | 0.60 | 0.03 |
 
 > Parquet trades read/write speed for portability and column projection (5-var subset vs full read).
+> `pq use` is now within ~4× of native `.dta` at 10M rows (down from ~15×) and ~4-7× faster on wide files (100-1,000 cols), after replacing pq_use's per-variable `gen` allocation loop with a single batched Mata `st_addvar`/`set obs` pass — the loop had been redundantly re-initializing all rows once per variable instead of once total.
 
 ---
 
@@ -28,11 +29,12 @@ Generated with polars-readstat-rs 0.9.4. All times in seconds (avg per rep).
 
 | operation | pq (s) | native (s) | pq speedup |
 |-----------|-------:|-----------:|-----------:|
-| write | 0.2353 | 2.7897 (`export delimited`) | **11.9×** |
-| read — full file | 1.0227 | 2.6817 (`import delimited`) | **2.6×** |
-| read — 5-var subset | 0.8127 | 2.4890 (`import delimited`) | **3.1×** |
+| write | 0.2960 | 3.6590 (`export delimited`) | **12.4×** |
+| read — full file | 1.4567 | 3.2693 (`import delimited`) | **2.2×** |
+| read — 5-var subset | 1.3070 | 3.0097 (`import delimited`) | **2.3×** |
 
 > `import delimited` has no column projection; the subset comparison reads all columns then drops.
+> CSV read speedup is essentially unchanged by the `pq use` variable-allocation fix below (Parquet/SPSS/SAS) - CSV read time is dominated by text parsing, not allocation, so that fix's savings (tens of ms here) don't move the needle against a ~1.3-1.5s total.
 
 ---
 
@@ -42,9 +44,11 @@ pq-generated `.sav` files, 10 variables (int/float/str mix), 5 reps. Subset: 4 v
 
 | rows | pq full (s) | native full (s) | pq speedup | pq sub (s) | native sub (s) | sub speedup |
 |-----:|------------:|----------------:|-----------:|-----------:|---------------:|------------:|
-| 100,000 | 0.0590 | 0.3536 | **6.0×** | 0.0372 | 0.2970 | **8.0×** |
-| 500,000 | 0.1514 | 1.6950 | **11.2×** | 0.0932 | 1.5480 | **16.6×** |
-| 1,000,000 | 0.2604 | 3.2416 | **12.5×** | 0.1594 | 2.8810 | **18.1×** |
+| 100,000 | 0.0484 | 0.4264 | **8.8×** | 0.0406 | 0.3846 | **9.5×** |
+| 500,000 | 0.0900 | 2.0524 | **22.8×** | 0.0710 | 1.8262 | **25.7×** |
+| 1,000,000 | 0.1452 | 4.0696 | **28.0×** | 0.1150 | 3.6776 | **32.0×** |
+
+> Unlike CSV, SPSS is a binary format read via readstat, not text-parsed - so `pq use`'s variable-allocation fix (batched Mata `st_addvar`/`set obs` instead of one `gen' per variable) shows through directly: pq's own full-read time at 1M rows dropped from 0.2604s to 0.1452s.
 
 ---
 
@@ -54,5 +58,7 @@ pq-generated `.sav` files, 10 variables (int/float/str mix), 5 reps. Subset: 4 v
 
 | operation | pq (s) | native (s) | pq speedup |
 |-----------|-------:|-----------:|-----------:|
-| read — full file | 0.4928 | 3.2608 (`import sas`) | **6.6×** |
-| read — 5-var subset | 0.0856 | 0.1354 (`import sas`) | **1.6×** |
+| read — full file (157 vars) | 0.1468 | 3.8346 (`import sas`) | **26.1×** |
+| read — 5-var subset | 0.0934 | 0.1758 (`import sas`) | **1.9×** |
+
+> The full read creates all 157 variables, exactly where the batched Mata allocation fix matters most (pq's own time dropped from 0.4928s to 0.1468s, a 3.4× improvement on top of the prior native-vs-pq comparison). The 5-var subset barely moves - only 5 variables to allocate either way.

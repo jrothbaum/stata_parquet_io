@@ -98,11 +98,11 @@ Benchmarks run on AMD Ryzen 7 8845HS, 14 GB RAM, Windows 11, Stata 17 SE. See [b
 | Format | Operation | pq speedup vs native |
 |--------|-----------|---------------------|
 | CSV | Write | **12× faster** than `export delimited` |
-| CSV | Read | **2.6–3× faster** than `import delimited` |
-| SPSS | Read (1M rows) | **12.5× faster** than `import spss` |
-| SPSS | Read subset cols (1M rows) | **18× faster** than `import spss` |
-| SAS | Read | **6.6× faster** than `import sas` |
-| Parquet | Full read | Can be slower than `.dta` or `import parquet` |
+| CSV | Read | **2.2–2.3× faster** than `import delimited` |
+| SPSS | Read (1M rows) | **28× faster** than `import spss` |
+| SPSS | Read subset cols (1M rows) | **32× faster** than `import spss` |
+| SAS | Read (157 vars) | **26× faster** than `import sas` |
+| Parquet | Full read | Within ~4× of `.dta` at 10M rows; still slower than `.dta` on small files |
 | Parquet | Filtered read (`if(year > 2010)`) | Predicate pushdown skips rows before loading, not an option for `import parquet' |
 | Parquet | Random sample (`random_share(0.01)`) | Reproducible sample without reading the full file |
 | Parquet | Column subset on wide files | Faster than `.dta` when reading a few columns from many |
