@@ -310,7 +310,7 @@ program pq_merge
 												drop(`drop')					///
 												`drop_strl'
 		quietly save `t_save'
-		sum
+		//	sum
 	}
 	/*
 	di `"merge `origmtype' `varlist_n'`varlist' using "`t_save'",	gen(`generate') 	///"'

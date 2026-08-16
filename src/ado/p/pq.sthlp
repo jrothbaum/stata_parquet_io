@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 3.0.0 March 2026}{...}
+{* *! version 4.0.1 August 2026}{...}
 {title:Title}
 
 {phang}
@@ -15,7 +15,7 @@ Import a file into Stata (format inferred from file extension; override with {op
 {cmd:pq use} [{varlist}] {cmd:using} {it:filename} [, {opt clear} {opt append} {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt sort(varlist)} {opt preserve_order}
 {opt compress} {opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer)}
 {opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt parse_dates}
-{opt format(string)} {opt fast} {opt drop(varlist)} {opt drop_strl}
+{opt format(string)} {opt fast} {opt drop(varlist)} {opt drop_strl} {opt nostatametadata} {opt metadata_only}
 {opt cast(json)} {opt lax} {opt safe_int64} {opt binary_to_string}]
 
 {phang}
@@ -37,7 +37,7 @@ Append a file to existing data (format inferred from file extension; override wi
 {cmd:pq append} [{varlist}] {cmd:using} {it:filename} [, {opt in(range)} {opt if(expression)} {opt relaxed} {opt asterisk_to_variable(string)} {opt sort(varlist)} {opt preserve_order} {opt compress}
 {opt compress_string_to_numeric} {opt random_n(integer 0)} {opt batch_size(integer)}
 {opt random_share(float 0.0)} {opt random_seed(integer 0)} {opt infer_schema_length(integer 10000)} {opt parse_dates}
-{opt format(string)} {opt drop(varlist)} {opt drop_strl}
+{opt format(string)} {opt drop(varlist)} {opt drop_strl} {opt nostatametadata}
 {opt cast(json)} {opt lax} {opt safe_int64} {opt binary_to_string}]
 
 {phang}
@@ -66,9 +66,9 @@ Format-specific shortcuts for merge:
 Save Stata data to a file (default is Parquet):
 
 {p 8 17 2}
-{cmd:pq save} [{varlist}] {cmd:using} {it:filename} [, {opt replace} {opt if(expression)} {opt noautorename} {opt partition_by(varlist)} {opt compression(string)} {opt compression_level(integer)} {opt nopartitionoverwrite} {opt compress} 
+{cmd:pq save} [{varlist}] {cmd:using} {it:filename} [, {opt replace} {opt if(expression)} {opt noautorename} {opt partition_by(varlist)} {opt compression(string)} {opt compression_level(integer)} {opt nopartitionoverwrite} {opt compress}
 {opt compress_string_to_numeric} {opt chunk(integer 2147483647)} {opt stream} {opt consolidate}
-{opt do_not_reload} {opt label} {opt format(string)} ]
+{opt do_not_reload} {opt label} {opt statametadata} {opt format(string)} ]
 
 {phang}
 Format-specific shortcuts for save:
@@ -250,6 +250,16 @@ automatically load the affected column(s) as strings (equivalent to {cmd:cast({"
 {opt binary_to_string} decodes binary columns (Parquet {cmd:Binary} type) as strings rather than dropping them.
 Without this option, binary columns are silently dropped on import.
 
+{phang}
+{opt nostatametadata} skips restoring variable labels, value labels, notes, display formats, and storage
+types that were saved with {opt statametadata} (see {cmd:pq save}). By default this information is restored
+automatically when the file has it; use {opt nostatametadata} to load the raw data only.
+
+{phang}
+{opt metadata_only} applies a Parquet file's saved labels, value labels, notes, formats, and storage types
+to data already in memory, without re-reading the file's data. Narrow use case: only valid with {cmd:pq use}
+(not {opt append}), only for Parquet files, and only when matching data is already loaded.
+
 {dlgtab:Options for pq merge}
 
 {phang}
@@ -337,6 +347,12 @@ additional file to a partition (like a new year of data) without overwriting the
 
 {phang}
 {opt label} saves labeled variables as strings.
+
+{phang}
+{opt statametadata} saves variable labels, value labels, notes, display formats, and storage types (byte,
+int, long, float, double, etc.) along with the data. This information is restored automatically the next
+time the file is loaded with {cmd:pq use} (unless {opt nostatametadata} is specified), so columns come back
+labeled and typed the same way they were saved. Cannot be combined with {opt label}.
 
 {phang}
 {opt chunk(integer 2147483647)} sets maximum rows per chunk for streaming writes.
@@ -481,6 +497,9 @@ that would be created from the asterisk pattern.
 {pstd}Save with compression:{p_end}
 {phang2}{cmd:. pq save using compressed.parquet, replace compression(zstd) compression_level(9)}{p_end}
 
+{pstd}Save with labels, notes, formats, and storage types preserved for the next load:{p_end}
+{phang2}{cmd:. pq save using labeled.parquet, replace statametadata}{p_end}
+
 {pstd}Save as partitioned dataset:{p_end}
 {phang2}{cmd:. pq save using /output/partitioned_data, replace partition_by(year region)}{p_end}
 
@@ -523,6 +542,12 @@ and then performs a standard Stata merge operation with all the usual merge opti
 The compression options ({opt compress} and {opt compress_string_to_numeric}) can significantly improve performance
 and reduce memory usage, especially when working with large datasets or datasets with many string variables that
 could be converted to numeric.
+
+{pstd}
+{cmd:pq use} automatically picks the smallest safe numeric storage type (byte, int, long) for integer
+columns based on the values in the file, without needing {opt compress}. If the file was saved with
+{opt statametadata}, the original Stata storage type is used as well, so columns come back exactly as
+they were saved.
 
 {pstd}
 String variables longer than 2045 characters are automatically converted to strL format during import.
@@ -582,7 +607,7 @@ excellent performance for large datasets.
 {it:U.S. Census Bureau}
 
 {pstd}
-stata_parquet_io package. Version 1.5.1.
+stata_parquet_io package. Version 4.0.1.
 
 {pstd}
 For bug reports, feature requests, or other issues, please see {it:https://github.com/jrothbaum/stata_parquet_io}.
