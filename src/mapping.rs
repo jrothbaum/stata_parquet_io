@@ -44,6 +44,51 @@ impl StataType {
             StataType::Binary => "binary",
         }
     }
+
+    pub fn from_str(s: &str) -> Option<StataType> {
+        match s.to_lowercase().as_str() {
+            "byte" => Some(StataType::Byte),
+            "int" => Some(StataType::Int),
+            "long" => Some(StataType::Long),
+            "float" => Some(StataType::Float),
+            "double" => Some(StataType::Double),
+            "date" => Some(StataType::Date),
+            "time" => Some(StataType::Time),
+            "datetime" => Some(StataType::DateTime),
+            "string" => Some(StataType::String),
+            "strl" => Some(StataType::Strl),
+            "binary" => Some(StataType::Binary),
+            _ => None,
+        }
+    }
+
+    /// Rank within the plain integer family (byte < int < long < double);
+    /// `None` for anything outside it (float, string, date/time, ...).
+    fn integer_rank(&self) -> Option<u8> {
+        match self {
+            StataType::Byte => Some(1),
+            StataType::Int => Some(2),
+            StataType::Long => Some(3),
+            StataType::Double => Some(4),
+            _ => None,
+        }
+    }
+}
+
+/// Widens `verified_safe` (an integer type already confirmed safe by Parquet
+/// footer statistics) with an optionally recorded metadata type - returns
+/// whichever is WIDER, never narrower than what's verified. `recorded` is
+/// ignored outright when it isn't itself a plain integer-family type: an
+/// incompatible category is a sign the recorded value doesn't describe this
+/// column's current data, so it can't be trusted to widen anything either.
+pub fn widen_with_recorded_type(verified_safe: StataType, recorded: Option<StataType>) -> StataType {
+    match recorded.and_then(|t| t.integer_rank()) {
+        Some(recorded_rank) => {
+            let safe_rank = verified_safe.integer_rank().unwrap_or(4);
+            if recorded_rank > safe_rank { recorded.unwrap() } else { verified_safe }
+        }
+        None => verified_safe,
+    }
 }
 
 /// Returns true for Polars string-like types that need length measurement.
@@ -143,55 +188,39 @@ pub struct StataColumnInfo {
     pub stata_col: usize,  // 1-based position in the Stata dataset; 0 = unset (use enumerate index)
 }
 
+/// Resolves a Stata dtype string (as staged by pq.ado: "String"/"StrL"/
+/// "Binary"/"Byte"/"Int"/"Long"/"Float"/"Double", case-insensitive) plus its
+/// display format into the exact `StataType`, including the date/time/
+/// datetime sub-classification carried by the format rather than the dtype.
+/// Shared by save-side schema building and Stata metadata recording so the
+/// two can never resolve the same column differently.
+pub fn resolve_stata_type(dtype: &str, format: &str) -> StataType {
+    match (dtype.to_lowercase().as_ref(), format) {
+        ("string",_) => StataType::String,
+        ("strl",_) => StataType::Strl,
+        ("binary",_) => StataType::Binary,
+        ("byte",_) => StataType::Byte,
+        ("int",_) => match_var_format_stata(format).unwrap_or(StataType::Int),
+        ("long",_) => match_var_format_stata(format).unwrap_or(StataType::Long),
+        ("float",_) => match_var_format_stata(format).unwrap_or(StataType::Float),
+        ("double",_) => match_var_format_stata(format).unwrap_or(StataType::Double),
+        (_,_) => panic!("Unknown Stata type: {}", dtype),
+    }
+}
+
 pub fn stata_column_info_to_schema(
     column_info: &Vec<StataColumnInfo>
 ) -> Schema {
     let fields: Vec<Field> = column_info.iter().map(|col| {
-        // Parse the stata_type string to StataType enum
-        
-        let stata_type = match (col.dtype.to_lowercase().as_ref(),&col.format) {
-            ("string",_) => StataType::String,
-            ("strl",_) => StataType::Strl,
-            ("binary",_) => StataType::Binary,
-            ("byte",_) => StataType::Byte,
-            ("int",_) => {
-                let date_type = match_var_format_stata(&col.format);
-                match date_type {
-                    None => StataType::Int,
-                    _ => date_type.unwrap()
-                }
-            },
-            ("long",_) => {
-                let date_type = match_var_format_stata(&col.format);
-                match date_type {
-                    None => StataType::Long,
-                    _ => date_type.unwrap()
-                }
-            },
-            ("float",_) => {
-                let date_type = match_var_format_stata(&col.format);
-                match date_type {
-                    None => StataType::Float,
-                    _ => date_type.unwrap()
-                }
-            },
-            ("double",_) => {
-                let date_type = match_var_format_stata(&col.format);
-                match date_type {
-                    None => StataType::Double,
-                    _ => date_type.unwrap()
-                }
-            },
-            (_,_) => panic!("Unknown Stata type: {}", &col.dtype),
-        };
-        
+        let stata_type = resolve_stata_type(&col.dtype, &col.format);
+
         // Map StataType to Polars DataType
         let polars_dtype = map_stata_to_polars(&stata_type);
-        
+
         // Create a Field with the column name and data type
         Field::new(PlSmallStr::from(&col.name), polars_dtype)
     }).collect();
-    
+
     Schema::from_iter(fields)
 }
 
@@ -238,6 +267,7 @@ pub fn schema_with_stata_types(
     quietly:bool,
     detailed:bool,
     precomputed_string_lengths: Option<&HashMap<PlSmallStr, usize>>,
+    type_overrides: Option<&HashMap<String, StataType>>,
 ) {
 
     if !quietly {
@@ -260,7 +290,15 @@ pub fn schema_with_stata_types(
     let mut all_columns:Vec<ColumnInfo> = Vec::with_capacity(schema.len());
     for (i,(name, dtype)) in schema.iter().enumerate() {
         let char_length = hash_strings.get(name).unwrap_or(&0);
-        let stata_type = map_polars_to_stata(dtype,*char_length);
+        // A verified-safe override (footer-stats-checked, optionally widened
+        // by recorded metadata - see parquet_stats/describe) replaces the
+        // conservative default mapping for that column only. Absent for any
+        // column whose safety couldn't be verified cheaply, which just
+        // falls through to the same upcast-by-default behavior as always.
+        let stata_type = type_overrides
+            .and_then(|m| m.get(name.as_str()))
+            .copied()
+            .unwrap_or_else(|| map_polars_to_stata(dtype, *char_length));
 
         let column_info = ColumnInfo {
             index: i,

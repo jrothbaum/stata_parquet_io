@@ -20,6 +20,7 @@ pub mod stata_metadata;
 pub mod utilities;
 pub mod downcast;
 pub mod fast_cache;
+pub mod parquet_stats;
 
 #[cfg(debug_assertions)]
 mod sql_from_if;

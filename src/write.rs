@@ -120,7 +120,7 @@ pub fn write_from_stata(
     //    println!("columns     = {:?}", all_columns);
     //    println!("column info = {:?}", column_info);
 
-    let key_value_metadata = stata_metadata::metadata_from_macros(&rename_list)
+    let key_value_metadata = stata_metadata::metadata_from_macros(&rename_list, &column_info)
         .and_then(|envelope| stata_metadata::build_key_value_metadata(&envelope));
 
     // Convert Option<&str> to Option<String>

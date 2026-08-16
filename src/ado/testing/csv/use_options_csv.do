@@ -91,7 +91,11 @@ assert c_2[1] == "E"
 pq use_csv * using "`tcsv'.csv", clear compress
 assert _N == 100000
 local c4type: type c_4
-assert "`c4type'" == "int"
+//	c_4 = floor(runiform()*100), i.e. 0-99: fits Stata byte exactly. compress
+//	used to report this one level wider ("int") because the type label was
+//	computed from the pre-narrowing default mapping instead of the type
+//	compress itself had already picked - fixed to report the real type.
+assert "`c4type'" == "byte"
 
 // glob reads should work for CSV
 create_data, n_rows(100) n_cols(10)

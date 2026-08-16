@@ -7,12 +7,14 @@ use std::time::{Duration, Instant};
 use glob::glob;
 
 use crate::fast_cache::{self, FastCacheKey, resolve_varlist};
-use crate::mapping::{is_string_type, schema_with_stata_types};
+use crate::mapping::{is_string_type, schema_with_stata_types, widen_with_recorded_type, StataType};
 use crate::stata_interface::{
     ST_retcode,
     display,
     set_macro,
 };
+use crate::stata_metadata::read_metadata_validated;
+use crate::parquet_stats::integer_ranges_for_path;
 use crate::utilities::{ms, normalize_path_separators, profile_timing_enabled};
 
 use crate::read::{
@@ -24,7 +26,9 @@ use crate::read::{
 
 use crate::downcast::{
     apply_user_cast,
+    find_optimal_integer_type,
     intelligent_downcast,
+    polars_type_to_stata_type,
     validate_user_type,
     DowncastConfig,
 };
@@ -394,6 +398,22 @@ pub fn file_summary(
         t_stats += t0.elapsed();
     }
 
+    // `compress` already ran a real scan (intelligent_downcast, above) to
+    // pick the tightest safe integer DataType per column - that's strictly
+    // more authoritative than footer stats, so map it directly (Int8->Byte,
+    // not the conservative Int8->Int upcast `map_polars_to_stata` uses when
+    // it has no evidence about the actual data). Without this, `compress`'s
+    // narrowing was silently re-widened one level by that same default
+    // mapping when schema_with_stata_types ran on the already-narrowed
+    // schema. Parquet without `compress` uses the cheap footer-stats path.
+    let type_overrides = if compress {
+        direct_integer_type_overrides(&matched_schema, &cast_map)
+    } else if matches!(input_format, InputFormat::Parquet) {
+        safe_integer_type_overrides(path, &matched_schema, &cast_map)
+    } else {
+        HashMap::new()
+    };
+
     let t0 = Instant::now();
     schema_with_stata_types(
         &df,
@@ -401,6 +421,7 @@ pub fn file_summary(
         quietly,
         detailed,
         if detailed { Some(&string_lengths) } else { None },
+        if type_overrides.is_empty() { None } else { Some(&type_overrides) },
     );
 
     let n_vars = matched_schema.len();
@@ -435,6 +456,115 @@ pub fn file_summary(
     }
 
     return 0 as ST_retcode;
+}
+
+/// Maps every already-narrowed integer column straight to its Stata type
+/// (Int8->Byte, Int16->Int, Int32->Long - no upcast), for use after
+/// `compress` has already picked that DataType via a real min/max scan.
+/// Unlike `safe_integer_type_overrides`, no independent verification is
+/// needed here: `intelligent_downcast` only ever narrows to a type the
+/// actual observed values already fit. Excludes: Int64/UInt64 (Stata has no
+/// native 64-bit integer - stays on the existing double/safe_int64-string
+/// path unchanged) and any column the caller already cast explicitly
+/// (`cast()` or the safe_int64 auto-promotion), whose requested type must
+/// win outright rather than be silently re-decided here.
+fn direct_integer_type_overrides(
+    schema: &Schema,
+    cast_map: &HashMap<String, String>,
+) -> HashMap<String, StataType> {
+    schema
+        .iter()
+        .filter_map(|(name, dtype)| {
+            if cast_map.contains_key(name.as_str()) {
+                return None;
+            }
+            if !matches!(
+                dtype,
+                DataType::Int8 | DataType::Int16 | DataType::Int32 |
+                DataType::UInt8 | DataType::UInt16 | DataType::UInt32
+            ) {
+                return None;
+            }
+            let type_str = polars_type_to_stata_type(&format!("{:?}", dtype).to_lowercase());
+            StataType::from_str(type_str).map(|t| (name.to_string(), t))
+        })
+        .collect()
+}
+
+/// PARQUET, non-compress reads only: a safe, tighter-than-default integer
+/// type per column, computed from Parquet row-group footer statistics (no
+/// data scan) and optionally widened by a Stata type recorded in the file's
+/// own metadata footer. A column appears here ONLY when the footer stats
+/// independently verify the range is safe - a stale, wrong, or absent
+/// recorded type can never narrow a column below that verified floor, and a
+/// column whose stats can't be cheaply verified is simply absent, leaving it
+/// to fall back to the existing conservative default mapping in
+/// `map_polars_to_stata` (see mapping::schema_with_stata_types). Excludes:
+/// Int64/UInt64 (Stata has no native 64-bit integer - the existing
+/// double/safe_int64-string handling in `find_int64_precision_overflow_columns`
+/// is a separate, deliberate safety mechanism this doesn't touch) and any
+/// column the caller already cast explicitly, same reasoning as above.
+fn safe_integer_type_overrides(
+    path: &str,
+    schema: &Schema,
+    cast_map: &HashMap<String, String>,
+) -> HashMap<String, StataType> {
+    let integer_cols: Vec<String> = schema
+        .iter()
+        .filter_map(|(name, dtype)| {
+            if cast_map.contains_key(name.as_str()) {
+                return None;
+            }
+            if matches!(
+                dtype,
+                DataType::Int8 | DataType::Int16 | DataType::Int32 |
+                DataType::UInt8 | DataType::UInt16 | DataType::UInt32
+            ) {
+                Some(name.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if integer_cols.is_empty() {
+        return HashMap::new();
+    }
+
+    let verified_ranges = integer_ranges_for_path(path, &integer_cols);
+    if verified_ranges.is_empty() {
+        return HashMap::new();
+    }
+
+    // Best-effort: a conflicting or unreadable metadata footer just means no
+    // recorded type to widen with - never an error surfaced from `describe`,
+    // which has never required metadata to be present or consistent.
+    let recorded_types: HashMap<String, StataType> = read_metadata_validated(path)
+        .ok()
+        .flatten()
+        .map(|envelope| {
+            envelope
+                .variables
+                .into_iter()
+                .filter_map(|(name, meta)| {
+                    meta.stata_type
+                        .as_deref()
+                        .and_then(StataType::from_str)
+                        .map(|t| (name, t))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut overrides = HashMap::with_capacity(verified_ranges.len());
+    for (name, (min_val, max_val)) in verified_ranges {
+        let optimal_dtype = find_optimal_integer_type(min_val, max_val, true);
+        let type_str = polars_type_to_stata_type(&format!("{:?}", optimal_dtype).to_lowercase());
+        let Some(verified_safe) = StataType::from_str(type_str) else { continue };
+        let recorded = recorded_types.get(&name).copied();
+        overrides.insert(name, widen_with_recorded_type(verified_safe, recorded));
+    }
+    overrides
 }
 
 /// Stata doubles only preserve integer precision up to 2^53. Return the subset of

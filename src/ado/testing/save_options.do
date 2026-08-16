@@ -122,7 +122,12 @@ local c10type: type c_10
 assert "`c10type'" == "double"
 
 local c1type: type c_1
-assert "`c1type'" == "double"
+//	c_1 here is the `if(c_1 <= 1000 | c_1 > 90000)' subset of the original
+//	c_1=_n (n_rows=100000): values up to ~100000, which fits Stata long
+//	(max 2147483620) - compress narrows it to that at save time, and a
+//	plain (non-compress) `pq use' now reports that real type from footer
+//	stats instead of the old default "double" upcast.
+assert "`c1type'" == "long"
 
 clear
 set obs 4

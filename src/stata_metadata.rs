@@ -5,6 +5,7 @@ use std::path::Path;
 use polars::prelude::{KeyValueMetadata, PlSmallStr};
 use serde::{Deserialize, Serialize};
 
+use crate::mapping::{resolve_stata_type, StataColumnInfo};
 use crate::stata_interface::{display, get_macro, set_macro};
 
 /// Resolves a `pq use` path (file, directory, or glob) to every Parquet
@@ -49,6 +50,16 @@ pub struct VariableMetadata {
     // Stata display format (e.g. "%9.2f", "%td") as it was at save time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
+    // Stata storage type at save time ("byte", "int", "long", "float",
+    // "double", "date", "time", "datetime"). Read-side treats this as a
+    // hint, never a guarantee: it is only trusted when Parquet row-group
+    // footer statistics independently confirm the file's actual values
+    // still fit it (see parquet_stats::integer_ranges_for_path) - a stale
+    // or foreign value here can only widen the read type, never narrow it
+    // below what the real data requires. Not recorded for string/strL/
+    // binary columns; footer stats can't verify string length the same way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stata_type: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -72,13 +83,23 @@ pub struct StataMetadataEnvelope {
 /// reads the same kind of indexed macros for plain column info. Returns
 /// None when the caller didn't request statametadata (pq_meta_count unset
 /// or zero), so ordinary saves pay no extra cost here.
+///
+/// `column_info` (already resolved, post-rename - the same list used to
+/// build the write schema) supplies the exact Stata storage type per
+/// variable, so it can be recorded without re-deriving it from macros.
 pub fn metadata_from_macros(
     rename_list: &HashMap<PlSmallStr, PlSmallStr>,
+    column_info: &[StataColumnInfo],
 ) -> Option<StataMetadataEnvelope> {
     let n_vars: usize = get_macro("pq_meta_count", false, None).parse().unwrap_or(0);
     if n_vars == 0 {
         return None;
     }
+
+    let column_info_by_name: HashMap<&str, &StataColumnInfo> = column_info
+        .iter()
+        .map(|c| (c.name.as_str(), c))
+        .collect();
 
     let mut envelope = StataMetadataEnvelope {
         version: STATA_METADATA_VERSION,
@@ -118,8 +139,12 @@ pub fn metadata_from_macros(
         let value_label = get_macro(&format!("pq_meta_vallabel_{i}"), false, None);
         let notes = read_indexed_list(&format!("pq_meta_note_{i}"));
         let var_format = get_macro(&format!("pq_meta_format_{i}"), false, None);
+        let stata_type = column_info_by_name
+            .get(parquet_name.as_str())
+            .map(|c| resolve_stata_type(&c.dtype, &c.format).to_string().to_string());
 
-        if label.is_empty() && value_label.is_empty() && notes.is_empty() && var_format.is_empty() {
+        if label.is_empty() && value_label.is_empty() && notes.is_empty()
+            && var_format.is_empty() && stata_type.is_none() {
             continue;
         }
 
@@ -138,6 +163,7 @@ pub fn metadata_from_macros(
                 value_label: if value_label.is_empty() { None } else { Some(value_label) },
                 notes,
                 format: if var_format.is_empty() { None } else { Some(var_format) },
+                stata_type,
             },
         );
     }

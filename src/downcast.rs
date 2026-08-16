@@ -165,7 +165,7 @@ fn safe_shrink_integers(
 
 
 /// Find the smallest integer type that can hold the given range
-fn find_optimal_integer_type(
+pub fn find_optimal_integer_type(
     min_val: i64,
     max_val: i64,
     not_boolean: bool,

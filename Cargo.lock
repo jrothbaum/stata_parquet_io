@@ -2892,7 +2892,7 @@ dependencies = [
 
 [[package]]
 name = "stata_parquet_io"
-version = "4.0.0"
+version = "4.0.1"
 dependencies = [
  "env_logger",
  "glob",
