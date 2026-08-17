@@ -1110,7 +1110,7 @@ void _pq_batch_addvar(string scalar names_sp, string scalar types_sp)
 	names = tokens(names_sp)
 	types = tokens(types_sp)
 	for (i = 1; i <= cols(names); i++) {
-		st_addvar(types[i], names[i])
+		(void) st_addvar(types[i], names[i])
 	}
 }
 end
@@ -1125,7 +1125,7 @@ void _pq_widen_numeric(string scalar oldname, string scalar newtype, string scal
 	real colvector vnew
 
 	st_view(vold, ., oldname)
-	st_addvar(newtype, newname)
+	(void) st_addvar(newtype, newname)
 	st_view(vnew, ., newname)
 	vnew[.,.] = vold
 }
