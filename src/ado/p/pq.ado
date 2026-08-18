@@ -101,6 +101,9 @@ program define pq
 	else if ("`todo'" == "metadata") {
 		pq_metadata `0'
 	}
+	else if ("`todo'" == "set_threads") {
+		pq_set_threads `0'
+	}
     else {
         disp as err `"Unknown sub-comand `todo'"'
         exit 198
@@ -1962,6 +1965,33 @@ program pq_register_plugin
             }
 		}
 	}
+end
+
+
+//	Sets the number of threads polars (and pq's own parallel read path) uses,
+//	via the POLARS_MAX_THREADS environment variable. Polars builds its global
+//	thread pool lazily the first time it is actually used, and only reads that
+//	variable once - so this only works before any other pq command (use,
+//	describe, save, merge, metadata, ...) has run in the current Stata session.
+//	Once that has happened, the plugin refuses and explains why.
+capture program drop pq_set_threads
+program pq_set_threads
+	version 16.0
+	syntax anything
+
+	local n_threads `anything'
+	capture confirm integer number `n_threads'
+	if (_rc) {
+		display as error `"pq set_threads requires a positive integer, passed "`n_threads'""'
+		exit 198
+	}
+	if (`n_threads' < 1) {
+		display as error `"pq set_threads requires a positive integer, passed "`n_threads'""'
+		exit 198
+	}
+
+	pq_register_plugin
+	plugin call polars_parquet_plugin, set_threads "`n_threads'"
 end
 
 

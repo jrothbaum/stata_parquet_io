@@ -64,8 +64,8 @@ foreach fi in `files_pandas' {
 
 //	https://opportunityinsights.org/data/
 //	https://www.nber.org/research/data
-local path_econ `test_root'\test_data\econ_data
-local files_econ Table_4_cz_by_cohort_estimates Table_5_national_estimates_by_cohort_primary_outcomes county_population 20zpallagi Fin_Patent_Data_for_Posting.20220403 tm_assignment LLM_match_formulas_all tm_assignee
+local path_econ `test_root'\test_data\econ
+local files_econ Table_4_cz_by_cohort_estimates Table_5_national_estimates_by_cohort_primary_outcomes county_population ai_model_predictions fhv_tripdata_2025-01 /*20zpallagi Fin_Patent_Data_for_Posting.20220403 tm_assignment LLM_match_formulas_all tm_assignee */
 foreach fi in `files_econ' {
 	//	County should match, but there's a garbled character that gets messed up in the comparison despite looking the same
 	local do_assert = "`fi'" != "county_population"

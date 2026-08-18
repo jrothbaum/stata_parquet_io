@@ -9,7 +9,7 @@ program define benchmark_parquet_io_data
 					n_rows(integer)
 	
 	clear
-	set obs `n_rows'
+	
 	local cols_created = 0
 
 	if `n_cols' > `cols_created' {
@@ -35,7 +35,7 @@ program define benchmark_parquet_io_data
 		local subset_to_load `subset_to_load' c_`i'
 	}
 	
-	
+	set obs `n_rows'
 	
 	tempfile path_save_root
 	

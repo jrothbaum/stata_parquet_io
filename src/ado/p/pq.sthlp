@@ -95,6 +95,12 @@ Describe contents of a file:
 {p 8 17 2}
 {cmd:pq describe_csv} {cmd:using} {it:filename} [, {opt quietly} {opt detailed} {opt infer_schema_length(integer 10000)} {opt parse_dates}]
 
+{phang}
+Set the number of threads polars uses for the rest of the Stata session:
+
+{p 8 17 2}
+{cmd:pq set_threads} {it:#}
+
 {marker description}{...}
 {title:Description}
 
@@ -109,6 +115,19 @@ The package supports five main operations: {cmd:use} (load data), {cmd:append} (
 {cmd:merge} (join with existing data), {cmd:save} (write data), and {cmd:describe} (examine file structure).
 Shortcuts {cmd:use_sas}, {cmd:use_spss}, {cmd:use_csv}, {cmd:merge_sas}, {cmd:merge_spss}, {cmd:merge_csv}, {cmd:save_spss}, {cmd:save_csv}, {cmd:describe_sas}, {cmd:describe_spss}, and {cmd:describe_csv} are provided for common
 non-Parquet workflows.
+
+{pstd}
+{cmd:pq set_threads} {it:#} sets the number of threads polars uses (for reading, writing, filtering, etc.) for the
+rest of the Stata session, by setting the {cmd:POLARS_MAX_THREADS} environment variable. By default polars uses all
+available cores, so this is mainly useful to leave headroom on a shared machine or to get deterministic timings.
+Polars builds its thread pool the first time it actually does any work and only checks {cmd:POLARS_MAX_THREADS} at
+that point, so {cmd:pq set_threads} only has an effect if it is the {bf:first} {cmd:pq} command run in the session -
+before any {cmd:pq use}, {cmd:append}, {cmd:merge}, {cmd:save}, {cmd:describe}, or {cmd:metadata}. If any of those
+have already run, {cmd:pq set_threads} will display an error explaining that it is too late; restart Stata (or at
+least reload the plugin) to change it. There are two ways to control the thread count, pick whichever fits your
+workflow: (1) run {cmd:pq set_threads} {it:#} as the very first line of your Stata session/do-file, or (2) set the
+{cmd:POLARS_MAX_THREADS} environment variable (to the OS, e.g. in a shell profile or launch script) before Stata
+itself starts - useful when you cannot guarantee {cmd:pq set_threads} will run first, e.g. in batch jobs.
 
 {pstd}
 {bf:IMPORTANT NOTE FOR MAC ARM USERS}:
@@ -394,6 +413,16 @@ that would be created from the asterisk pattern.
 
 {marker examples}{...}
 {title:Examples}
+
+{dlgtab:Setting the thread count}
+
+{pstd}Limit polars to 4 threads before doing anything else with {cmd:pq} (must be the first {cmd:pq} command run):{p_end}
+{phang2}{cmd:. pq set_threads 4}{p_end}
+{phang2}{cmd:. pq use using example.parquet, clear}{p_end}
+
+{pstd}Equivalently, set the environment variable before Stata itself starts (e.g. in a shell profile or
+batch-launch script), instead of calling {cmd:pq set_threads}:{p_end}
+{phang2}{cmd:$ export POLARS_MAX_THREADS=4}{p_end}
 
 {dlgtab:Loading data}
 
