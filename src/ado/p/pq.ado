@@ -1,5 +1,6 @@
 *! pq - read/write parquet files with stata
-*! Version 4.0.1 - Add Stata metadata round-tripping (variable/value labels, notes, formats,
+*! Version 4.0.2 - Allow limit core usage with pq set_threads
+*!         4.0.1 - Add Stata metadata round-tripping (variable/value labels, notes, formats,
 *!                 characteristics) through `pq save`/`pq use`. Faster `pq use`: batched variable
 *!                 allocation cuts load time up to ~4x on large files and ~7x on wide files
 *!                 (see benchmarks.md).  Add metadata roundtrip of stata types.

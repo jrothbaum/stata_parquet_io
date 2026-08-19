@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 4.0.1 August 2026}{...}
+{* *! version 4.0.2 August 2026}{...}
 {title:Title}
 
 {phang}
@@ -636,7 +636,7 @@ excellent performance for large datasets.
 {it:U.S. Census Bureau}
 
 {pstd}
-stata_parquet_io package. Version 4.0.1.
+stata_parquet_io package. Version 4.0.2.
 
 {pstd}
 For bug reports, feature requests, or other issues, please see {it:https://github.com/jrothbaum/stata_parquet_io}.
