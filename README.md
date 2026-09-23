@@ -98,7 +98,7 @@ Benchmarks run on AMD Ryzen 7 8845HS, 14 GB RAM, Windows 11, Stata 17 SE. See [b
 | Format | Operation | pq speedup vs native |
 |--------|-----------|---------------------|
 | CSV | Write | **12× faster** than `export delimited` |
-| CSV | Read | **2.2–2.3× faster** than `import delimited` |
+| CSV | Read | **2.2× faster** than `import delimited` |
 | SPSS | Read (1M rows) | **28× faster** than `import spss` |
 | SPSS | Read subset cols (1M rows) | **32× faster** than `import spss` |
 | SAS | Read (157 vars) | **26× faster** than `import sas` |
