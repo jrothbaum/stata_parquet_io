@@ -182,11 +182,21 @@ pub fn file_summary(
     // doubles. Doubles only preserve integer precision up to +/-2^53, so values
     // outside that range silently collide (distinct ids can become indistinguishable).
     // Columns the user already cast explicitly above are left alone.
+    // Only columns that will actually be read: checking unrequested columns costs a
+    // full scan of them for nothing. Casts don't rename columns, so resolving against
+    // the scan schema matches the resolution done on the final schema below (which
+    // also reports any varlist error).
+    let scan_col_strs: Vec<&str> = scan_schema.iter_names().map(|s| s.as_str()).collect();
+    let requested_cols: Option<std::collections::HashSet<String>> =
+        resolve_varlist(columns_varlist, &scan_col_strs, drop_list)
+            .ok()
+            .map(|cols| cols.into_iter().collect());
     let int64_candidates: Vec<PlSmallStr> = scan_schema
         .iter()
         .filter_map(|(name, dtype)| {
             if matches!(dtype, DataType::Int64 | DataType::UInt64)
                 && !cast_map.contains_key(name.as_str())
+                && requested_cols.as_ref().map_or(true, |cols| cols.contains(name.as_str()))
             {
                 Some(name.clone())
             } else {
@@ -587,7 +597,7 @@ fn find_int64_precision_overflow_columns(
         })
         .collect();
 
-    let stats_df = df.clone().select(stats_exprs).collect()?;
+    let stats_df = df.clone().select(stats_exprs).collect_with_engine(Engine::Streaming)?;
 
     let mut overflow_cols = Vec::new();
     for name in candidates {
@@ -624,7 +634,9 @@ fn collect_row_count_and_string_lengths(
         );
     }
 
-    let result_df = df.clone().select(exprs).collect()?;
+    // Streaming keeps memory bounded: the in-memory engine would materialize every
+    // (filtered) string column across all files before taking the max.
+    let result_df = df.clone().select(exprs).collect_with_engine(Engine::Streaming)?;
 
     let n_rows = result_df
         .column("__n_rows")?
@@ -683,7 +695,7 @@ pub fn get_row_count(lazy_df: &LazyFrame) -> Result<usize, PolarsError> {
 
     let count_df = lazy_df.clone()
                                 .select([len().alias("n_rows")])
-                                .collect()
+                                .collect_with_engine(Engine::Streaming)
                                 .unwrap();
 
     let count = count_df.column("n_rows").unwrap().get(0).unwrap().try_extract::<usize>().unwrap();
@@ -717,8 +729,13 @@ fn collect_row_count_and_string_lengths_from_df(
     (n_rows, string_lengths)
 }
 
-/// Sum file sizes for path (supports glob patterns).
+/// Sum file sizes for path (supports glob patterns and hive-partitioned directories).
 fn total_file_size_bytes(path: &str) -> u64 {
+    // A directory's own metadata length is 0 (or tiny), which would make any hive
+    // dataset look small enough for fast mode and collect it whole into memory.
+    if std::path::Path::new(path).is_dir() {
+        return dir_size_bytes(std::path::Path::new(path));
+    }
     let normalized = normalize_path_separators(path);
     if let Ok(paths) = glob(&normalized) {
         let total: u64 = paths
@@ -730,4 +747,21 @@ fn total_file_size_bytes(path: &str) -> u64 {
     }
     // Fallback: single-file stat (handles non-glob paths that didn't match above)
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX)
+}
+
+fn dir_size_bytes(dir: &std::path::Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return u64::MAX;
+    };
+    entries
+        .filter_map(|e| e.ok())
+        .map(|e| {
+            let p = e.path();
+            if p.is_dir() {
+                dir_size_bytes(&p)
+            } else {
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0)
+            }
+        })
+        .fold(0u64, |acc, n| acc.saturating_add(n))
 }

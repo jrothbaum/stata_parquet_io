@@ -1325,30 +1325,60 @@ pub fn read_to_stata(
     }
     }
 
+    // Random sample: stream positions (within the filtered rows) to keep, already
+    // narrowed to the in() window. Applied in the write callback when possible.
     let sample_share = random_share > 0.0;
+    let mut sample_positions: Option<Arc<Vec<u64>>> = None;
+    // Rows reaching the write callback (all filtered rows when sampling inline).
+    let mut streamed_rows = n_rows;
     if sample_share {
         let t0 = Instant::now();
-        let random_seed_option = if random_seed == 0 {
-            None
-        } else {
-            Some(random_seed)
-        };
-
-        df = match df.collect() {
-            Ok(df) => {
-                let n = (random_share * df.height() as f64).round() as u32;
-                df.sample_n(
-                        &Series::new("n".into(), vec![n]),
-                        false,
-                        false,
-                        random_seed_option
-                    )?.lazy()
+        // Population size: describe already counted the (filtered) rows; only
+        // recount if that macro is unavailable.
+        let population = match described_row_count() {
+            Some(n) => n,
+            None => match df
+                .clone()
+                .select([len().alias("n_rows")])
+                .collect_with_engine(Engine::Streaming)
+                .and_then(|d| d.column("n_rows")?.get(0)?.try_extract::<usize>())
+            {
+                Ok(n) => n,
+                Err(e) => {
+                    display(&format!("Error counting rows for random sample: {}", e));
+                    return Ok(198);
+                }
             },
-            Err(e) => {
-                display(&format!("Error in SQL if statement: {}", e));
-                return Ok(198);
-            }
         };
+        // in() keeps sampled rows offset..offset + n_rows, so drawing more would only
+        // make the kept rows a non-uniform subset of the sample.
+        let n_sample = ((random_share * population as f64).round() as usize)
+            .min(population)
+            .min(offset.saturating_add(n_rows));
+        let seed = if random_seed == 0 { random_entropy_seed() } else { random_seed };
+
+        // Positions are drawn up front so the sample depends only on the seed, not on
+        // batch boundaries or thread count. (A lazy row-index filter would do the same,
+        // but polars' streaming engine buffers nearly the whole input for a row index
+        // that can't be pushed into the scan.)
+        let mut positions = sample_row_indices(population, n_sample, seed);
+        positions.truncate(offset.saturating_add(n_rows));
+        positions.drain(..offset.min(positions.len()));
+        let positions = Arc::new(positions);
+
+        if sort.is_empty() && !has_strl {
+            sample_positions = Some(positions);
+            streamed_rows = population;
+        } else {
+            // sort() and strL output need the whole sample before writing.
+            df = match collect_sampled_rows(df, &positions) {
+                Ok(sampled) => sampled.lazy(),
+                Err(e) => {
+                    display(&format!("Error drawing random sample: {}", e));
+                    return Ok(198);
+                }
+            };
+        }
         if prof {
             t_sample += t0.elapsed();
         }
@@ -1391,11 +1421,11 @@ pub fn read_to_stata(
 
     //  display(&format!("columns: {:?}", columns));
     let effective_batch_size = if let Some(requested) = batch_size.filter(|v| *v > 0) {
-        Some(adaptive_batch_size(requested, columns.len(), n_rows))
+        Some(adaptive_batch_size(requested, columns.len(), streamed_rows))
     } else if matches!(input_format, InputFormat::Sas | InputFormat::Spss) {
         Some(infer_default_batch_size(
             columns.len(),
-            (n_rows > 0).then_some(n_rows),
+            (streamed_rows > 0).then_some(streamed_rows),
             readstat_metadata_row_count(path, input_format),
         ))
     } else {
@@ -1414,15 +1444,26 @@ pub fn read_to_stata(
     } else {
         None
     };
+    // Sampling already applied the in() window.
+    let row_window: Option<(i64, u32)> = if sample_share {
+        None
+    } else {
+        Some((offset as i64, n_rows as u32))
+    };
+    let apply_window = |lf: LazyFrame, window: Option<(i64, u32)>| match window {
+        Some((off, len)) => lf.slice(off, len),
+        None => lf,
+    };
+
+    let mut row_picker = sample_positions.map(|p| RowPicker::Sample(StreamSampler::new(p)));
+
     // When strl columns are present, collect the full frame once so that strl and
     // non-strl see exactly the same rows (including any random sampling already applied).
     // The strl columns are written to a .dta file; non-strl continue via sink_batches.
-    let (write_lf, write_slice_offset, write_slice_n_rows): (LazyFrame, i64, u32) = if has_strl {
+    let (write_lf, write_window): (LazyFrame, Option<(i64, u32)>) = if has_strl {
         let strl_col_vec: Vec<&str> = strl_col_names.split_whitespace().collect();
 
-        let full_df = match df.clone()
-            .slice(offset as i64, n_rows as u32)
-            .collect()
+        let full_df = match apply_window(df.clone(), row_window).collect()
         {
             Ok(d) => d,
             Err(e) => {
@@ -1470,10 +1511,17 @@ pub fn read_to_stata(
         }
         set_macro("strl_dta_n_rows", &full_df.height().to_string(), false);
 
-        // Non-strl: already sliced, so pass 0 / MAX through to sink_batches
-        (full_df.lazy(), 0i64, u32::MAX)
+        // Non-strl: already sliced
+        (full_df.lazy(), None)
+    } else if !sort.is_empty() && !sort_window_uses_topk(offset, n_rows, described_row_count()) {
+        // Sort everything and take the in() window as batches arrive (see
+        // sort_window_uses_topk for why the slice is kept away from polars).
+        if let Some((off, len)) = row_window {
+            row_picker = Some(RowPicker::Window { skip: off as u64, remaining: len as u64 });
+        }
+        (df, None)
     } else {
-        (df, offset as i64, n_rows as u32)
+        (df, row_window)
     };
 
     let all_columns_ref = Arc::new(all_columns);
@@ -1487,14 +1535,24 @@ pub fn read_to_stata(
     let batch_write_nanos_cb = Arc::clone(&batch_write_nanos);
     let read_pool_cb = thread_pool;
     let chunk_size = effective_batch_size.and_then(NonZeroUsize::new);
+    let picker_cb = row_picker.map(std::sync::Mutex::new);
 
     let t0 = Instant::now();
-    let sink_lf = match write_lf
-        .select(&columns)
-        .slice(write_slice_offset, write_slice_n_rows)
+    let sink_lf = match apply_window(write_lf.select(&columns), write_window)
         .sink_batches(
             PlanCallback::new(move |batch: DataFrame| {
                 let t_batch = Instant::now();
+                let (batch, picker_done) = match &picker_cb {
+                    Some(picker) => {
+                        let mut picker = picker.lock().unwrap();
+                        let picked = picker.take(&batch)?;
+                        (picked, picker.is_done())
+                    }
+                    None => (batch, false),
+                };
+                if batch.height() == 0 {
+                    return Ok(picker_done);
+                }
                 let start_index = row_offset_cb.fetch_add(batch.height(), Ordering::SeqCst);
                 let batchi = batch_counter_cb.fetch_add(1, Ordering::SeqCst);
                 process_batch_with_strategy(
@@ -1507,7 +1565,8 @@ pub fn read_to_stata(
                     read_pool_cb,
                 )?;
                 batch_write_nanos_cb.fetch_add(t_batch.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                Ok(false)
+                // Stop the scan once the last sampled/windowed row is written.
+                Ok(picker_done)
             }),
             true,
             chunk_size,
@@ -1524,7 +1583,9 @@ pub fn read_to_stata(
     }
 
     let t0 = Instant::now();
-    if let Err(e) = sink_lf.collect() {
+    // collect() would run the in-memory engine: the whole result is materialized
+    // before the callback sees the first batch.
+    if let Err(e) = sink_lf.collect_with_engine(Engine::Streaming) {
         let msg = format!("{:?}", e);
         set_macro("pq_cast_error", &msg, false);
         display(&format!("Error collecting streamed batches: {}", msg));
@@ -1567,6 +1628,216 @@ pub fn read_to_stata(
     Ok(0)
 }
 
+
+/// SplitMix64: tiny, well-specified PRNG. Implemented here (rather than via `rand`)
+/// so a given random_seed selects the same rows across pq and dependency versions.
+struct SplitMix64(u64);
+
+impl SplitMix64 {
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// Uniform integer in [0, bound), bound > 0 (Lemire's multiply-shift with rejection).
+    fn below(&mut self, bound: u64) -> u64 {
+        let threshold = bound.wrapping_neg() % bound;
+        loop {
+            let m = (self.next_u64() as u128) * (bound as u128);
+            if (m as u64) >= threshold {
+                return (m >> 64) as u64;
+            }
+        }
+    }
+}
+
+/// Rows describe counted (after the if() filter), from its n_rows macro.
+fn described_row_count() -> Option<usize> {
+    get_macro("n_rows", false, None).trim().parse::<usize>().ok()
+}
+
+/// Whether to hand a sorted read's in() window to polars as a slice. On the
+/// streaming engine sort + slice runs as a top-k whose memory grows with the window
+/// end and is reserved up front (slice(0, u32::MAX) tried to allocate 103 GB); a
+/// full sort peaks at ~2x the data. In testing top-k only won for windows ending
+/// within the first ~5% of rows.
+fn sort_window_uses_topk(offset: usize, n_rows: usize, total_rows: Option<usize>) -> bool {
+    total_rows.is_some_and(|total| offset.saturating_add(n_rows).saturating_mul(20) <= total)
+}
+
+/// Selects the rows to write from batches that arrive in stream order.
+enum RowPicker {
+    Sample(StreamSampler),
+    Window { skip: u64, remaining: u64 },
+}
+
+impl RowPicker {
+    fn take(&mut self, batch: &DataFrame) -> PolarsResult<DataFrame> {
+        match self {
+            Self::Sample(sampler) => sampler.take(batch),
+            Self::Window { skip, remaining } => {
+                let height = batch.height() as u64;
+                let start = (*skip).min(height);
+                *skip -= start;
+                let len = (height - start).min(*remaining);
+                *remaining -= len;
+                Ok(batch.slice(start as i64, len as usize))
+            }
+        }
+    }
+
+    fn is_done(&self) -> bool {
+        match self {
+            Self::Sample(sampler) => sampler.is_done(),
+            Self::Window { remaining, .. } => *remaining == 0,
+        }
+    }
+}
+
+/// Picks rows at sorted stream positions out of batches that arrive in order.
+struct StreamSampler {
+    positions: Arc<Vec<u64>>,
+    next: usize,
+    rows_seen: u64,
+}
+
+impl StreamSampler {
+    fn new(positions: Arc<Vec<u64>>) -> Self {
+        Self { positions, next: 0, rows_seen: 0 }
+    }
+
+    fn take(&mut self, batch: &DataFrame) -> PolarsResult<DataFrame> {
+        let end = self.rows_seen + batch.height() as u64;
+        let mut local: Vec<IdxSize> = Vec::new();
+        while self.next < self.positions.len() && self.positions[self.next] < end {
+            local.push((self.positions[self.next] - self.rows_seen) as IdxSize);
+            self.next += 1;
+        }
+        self.rows_seen = end;
+        batch.take(&IdxCa::from_vec("".into(), local))
+    }
+
+    fn is_done(&self) -> bool {
+        self.next >= self.positions.len()
+    }
+}
+
+/// Stream `lf`, keeping only the rows at `positions`. Memory is the sample plus
+/// the batches in flight.
+fn collect_sampled_rows(lf: LazyFrame, positions: &Arc<Vec<u64>>) -> PolarsResult<DataFrame> {
+    let mut lf = lf;
+    let schema = lf.collect_schema()?;
+    let sampler = std::sync::Mutex::new(StreamSampler::new(Arc::clone(positions)));
+    let parts: Arc<std::sync::Mutex<Vec<DataFrame>>> = Arc::default();
+    let parts_cb = Arc::clone(&parts);
+    lf.sink_batches(
+        PlanCallback::new(move |batch: DataFrame| {
+            let mut sampler = sampler.lock().unwrap();
+            let picked = sampler.take(&batch)?;
+            if picked.height() > 0 {
+                parts_cb.lock().unwrap().push(picked);
+            }
+            Ok(sampler.is_done())
+        }),
+        true,
+        None,
+    )?
+    .collect_with_engine(Engine::Streaming)?;
+
+    let parts = std::mem::take(&mut *parts.lock().unwrap());
+    if parts.is_empty() {
+        return Ok(DataFrame::empty_with_schema(&schema));
+    }
+    let mut parts = parts.into_iter();
+    let mut out = parts.next().unwrap();
+    for part in parts {
+        out.vstack_mut_owned(part)?;
+    }
+    Ok(out)
+}
+
+fn random_entropy_seed() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    std::collections::hash_map::RandomState::new().build_hasher().finish()
+}
+
+/// Exactly `k` distinct row positions drawn uniformly from 0..n (without
+/// replacement), returned sorted. Floyd's algorithm: O(k) time and memory.
+fn sample_row_indices(n: usize, k: usize, seed: u64) -> Vec<u64> {
+    let k = k.min(n);
+    let mut rng = SplitMix64(seed);
+    let mut chosen: HashSet<u64> = HashSet::with_capacity(k);
+    for j in (n - k) as u64..n as u64 {
+        let t = rng.below(j + 1);
+        if !chosen.insert(t) {
+            chosen.insert(j);
+        }
+    }
+    let mut out: Vec<u64> = chosen.into_iter().collect();
+    out.sort_unstable();
+    out
+}
+
+#[cfg(test)]
+mod sample_tests {
+    use super::{sample_row_indices, sort_window_uses_topk, RowPicker};
+    use polars::prelude::*;
+
+    #[test]
+    fn window_picker_spans_batches_and_stops() {
+        let mut picker = RowPicker::Window { skip: 7, remaining: 10 };
+        let mut kept: Vec<i32> = Vec::new();
+        for start in (0..30).step_by(5) {
+            let batch = df!("v" => (start..start + 5).collect::<Vec<i32>>()).unwrap();
+            let picked = picker.take(&batch).unwrap();
+            kept.extend(picked.column("v").unwrap().i32().unwrap().into_no_null_iter());
+            if picker.is_done() {
+                break;
+            }
+        }
+        assert_eq!(kept, (7..17).collect::<Vec<i32>>());
+    }
+
+    #[test]
+    fn topk_only_for_small_windows_with_known_total() {
+        assert!(sort_window_uses_topk(0, 1_000, Some(15_000_000)));
+        assert!(sort_window_uses_topk(0, 750_000, Some(15_000_000)));
+        assert!(!sort_window_uses_topk(0, 15_000_000, Some(15_000_000)));
+        assert!(!sort_window_uses_topk(0, u32::MAX as usize, Some(15_000_000)));
+        assert!(!sort_window_uses_topk(0, 1_000, None));
+    }
+
+    #[test]
+    fn draws_exactly_k_distinct_in_range() {
+        for &(n, k) in &[(0usize, 0usize), (10, 0), (10, 10), (1001, 100), (1001, 500), (5, 3)] {
+            let idx = sample_row_indices(n, k, 12345);
+            assert_eq!(idx.len(), k);
+            assert!(idx.windows(2).all(|w| w[0] < w[1]));
+            assert!(idx.iter().all(|&i| (i as usize) < n));
+        }
+    }
+
+    #[test]
+    fn same_seed_same_rows_different_seed_different_rows() {
+        assert_eq!(sample_row_indices(100_000, 1_000, 7), sample_row_indices(100_000, 1_000, 7));
+        assert_ne!(sample_row_indices(100_000, 1_000, 7), sample_row_indices(100_000, 1_000, 8));
+    }
+
+    #[test]
+    fn roughly_uniform_over_positions() {
+        // Each of 10 deciles should get ~10% of 100 * 1000 draws.
+        let mut counts = [0usize; 10];
+        for seed in 0..100u64 {
+            for i in sample_row_indices(10_000, 1_000, seed) {
+                counts[(i / 1_000) as usize] += 1;
+            }
+        }
+        assert!(counts.iter().all(|&c| (9_000..11_000).contains(&c)), "{:?}", counts);
+    }
+}
 
 // To cast all categorical columns to string:
 pub fn cast_catenum_to_string(lf: &LazyFrame) -> Result<LazyFrame, PolarsError> {

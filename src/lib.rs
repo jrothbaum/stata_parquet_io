@@ -46,6 +46,21 @@ pub extern "C" fn pginit(p: *mut stata_sys::ST_plugin) -> stata_sys::ST_retcode 
     unsafe {
         _stata_ = p;
     }
+    // polars' defaults scan every file of a multi-file dataset at once and prefetch
+    // 2 x n_threads row groups per file. Reads keep row order, so everything ahead of
+    // the current file is buffered - close to the whole dataset in memory. These
+    // limits keep peak memory to a few row groups (and were faster in testing).
+    // Set here, before polars starts any threads; user-set values win.
+    for (name, value) in [
+        ("POLARS_MAX_CONCURRENT_SCANS", "2"),
+        ("POLARS_ROW_GROUP_PREFETCH_SIZE", "4"),
+    ] {
+        if std::env::var_os(name).is_none() {
+            unsafe {
+                std::env::set_var(name, value);
+            }
+        }
+    }
     polars::datatypes::extension::set_unknown_extension_type_behavior(
         polars::datatypes::extension::UnknownExtensionTypeBehavior::LoadAsStorage,
     );

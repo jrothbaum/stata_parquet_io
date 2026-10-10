@@ -6,7 +6,7 @@ members = [
 
 [package]
 name = "stata_parquet_io"
-version = "4.0.2"
+version = "4.0.3"
 authors = ["Jon Rothbaum <jlrothbaum@gmail.com>"]
 edition = "2021"
 rust-version = "1.93"
@@ -53,8 +53,8 @@ libc = "0.2"
 [profile.release]
 strip = "symbols"  # Remove debug info but keep symbols needed for performance
 panic = "unwind"     # Default panic behavior (often better for libraries)
-lto = "fat"         # More aggressive link-time optimization for speed
-codegen-units = 1   # Fewer codegen units allow more optimization
+# lto = "fat"         # More aggressive link-time optimization for speed
+# codegen-units = 1   # Fewer codegen units allow more optimization
 
 [profile.dev]
 split-debuginfo = "packed"
