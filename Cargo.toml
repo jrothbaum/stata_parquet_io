@@ -9,7 +9,7 @@ name = "stata_parquet_io"
 version = "4.0.3"
 authors = ["Jon Rothbaum <jlrothbaum@gmail.com>"]
 edition = "2021"
-rust-version = "1.93"
+rust-version = "1.95"
 description = "Stata plugin to read/write parquet files using polars Rust"
 license = "MIT"
 default-run = "stata_parquet_io"
@@ -21,7 +21,7 @@ name = "stata_parquet_io"
 crate-type= ["cdylib"]
 
 [dependencies]
-polars = { version = "0.53", features=["lazy",
+polars = { version = "0.55", features=["lazy",
     "parquet",
     # "streaming",
     "dtype-categorical",
@@ -30,9 +30,12 @@ polars = { version = "0.53", features=["lazy",
     "dtype-u8",
     "dtype-u16",
     "dtype-extension",
+    # polars 0.55 sums len() across concat branches as UInt128; without this,
+    # describe on relaxed (concat) scans panics.
+    "dtype-u128",
 ] }
-polars-sql = "0.53"
-polars-parquet = "0.53"
+polars-sql = "0.55"
+polars-parquet = "0.55"
 
 stata-sys = { path = "./crates/stata-sys" }
 rayon = "1.11"
@@ -42,7 +45,7 @@ serde = "1.0.228"
 serde_json = "1.0.145"
 glob = "0.3.3"
 regex = "1.12.2"
-polars-readstat-rs = "0.20.1"
+polars-readstat-rs = "0.24.2"
 sqlparser = { version = "0.60", features = ["visitor"] }
 # polars-readstat-rs = { path = "../polars_readstat/crates/polars_readstat_rs" }
 
@@ -53,8 +56,8 @@ libc = "0.2"
 [profile.release]
 strip = "symbols"  # Remove debug info but keep symbols needed for performance
 panic = "unwind"     # Default panic behavior (often better for libraries)
-# lto = "fat"         # More aggressive link-time optimization for speed
-# codegen-units = 1   # Fewer codegen units allow more optimization
+lto = "fat"         # More aggressive link-time optimization for speed
+codegen-units = 1   # Fewer codegen units allow more optimization
 
 [profile.dev]
 split-debuginfo = "packed"

@@ -597,7 +597,7 @@ fn find_int64_precision_overflow_columns(
         })
         .collect();
 
-    let stats_df = df.clone().select(stats_exprs).collect_with_engine(Engine::Streaming)?;
+    let stats_df = df.clone().select(stats_exprs).collect_with_engine(Engine::Streaming)?.unwrap_single();
 
     let mut overflow_cols = Vec::new();
     for name in candidates {
@@ -636,7 +636,7 @@ fn collect_row_count_and_string_lengths(
 
     // Streaming keeps memory bounded: the in-memory engine would materialize every
     // (filtered) string column across all files before taking the max.
-    let result_df = df.clone().select(exprs).collect_with_engine(Engine::Streaming)?;
+    let result_df = df.clone().select(exprs).collect_with_engine(Engine::Streaming)?.unwrap_single();
 
     let n_rows = result_df
         .column("__n_rows")?
@@ -696,7 +696,8 @@ pub fn get_row_count(lazy_df: &LazyFrame) -> Result<usize, PolarsError> {
     let count_df = lazy_df.clone()
                                 .select([len().alias("n_rows")])
                                 .collect_with_engine(Engine::Streaming)
-                                .unwrap();
+                                .unwrap()
+                                .unwrap_single();
 
     let count = count_df.column("n_rows").unwrap().get(0).unwrap().try_extract::<usize>().unwrap();
     Ok(count)
@@ -716,7 +717,7 @@ fn collect_row_count_and_string_lengths_from_df(
             let len = df.column(name.as_str())
                 .ok()
                 .and_then(|col| col.str().ok().map(|ca| {
-                    ca.into_iter()
+                    ca.iter()
                         .filter_map(|s| s.map(|s| s.len()))
                         .max()
                         .unwrap_or(0)

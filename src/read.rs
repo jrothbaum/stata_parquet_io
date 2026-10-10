@@ -1341,7 +1341,7 @@ pub fn read_to_stata(
                 .clone()
                 .select([len().alias("n_rows")])
                 .collect_with_engine(Engine::Streaming)
-                .and_then(|d| d.column("n_rows")?.get(0)?.try_extract::<usize>())
+                .and_then(|r| r.unwrap_single().column("n_rows")?.get(0)?.try_extract::<usize>())
             {
                 Ok(n) => n,
                 Err(e) => {
@@ -1384,31 +1384,55 @@ pub fn read_to_stata(
         }
     }
     let t0 = Instant::now();
-    df = if sort.is_empty() {
-            df
-        } else {
-            
-            let mut sort_options = SortMultipleOptions::default();
-            let mut sort_cols: Vec<PlSmallStr> = Vec::new();
-            let mut descending: Vec<bool> = Vec::new();
+    // Whether the in() window has already been applied (by sampling or below).
+    let mut window_applied = sample_share;
+    if !sort.is_empty() {
+        let mut sort_options = SortMultipleOptions::default();
+        let mut sort_cols: Vec<PlSmallStr> = Vec::new();
+        let mut descending: Vec<bool> = Vec::new();
 
-            for token in sort.split_whitespace() {
-                if token.starts_with('-') && token.len() > 1 {
-                    // Remove the '-' prefix and mark as descending
-                    sort_cols.push(PlSmallStr::from(&token[1..]));
-                    descending.push(true);
-                } else {
-                    // Use as-is and mark as ascending
-                    sort_cols.push(PlSmallStr::from(token));
-                    descending.push(false);
+        for token in sort.split_whitespace() {
+            if token.starts_with('-') && token.len() > 1 {
+                // Remove the '-' prefix and mark as descending
+                sort_cols.push(PlSmallStr::from(&token[1..]));
+                descending.push(true);
+            } else {
+                // Use as-is and mark as ascending
+                sort_cols.push(PlSmallStr::from(token));
+                descending.push(false);
+            }
+        }
+        sort_options.descending = descending;
+        // Stable: ties keep file order, so the output order is fully determined.
+        sort_options.maintain_order = true;
+
+        let covers_all_rows = offset == 0
+            && described_row_count().is_some_and(|total| n_rows >= total);
+        if window_applied || covers_all_rows {
+            // No slice after the sort: polars' streaming sort + slice runs as a
+            // top-k sized by the slice length (see sorted_window).
+            df = df.sort(sort_cols, sort_options);
+            window_applied = true;
+        } else {
+            // Stream only the output columns and sort keys into the top-k buffer.
+            let mut keep_cols: Vec<PlSmallStr> = Vec::new();
+            let output_cols = selected_columns_ordered.iter().map(|s| PlSmallStr::from(s.as_str()));
+            for name in output_cols.chain(sort_cols.iter().cloned()) {
+                if !keep_cols.contains(&name) {
+                    keep_cols.push(name);
                 }
             }
-            sort_options.descending = descending;
-            df.sort(
-                sort_cols,
-                sort_options
-            )
-        };
+            let projected = df.select(keep_cols.into_iter().map(col).collect::<Vec<_>>());
+            df = match sorted_window(projected, &sort_cols, &sort_options, offset, n_rows) {
+                Ok(sorted) => sorted.lazy(),
+                Err(e) => {
+                    display(&format!("Error sorting: {}", e));
+                    return Ok(198);
+                }
+            };
+            window_applied = true;
+        }
+    }
     if prof {
         t_sort += t0.elapsed();
     }
@@ -1444,8 +1468,7 @@ pub fn read_to_stata(
     } else {
         None
     };
-    // Sampling already applied the in() window.
-    let row_window: Option<(i64, u32)> = if sample_share {
+    let row_window: Option<(i64, u32)> = if window_applied {
         None
     } else {
         Some((offset as i64, n_rows as u32))
@@ -1454,8 +1477,6 @@ pub fn read_to_stata(
         Some((off, len)) => lf.slice(off, len),
         None => lf,
     };
-
-    let mut row_picker = sample_positions.map(|p| RowPicker::Sample(StreamSampler::new(p)));
 
     // When strl columns are present, collect the full frame once so that strl and
     // non-strl see exactly the same rows (including any random sampling already applied).
@@ -1513,13 +1534,6 @@ pub fn read_to_stata(
 
         // Non-strl: already sliced
         (full_df.lazy(), None)
-    } else if !sort.is_empty() && !sort_window_uses_topk(offset, n_rows, described_row_count()) {
-        // Sort everything and take the in() window as batches arrive (see
-        // sort_window_uses_topk for why the slice is kept away from polars).
-        if let Some((off, len)) = row_window {
-            row_picker = Some(RowPicker::Window { skip: off as u64, remaining: len as u64 });
-        }
-        (df, None)
     } else {
         (df, row_window)
     };
@@ -1535,23 +1549,23 @@ pub fn read_to_stata(
     let batch_write_nanos_cb = Arc::clone(&batch_write_nanos);
     let read_pool_cb = thread_pool;
     let chunk_size = effective_batch_size.and_then(NonZeroUsize::new);
-    let picker_cb = row_picker.map(std::sync::Mutex::new);
+    let sampler_cb = sample_positions.map(|p| std::sync::Mutex::new(StreamSampler::new(p)));
 
     let t0 = Instant::now();
     let sink_lf = match apply_window(write_lf.select(&columns), write_window)
         .sink_batches(
             PlanCallback::new(move |batch: DataFrame| {
                 let t_batch = Instant::now();
-                let (batch, picker_done) = match &picker_cb {
-                    Some(picker) => {
-                        let mut picker = picker.lock().unwrap();
-                        let picked = picker.take(&batch)?;
-                        (picked, picker.is_done())
+                let (batch, sample_done) = match &sampler_cb {
+                    Some(sampler) => {
+                        let mut sampler = sampler.lock().unwrap();
+                        let picked = sampler.take(&batch)?;
+                        (picked, sampler.is_done())
                     }
                     None => (batch, false),
                 };
                 if batch.height() == 0 {
-                    return Ok(picker_done);
+                    return Ok(sample_done);
                 }
                 let start_index = row_offset_cb.fetch_add(batch.height(), Ordering::SeqCst);
                 let batchi = batch_counter_cb.fetch_add(1, Ordering::SeqCst);
@@ -1565,8 +1579,8 @@ pub fn read_to_stata(
                     read_pool_cb,
                 )?;
                 batch_write_nanos_cb.fetch_add(t_batch.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                // Stop the scan once the last sampled/windowed row is written.
-                Ok(picker_done)
+                // Stop the scan once the last sampled row is written.
+                Ok(sample_done)
             }),
             true,
             chunk_size,
@@ -1659,42 +1673,99 @@ fn described_row_count() -> Option<usize> {
     get_macro("n_rows", false, None).trim().parse::<usize>().ok()
 }
 
-/// Whether to hand a sorted read's in() window to polars as a slice. On the
-/// streaming engine sort + slice runs as a top-k whose memory grows with the window
-/// end and is reserved up front (slice(0, u32::MAX) tried to allocate 103 GB); a
-/// full sort peaks at ~2x the data. In testing top-k only won for windows ending
-/// within the first ~5% of rows.
-fn sort_window_uses_topk(offset: usize, n_rows: usize, total_rows: Option<usize>) -> bool {
-    total_rows.is_some_and(|total| offset.saturating_add(n_rows).saturating_mul(20) <= total)
+/// The first `k` rows of a sort, kept from batches as they stream in. The buffer
+/// is sorted and cut back to `k` rows whenever it passes `compact_at`, so memory
+/// stays near `compact_at` rows however long the input is.
+struct TopKBuffer {
+    buffer: DataFrame,
+    by: Vec<PlSmallStr>,
+    options: SortMultipleOptions,
+    k: usize,
+    compact_at: usize,
 }
 
-/// Selects the rows to write from batches that arrive in stream order.
-enum RowPicker {
-    Sample(StreamSampler),
-    Window { skip: u64, remaining: u64 },
-}
-
-impl RowPicker {
-    fn take(&mut self, batch: &DataFrame) -> PolarsResult<DataFrame> {
-        match self {
-            Self::Sample(sampler) => sampler.take(batch),
-            Self::Window { skip, remaining } => {
-                let height = batch.height() as u64;
-                let start = (*skip).min(height);
-                *skip -= start;
-                let len = (height - start).min(*remaining);
-                *remaining -= len;
-                Ok(batch.slice(start as i64, len as usize))
-            }
+impl TopKBuffer {
+    fn new(schema: &Schema, by: &[PlSmallStr], options: &SortMultipleOptions, k: usize, compact_at: usize) -> Self {
+        Self {
+            buffer: DataFrame::empty_with_schema(schema),
+            by: by.to_vec(),
+            options: options.clone(),
+            k,
+            compact_at: compact_at.max(k),
         }
     }
 
-    fn is_done(&self) -> bool {
-        match self {
-            Self::Sample(sampler) => sampler.is_done(),
-            Self::Window { remaining, .. } => *remaining == 0,
+    fn push(&mut self, batch: DataFrame) -> PolarsResult<()> {
+        self.buffer.vstack_mut_owned(batch)?;
+        if self.buffer.height() > self.compact_at {
+            self.buffer = self.sorted_slice(0, self.k)?;
         }
+        Ok(())
     }
+
+    /// Sorted rows offset..offset + n_rows (offset + n_rows <= k).
+    fn finish(self, offset: usize, n_rows: usize) -> PolarsResult<DataFrame> {
+        self.sorted_slice(offset, n_rows)
+    }
+
+    /// Sorts only the key columns plus a row index, then gathers the kept rows.
+    /// DataFrame::sort would first copy the whole multi-chunk buffer into one
+    /// chunk. Stable sort with earlier rows first in the buffer, so ties keep
+    /// stream order across compactions.
+    fn sorted_slice(&self, offset: usize, len: usize) -> PolarsResult<DataFrame> {
+        let index_name = PlSmallStr::from_static("__pq_topk_row");
+        let keys = self
+            .buffer
+            .select(self.by.clone())?
+            .with_row_index(index_name.clone(), None)?;
+        let by_columns = self
+            .by
+            .iter()
+            .map(|name| keys.column(name).cloned())
+            .collect::<PolarsResult<Vec<Column>>>()?;
+        let top = keys.sort_impl(by_columns, self.options.clone(), Some((0, offset.saturating_add(len))))?;
+        let rows = top.column(&index_name)?.idx()?.slice(offset as i64, len);
+        self.buffer.take(&rows)
+    }
+}
+
+/// Rows offset..offset + n_rows of `lf` sorted by `by`, in bounded memory.
+/// Polars' own sort + slice on the streaming engine runs as a top-k that reserves
+/// memory for the whole slice length up front (slice(0, u32::MAX) tried to
+/// allocate 103 GB; a 15M-row window peaked at 6.9 GB in polars 0.55).
+fn sorted_window(
+    lf: LazyFrame,
+    by: &[PlSmallStr],
+    options: &SortMultipleOptions,
+    offset: usize,
+    n_rows: usize,
+) -> PolarsResult<DataFrame> {
+    let k = offset.saturating_add(n_rows);
+    let mut lf = lf;
+    let schema = lf.collect_schema()?;
+    let top = Arc::new(std::sync::Mutex::new(TopKBuffer::new(
+        &schema,
+        by,
+        options,
+        k,
+        k.saturating_mul(2).max(1 << 16),
+    )));
+    let top_cb = Arc::clone(&top);
+    lf.sink_batches(
+        PlanCallback::new(move |batch: DataFrame| {
+            top_cb.lock().unwrap().push(batch)?;
+            Ok(false)
+        }),
+        true,
+        None,
+    )?
+    .collect_with_engine(Engine::Streaming)?;
+
+    let top = Arc::try_unwrap(top)
+        .map_err(|_| PolarsError::ComputeError("sort buffer still in use".into()))?
+        .into_inner()
+        .unwrap();
+    top.finish(offset, n_rows)
 }
 
 /// Picks rows at sorted stream positions out of batches that arrive in order.
@@ -1783,31 +1854,31 @@ fn sample_row_indices(n: usize, k: usize, seed: u64) -> Vec<u64> {
 
 #[cfg(test)]
 mod sample_tests {
-    use super::{sample_row_indices, sort_window_uses_topk, RowPicker};
+    use super::{sample_row_indices, TopKBuffer};
     use polars::prelude::*;
 
     #[test]
-    fn window_picker_spans_batches_and_stops() {
-        let mut picker = RowPicker::Window { skip: 7, remaining: 10 };
-        let mut kept: Vec<i32> = Vec::new();
-        for start in (0..30).step_by(5) {
-            let batch = df!("v" => (start..start + 5).collect::<Vec<i32>>()).unwrap();
-            let picked = picker.take(&batch).unwrap();
-            kept.extend(picked.column("v").unwrap().i32().unwrap().into_no_null_iter());
-            if picker.is_done() {
-                break;
-            }
-        }
-        assert_eq!(kept, (7..17).collect::<Vec<i32>>());
-    }
+    fn topk_buffer_matches_full_sort_across_compactions() {
+        // Values with many ties; `pos` records stream order to check stability.
+        let n = 5_000i32;
+        let full = df!(
+            "v" => (0..n).map(|i| (i * 7919) % 97).collect::<Vec<i32>>(),
+            "pos" => (0..n).collect::<Vec<i32>>()
+        )
+        .unwrap();
+        let opts = SortMultipleOptions::default()
+            .with_order_descending(true)
+            .with_maintain_order(true);
+        let by = vec![PlSmallStr::from("v")];
+        let expected = full.sort(by.clone(), opts.clone()).unwrap().slice(40, 60);
 
-    #[test]
-    fn topk_only_for_small_windows_with_known_total() {
-        assert!(sort_window_uses_topk(0, 1_000, Some(15_000_000)));
-        assert!(sort_window_uses_topk(0, 750_000, Some(15_000_000)));
-        assert!(!sort_window_uses_topk(0, 15_000_000, Some(15_000_000)));
-        assert!(!sort_window_uses_topk(0, u32::MAX as usize, Some(15_000_000)));
-        assert!(!sort_window_uses_topk(0, 1_000, None));
+        // k = 100 with compaction at 150 rows: compacts many times over 50 batches.
+        let mut top = TopKBuffer::new(full.schema(), &by, &opts, 100, 150);
+        for start in (0..n as i64).step_by(100) {
+            top.push(full.slice(start, 100)).unwrap();
+        }
+        let got = top.finish(40, 60).unwrap();
+        assert!(got.equals(&expected), "{got}\n{expected}");
     }
 
     #[test]

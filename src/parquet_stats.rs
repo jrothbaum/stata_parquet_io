@@ -69,7 +69,7 @@ pub fn integer_ranges_from_footer_stats(
                     break;
                 };
 
-                let stats = match chunk.statistics() {
+                let stats = match chunk.statistics(&metadata.footer_buf) {
                     Some(Ok(s)) => s,
                     _ => {
                         untrustworthy.insert(name.clone());
