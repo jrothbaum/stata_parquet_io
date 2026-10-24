@@ -551,7 +551,7 @@ fn save_partitioned_sequential(
             display(&format!("Partition file create error for {}: {}", partition_dir.display(), e));
             e
         })?;
-        pqo.to_writer(file).finish(&mut partition_df).map_err(|e| {
+        write_parquet_file(&pqo, file, &mut partition_df).map_err(|e| {
             display(&format!("Partition write error for {}: {}", partition_dir.display(), e));
             e
         })?;
@@ -647,7 +647,7 @@ pub fn consolidate_parquet_dir(path: &str) -> Result<i32, Box<dyn Error>> {
     };
 
     let file = File::create(&temp_path)?;
-    if let Err(e) = pqo.to_writer(file).finish(&mut df) {
+    if let Err(e) = write_parquet_file(&pqo, file, &mut df) {
         let _ = std::fs::remove_file(&temp_path);
         display(&format!("Error writing consolidated parquet: {}", e));
         return Ok(198);
@@ -752,7 +752,7 @@ fn save_no_partition(
                     return Ok(198);
                 }
             };
-            if let Err(e) = pqo.to_writer(file).finish(&mut df) {
+            if let Err(e) = write_parquet_file(&pqo, file, &mut df) {
                 display(&format!("Parquet write error: {}", e));
                 return Ok(198);
             }
@@ -763,6 +763,41 @@ fn save_no_partition(
             Ok(0)
         }
     }
+}
+
+/// Write `df` to `file`, declaring strings as Arrow `large_string` (and
+/// binary as `large_binary`) in the embedded `ARROW:schema` rather than the
+/// `string_view` polars' eager writer uses by default. The parquet column
+/// data is identical either way (BYTE_ARRAY/UTF8) - only the schema hint
+/// differs - but R's arrow package cannot read `string_view` columns
+/// (apache/arrow#45523). Polars still reads these back as `String`.
+fn write_parquet_file(
+    pqo: &ParquetWriteOptions,
+    file: File,
+    df: &mut DataFrame,
+) -> PolarsResult<u64> {
+    let arrow_schema = polars::io::schema_to_arrow_checked(
+        df.schema(),
+        CompatLevel::oldest(),
+        "parquet",
+    )?;
+    let arrow_schema_kv = polars_parquet::write::schema_to_metadata_key(&arrow_schema);
+
+    let mut kv = match &pqo.key_value_metadata {
+        Some(meta) => meta.collect(ParquetMetadataContext {
+            arrow_schema: arrow_schema_kv.value.as_deref().unwrap_or_default(),
+        })?,
+        None => Vec::new(),
+    };
+    // BatchedWriter::finish only adds its own (string_view) schema when
+    // the metadata doesn't already carry one.
+    if !kv.iter().any(|item| item.key == arrow_schema_kv.key) {
+        kv.insert(0, arrow_schema_kv);
+    }
+
+    pqo.to_writer(file)
+        .with_key_value_metadata(Some(KeyValueMetadata::Static(kv)))
+        .finish(df)
 }
 
 fn parquet_options(
