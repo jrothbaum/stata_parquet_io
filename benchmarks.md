@@ -6,7 +6,7 @@ Generated with stata_parquet_io 4.0.4 (polars-readstat-rs 0.26.0). All times in 
 
 ## Parquet vs Stata `.dta`
 
-10 variables (1 int, 1 str, 8 float). Average of 3 runs, single rep per run.
+Average of 3 runs, single rep per run. Mix of strings, ints, and floats.
 
 | rows | Stata save | pq save | Stata use | pq use | pq use (5 vars) |
 |-----:|----------:|--------:|----------:|-------:|----------------:|
