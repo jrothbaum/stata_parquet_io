@@ -63,5 +63,21 @@ uv run examples/python_verify.py python_made.parquet stata_resaved.parquet
 
 ## R
 
-An R (`arrow`) counterpart using the same `org.stata.pq.labels.v1` envelope
-is a natural next addition — see the PR discussion.
+- [`r_stata_metadata.R`](r_stata_metadata.R) — write / read / verify the same
+  envelope from R via the `arrow` package.
+
+```r
+Rscript examples/r_stata_metadata.R write  r_made.parquet
+Rscript examples/r_stata_metadata.R verify r_made.parquet other.parquet
+```
+
+Because the envelope is tool-agnostic, R and Python interoperate directly. A
+cross-tool round trip (no Stata needed) — R writes, Python re-emits, R checks:
+
+```bash
+Rscript examples/r_stata_metadata.R write r_made.parquet
+uv run examples/python_stata_metadata.py --passthrough r_made.parquet py_from_r.parquet
+Rscript examples/r_stata_metadata.R verify r_made.parquet py_from_r.parquet
+```
+
+`requires: arrow, jsonlite` (`install.packages(c("arrow", "jsonlite"))`).

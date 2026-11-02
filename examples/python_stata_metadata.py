@@ -163,7 +163,28 @@ def _demo_table_and_envelope():
     return table, envelope
 
 
+def passthrough(src, dst):
+    """Read a Parquet file written by any tool and re-emit it, carrying its
+    Stata metadata envelope through unchanged. Used to bridge a round trip
+    like R -> Python -> R (or Stata -> Python -> ...): the data and the
+    org.stata.pq.labels.v1 footer entry are preserved exactly."""
+    table = pq.read_table(src)
+    envelope = read_stata_metadata(src)
+    if envelope is None:
+        print(f"no {STATA_META_KEY.decode()} metadata found in {src}")
+        return 1
+    write_stata_parquet(dst, table, envelope)
+    print(f"passthrough: {src} -> {dst} (data + metadata preserved)")
+    return 0
+
+
 def main(argv):
+    if len(argv) >= 2 and argv[1] == "--passthrough":
+        if len(argv) != 4:
+            print("usage: python_stata_metadata.py --passthrough SRC.parquet DST.parquet")
+            return 2
+        return passthrough(argv[2], argv[3])
+
     path = argv[1] if len(argv) > 1 else "python_made.parquet"
     table, envelope = _demo_table_and_envelope()
     write_stata_parquet(path, table, envelope)
