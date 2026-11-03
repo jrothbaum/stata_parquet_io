@@ -1,5 +1,6 @@
 *! pq - read/write parquet files with stata
-*! Version 4.0.4 - Write strings as large_string (not string_view) for R arrow compatibility
+*! Version 4.0.5 - Fix note text round-trip: no stray quotes in notes restored by `pq use`
+*!         4.0.4 - Write strings as large_string (not string_view) for R arrow compatibility
 *!         4.0.3 - Fix memory spike issues on hive partitions and subset loads
 *! 		   4.0.2 - Allow limit core usage with pq set_threads
 *!         4.0.1 - Add Stata metadata round-tripping (variable/value labels, notes, formats,
