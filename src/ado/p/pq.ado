@@ -1082,7 +1082,10 @@ program pq_use_append
 			if ("`note_count'" != "0" & "`note_count'" != "") {
 				quietly notes drop `vari'
 				forvalues k = 1/`note_count' {
-					notes `vari': `"`macval(pq_meta_note_`j'_`k')'"'
+					//	`notes var: text' stores the rest of the line verbatim,
+					//	so the text must NOT be wrapped in (compound) quotes --
+					//	those characters would be stored as part of the note.
+					notes `vari': `macval(pq_meta_note_`j'_`k')'
 				}
 			}
 		}
@@ -1096,7 +1099,8 @@ program pq_use_append
 			if ("`dnote_count'" != "0" & "`dnote_count'" != "") {
 				quietly notes drop _dta
 				forvalues k = 1/`dnote_count' {
-					notes: `"`macval(pq_meta_dataset_note_`k')'"'
+					//	Verbatim, as above: no compound quotes around the text.
+					notes: `macval(pq_meta_dataset_note_`k')'
 				}
 			}
 		}
