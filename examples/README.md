@@ -80,4 +80,8 @@ uv run examples/python_stata_metadata.py --passthrough r_made.parquet py_from_r.
 Rscript examples/r_stata_metadata.R verify r_made.parquet py_from_r.parquet
 ```
 
+Both verify scripts compare data and the core metadata strictly, and report
+`format` / `stata_type` separately: Stata may add them for columns the other
+tool left bare (e.g. `%9s` / `string` for a string column).
+
 `requires: arrow, jsonlite` (`install.packages(c("arrow", "jsonlite"))`).

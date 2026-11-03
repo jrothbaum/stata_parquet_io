@@ -119,13 +119,35 @@ verify <- function(a, b) {
 
   ma <- read_stata_metadata(a)
   mb <- read_stata_metadata(b)
-  if (identical(canon(ma), canon(mb))) {
-    cat("METADATA : identical (version, labels, value labels, notes, formats, types)\n")
+  # format / stata_type are hints Stata may normalize (e.g. add %9s/string for
+  # a string column the writer left bare), so compare the core fields strictly
+  # and report the hints separately, as python_verify.py does.
+  split_hints <- function(m) {
+    hints <- list()
+    for (nm in names(m$variables)) {
+      v <- m$variables[[nm]]
+      h <- v[intersect(names(v), c("format", "stata_type"))]
+      if (length(h)) hints[[nm]] <- h
+      m$variables[[nm]] <- v[setdiff(names(v), c("format", "stata_type"))]
+    }
+    list(core = m, hints = hints)
+  }
+  sa <- split_hints(ma)
+  sb <- split_hints(mb)
+  if (identical(canon(sa$core), canon(sb$core))) {
+    cat("METADATA : core fields identical (version, labels, value labels, notes)\n")
   } else {
     ok <- FALSE
-    cat("METADATA : DIFFER\n")
-    cat("  file A:", canon(ma), "\n")
-    cat("  file B:", canon(mb), "\n")
+    cat("METADATA : core fields DIFFER\n")
+    cat("  file A:", canon(sa$core), "\n")
+    cat("  file B:", canon(sb$core), "\n")
+  }
+  if (identical(canon(sa$hints), canon(sb$hints))) {
+    cat("HINTS    : format / stata_type identical\n")
+  } else {
+    cat("HINTS    : DIFFER (Stata may have normalized these)\n")
+    cat("  file A:", canon(sa$hints), "\n")
+    cat("  file B:", canon(sb$hints), "\n")
   }
 
   cat("\nRESULT   :", if (ok) "round trip is lossless\n" else "round trip LOST something\n")

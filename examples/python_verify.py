@@ -129,7 +129,7 @@ def main(argv):
             ok = False
 
     print()
-    print("RESULT   :", "round trip is lossless ✓" if ok else "round trip LOST something ✗")
+    print("RESULT   :", "round trip is lossless" if ok else "round trip LOST something")
     return 0 if ok else 1
 
 
